@@ -1,0 +1,313 @@
+from __future__ import annotations
+
+import json
+from datetime import date
+from typing import Optional
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from pydantic import BaseModel
+from sqlalchemy import Date, and_, cast, or_
+from sqlalchemy.orm import Session
+
+from app.db import get_db
+from app.models import Country, Package, RegistrationPaymentTxn, User, Testimonial
+from app.security import get_current_user
+from app.schemas import (
+    BatchDefinition,
+    FeeStructureResponse,
+    RegistrationCatalogItem,
+    PayableAmountRequest,
+    PayableAmountResponse,
+    PaymentFinalizeRequest,
+    PaymentFinalizeResponse,
+    PaymentOrderRequest,
+    PaymentOrderResponse,
+    RegistrationInitRequest,
+    RegistrationInitResponse,
+    RegistrationStatusResponse,
+    ExtensionInitResponse,
+)
+from app.services.payments import (
+    create_payment_order,
+    finalize_payment,
+    init_extension_payment,
+    process_razorpay_webhook,
+    _verify_webhook_signature,
+)
+from app.services.registration import (
+    build_registration_catalog,
+    _to_display_usd,
+    build_fee_structure_response,
+    check_old_student_discount,
+    get_payable_amount,
+    get_registration_batch,
+    initialize_registration,
+    list_batches,
+    query_active_packages_for_registration,
+)
+from app.services.uploads import save_registration_document
+
+router = APIRouter(prefix="/registration", tags=["registration"])
+
+
+# ── Country list (was missing – the React form queries this) ──────────────
+
+class CountryOut(BaseModel):
+    id: int
+    name: str
+
+
+@router.get("/countries", response_model=list[CountryOut])
+def registration_countries(db: Session = Depends(get_db)) -> list[CountryOut]:
+    rows = db.query(Country).filter(Country.status == "1").order_by(Country.name).all()
+    return [CountryOut(id=r.id, name=r.name) for r in rows]
+
+
+@router.get("/batches", response_model=list[BatchDefinition])
+def registration_batches(db: Session = Depends(get_db)) -> list[BatchDefinition]:
+    return list_batches(db)
+
+
+@router.get("/catalog", response_model=list[RegistrationCatalogItem])
+def registration_catalog(
+    include_inactive: bool = Query(False),
+    db: Session = Depends(get_db),
+) -> list[RegistrationCatalogItem]:
+    return build_registration_catalog(db, include_inactive=include_inactive)
+
+
+# ── Package list for a batch + country (React Step 3 uses this) ───────────
+
+class PackageOut(BaseModel):
+    id: int
+    name: str
+    subscription: Optional[str] = None
+    category_name: Optional[str] = None
+    gross_amount: float
+    gst_percentage: float
+    gst_amount: float
+    total_amount: float
+    plan_type: str = "one_time"
+    duration_months: Optional[int] = None
+    currency_name: str = "INR"
+
+
+@router.get("/packages", response_model=list[PackageOut])
+def registration_packages(
+    batch_slug: str,
+    country_id: int = 101,
+    selected_package_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+) -> list[PackageOut]:
+    from app.services.registration import _get_usd_rate, _is_india_country
+
+    batch = get_registration_batch(db, batch_slug)
+
+    pkgs = query_active_packages_for_registration(db, batch, country_id)
+    is_india = _is_india_country(db, country_id)
+    usd_rate = _get_usd_rate(db) if not is_india else 1.0
+    currency = "INR" if is_india else "USD"
+    expected_category = "Indian Delegates" if is_india else "Foreign Delegates"
+
+    # If user clicked "Apply for this plan", force-include that specific valid package
+    # so Step 3 never collapses to a different overlapping tier.
+    if selected_package_id and not any(p.id == selected_package_id for p in pkgs):
+        picked = (
+            db.query(Package)
+            .filter(
+                Package.id == selected_package_id,
+                Package.subscription == batch.title,
+                Package.status == "1",
+                Package.category_name == expected_category,
+                or_(Package.start_date.is_(None), cast(Package.start_date, Date) <= date.today()),
+                or_(
+                    (Package.plan_type == "subscription"),
+                    and_(Package.end_date.isnot(None), cast(Package.end_date, Date) >= date.today()),
+                ),
+            )
+            .first()
+        )
+        if picked:
+            pkgs = [picked, *pkgs]
+
+    result: list[PackageOut] = []
+    for p in pkgs:
+        gross = float(p.gross_amount or 0)
+        gst_pct = float(p.gst_percentage or 0)
+        gst_amt = float(p.gst_amount or 0)
+        total = float(p.total_amount or (gross + gst_amt))
+        if not is_india:
+            gross = _to_display_usd(gross, usd_rate)
+            gst_amt = _to_display_usd(gst_amt, usd_rate)
+            total = _to_display_usd(total, usd_rate)
+        result.append(PackageOut(
+            id=p.id,
+            name=p.name or "",
+            subscription=p.subscription,
+            category_name=p.category_name,
+            gross_amount=gross,
+            gst_percentage=gst_pct,
+            gst_amount=gst_amt,
+            total_amount=total,
+            plan_type=(p.plan_type or "one_time"),
+            duration_months=p.duration_months,
+            currency_name=currency,
+        ))
+    return result
+
+
+@router.get("/fee-structure", response_model=FeeStructureResponse)
+def registration_fee_structure(batch_slug: str, db: Session = Depends(get_db)) -> FeeStructureResponse:
+    """All active pricing tiers for a batch (for public fee pages). Uses `package` + `batch_master.registration_fee_structure` notice."""
+    return build_fee_structure_response(db, batch_slug)
+
+
+# ── Old student discount check ────────────────────────────────────────────
+
+class OldStudentCheckRequest(BaseModel):
+    email: str
+    subscription: str
+
+
+class OldStudentCheckResponse(BaseModel):
+    is_old_student: bool
+    discount_inr: float = 0.0
+    discount_usd: float = 0.0
+
+
+@router.post("/old-student-check", response_model=OldStudentCheckResponse)
+def old_student_check(
+    payload: OldStudentCheckRequest,
+    db: Session = Depends(get_db),
+) -> OldStudentCheckResponse:
+    return check_old_student_discount(db, payload.email, payload.subscription)
+
+
+@router.post("/payable-amount", response_model=PayableAmountResponse)
+def payable_amount(payload: PayableAmountRequest, db: Session = Depends(get_db)) -> PayableAmountResponse:
+    return get_payable_amount(db, payload)
+
+
+@router.post("/init", response_model=RegistrationInitResponse)
+def registration_init(
+    payload: RegistrationInitRequest,
+    db: Session = Depends(get_db),
+) -> RegistrationInitResponse:
+    return initialize_registration(db, payload)
+
+
+@router.post("/payment/order", response_model=PaymentOrderResponse)
+def payment_order(payload: PaymentOrderRequest, db: Session = Depends(get_db)) -> PaymentOrderResponse:
+    return create_payment_order(db, payload.request_id)
+
+
+@router.post("/extension/init", response_model=ExtensionInitResponse)
+def extension_init(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ExtensionInitResponse:
+    result = init_extension_payment(db, current_user)
+    return ExtensionInitResponse(
+        request_id=result["request_id"],
+        amount=float(result["amount"]),
+        currency=str(result["currency"]),
+        extension_months=int(result.get("extension_months") or 2),
+    )
+
+
+@router.post("/payment/callback", response_model=PaymentFinalizeResponse)
+def payment_callback(
+    payload: PaymentFinalizeRequest,
+    db: Session = Depends(get_db),
+) -> PaymentFinalizeResponse:
+    return finalize_payment(
+        db=db,
+        request_id=payload.request_id,
+        order_id=payload.order_id,
+        payment_id=payload.payment_id,
+        signature=payload.signature,
+        raw_payload=payload.raw_payload,
+        source="callback",
+    )
+
+
+@router.post("/payment/webhook", response_model=None)
+async def payment_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    body = await request.body()
+    webhook_sig = request.headers.get("X-Razorpay-Signature", "")
+    if not _verify_webhook_signature(body, webhook_sig):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON webhook body") from exc
+    return process_razorpay_webhook(db, payload)
+
+
+@router.get("/{registration_id}/status", response_model=RegistrationStatusResponse)
+def registration_status(registration_id: int, db: Session = Depends(get_db)) -> RegistrationStatusResponse:
+    user = db.query(User).filter(User.id == registration_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Registration not found")
+    txn = (
+        db.query(RegistrationPaymentTxn)
+        .filter(RegistrationPaymentTxn.user_id == user.id)
+        .order_by(RegistrationPaymentTxn.id.desc())
+        .first()
+    )
+    return RegistrationStatusResponse(
+        registration_id=user.id,
+        request_id=(txn.request_id if txn else ""),
+        payment_status=(user.payment_status or "Pending"),
+        approve=(user.approve or "0"),
+        email=user.email,
+        subscription=(user.subscription or ""),
+    )
+
+
+@router.get("/testimonials")
+def list_public_testimonials(db: Session = Depends(get_db)) -> list[dict]:
+    """Public list of active testimonials for the homepage."""
+    rows = (
+        db.query(Testimonial)
+        .filter(Testimonial.status == "1")
+        .order_by(Testimonial.display_order.asc(), Testimonial.id.desc())
+        .all()
+    )
+    return [
+        {
+            "id": t.id,
+            "text": t.text or "",
+            "display_order": t.display_order if t.display_order is not None else 0,
+        }
+        for t in rows
+    ]
+
+
+@router.post("/upload-document")
+def upload_document(file: UploadFile = File(...)) -> dict:
+    from app.core.config import get_settings
+
+    filename = save_registration_document(file)
+    settings = get_settings()
+    view_url = f"{settings.api_public_base_url.rstrip('/')}/upload/user/document_file/{filename}"
+    return {"filename": filename, "view_url": view_url}
+
+
+@router.post("/{registration_id}/upload-certificate")
+def upload_registration_certificate(
+    registration_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    user = db.query(User).filter(User.id == registration_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Registration not found")
+    filename = save_registration_document(file)
+    user.document_file_2 = filename
+    db.add(user)
+    db.commit()
+    return {"status": "ok", "filename": filename}

@@ -1,0 +1,27 @@
+# Secrets — use .env.example and configure locally
+.env
+.env.local
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+backend/health/
+venv/
+.venv/
+
+# Node / frontend build
+node_modules/
+dist/
+dist-ssr/
+
+# Archives / misc
+backend.zip
+*.log
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.sw?

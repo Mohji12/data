@@ -1,0 +1,169 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 99.6%;
+    --foreground: 215 30% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 215 30% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 30% 11%;
+    --primary: 215 30% 11%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 215 30% 11%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215 25% 25%;
+    --accent: 160 96% 42%;
+    --accent-foreground: 215 30% 11%;
+    --destructive: 348 100% 71%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 216 20% 80%;
+    --input: 216 20% 80%;
+    --ring: 160 96% 42%;
+    --radius: 6px;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 160 96% 42%;
+  }
+}
+
+html {
+  background: #FEFEFE;
+}
+
+body {
+  overflow-x: hidden;
+  font-family: 'Times New Roman', Times, serif;
+}
+
+/* Public + student pages: discourage copy via selection highlight (JS blocks copy/cut too). */
+body.no-user-copy,
+body.no-user-copy *:not(input):not(textarea):not(select):not([contenteditable='true']) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+body.no-user-copy input,
+body.no-user-copy textarea,
+body.no-user-copy select,
+body.no-user-copy [contenteditable='true'] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+::selection {
+  background: rgba(6, 214, 160, 0.20);
+  color: #1A2332;
+}
+
+::-webkit-scrollbar {
+  width: 3px;
+}
+::-webkit-scrollbar-track {
+  background: #F4F6FA;
+}
+::-webkit-scrollbar-thumb {
+  background: #C8D0DC;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #06D6A0;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-chalk text-ink;
+  }
+}
+
+/* Section clips — straight horizontal edges (no diagonal overlap on tickers/content) */
+.clip-bottom {
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+}
+.clip-top {
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  margin-top: 0;
+}
+
+/* Monitor scanline */
+.scanline {
+  position: relative;
+}
+.scanline::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(6, 214, 160, 0.015) 2px,
+    rgba(6, 214, 160, 0.015) 4px
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Magnetic button base */
+.magnetic {
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
+}
+
+/* ECG draw animation */
+@keyframes ecg-draw {
+  from { stroke-dashoffset: 2000; }
+  to { stroke-dashoffset: 0; }
+}
+.ecg-line {
+  stroke-dasharray: 2000;
+  animation: ecg-draw 2.5s ease-out forwards;
+}
+
+/* Number slot roll */
+@keyframes slot-roll {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(0); }
+}
+
+/* Image clinical filter */
+.img-doc {
+  filter: contrast(1.06) brightness(0.96) saturate(0.85);
+}
+
+/* Nav link hover */
+.nav-strike {
+  text-decoration: none;
+  transition: all 200ms ease;
+}
+
+/* Marquee */
+@keyframes marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.animate-marquee {
+  animation: marquee 25s linear infinite;
+}
+
+/* Hide spin buttons in number inputs */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type=number] {
+  -moz-appearance: textfield;
+}
