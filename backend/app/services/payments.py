@@ -293,6 +293,12 @@ def _txn_by_request_or_order(
 def _send_registration_thank_you_email(db: Session, user: User, pkg: Package | None) -> None:
     settings = get_settings()
     if not (settings.smtp_host or "").strip() or not (user.email or "").strip():
+        logger.warning(
+            "thank-you email skipped: smtp_host=%r user_email=%r user_id=%s",
+            settings.smtp_host,
+            user.email,
+            user.id,
+        )
         return
     try:
         html = render_registration_thank_you_html(user, pkg)
@@ -310,11 +316,14 @@ def _send_registration_thank_you_email(db: Session, user: User, pkg: Package | N
             cc=settings.smtp_cc or None,
             bcc=settings.smtp_bcc or None,
         )
+        logger.info("thank-you email sent to user_id=%s email=%s", user.id, user.email)
     except Exception as exc:
-        logger.warning(
-            "post-payment thank-you email failed for user_id=%s: %s",
+        logger.error(
+            "post-payment thank-you email FAILED for user_id=%s email=%s: %s",
             user.id,
+            user.email,
             exc,
+            exc_info=True,
         )
 
 

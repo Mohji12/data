@@ -57,6 +57,18 @@ export default function Profile() {
     queryKey: ['dashboardProfile'],
     queryFn: () => apiClient('/dashboard/profile') as Promise<DashboardProfile>,
   });
+
+  // Block right-click completely on the entire profile section
+  useEffect(() => {
+    const blockMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+    document.addEventListener('contextmenu', blockMenu, true);
+    return () => {
+      document.removeEventListener('contextmenu', blockMenu, true);
+    };
+  }, []);
+
   const [form, setForm] = useState<ProfileFormState>({
     title: '',
     name: '',

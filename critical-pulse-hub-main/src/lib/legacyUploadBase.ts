@@ -1,3 +1,5 @@
+import { getApiBaseUrl } from '@/lib/apiBase';
+
 /**
  * Fallback base for /upload/user/document_file/{filename} when the API omits presigned/full URLs.
  * Keep in sync with FastAPI: legacy_upload_base_url defaults to EMAIL_ASSET_BASE_URL / production site.
@@ -16,7 +18,7 @@ export function resolveAdminDocumentHref(
   if (u) return u;
   const fn = (filename || '').trim();
   if (!fn) return null;
-  const api = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '');
+  const api = getApiBaseUrl().replace(/\/$/, '');
   if (api && !fn.includes('/') && !fn.startsWith('http')) {
     return `${api}/upload/user/document_file/${encodeURIComponent(fn)}`;
   }

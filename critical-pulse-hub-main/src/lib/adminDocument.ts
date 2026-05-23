@@ -1,4 +1,4 @@
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+import { getApiBaseUrl } from '@/lib/apiBase';
 const ADMIN_TOKEN_KEY = 'admin_access_token';
 
 export async function fetchAdminDocumentBlob(userId: number, file: 1 | 2 = 1): Promise<Blob> {
@@ -8,7 +8,7 @@ export async function fetchAdminDocumentBlob(userId: number, file: 1 | 2 = 1): P
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const response = await fetch(`${BASE_URL}/admin/users/${userId}/document?file=${file}`, { headers });
+  const response = await fetch(`${getApiBaseUrl()}/admin/users/${userId}/document?file=${file}`, { headers });
   if (!response.ok) {
     let detail = 'Could not load document';
     try {

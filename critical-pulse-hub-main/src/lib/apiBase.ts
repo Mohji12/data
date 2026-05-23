@@ -1,6 +1,29 @@
-/** Same origin as apiClient for CSV/PDF download links (include Bearer via cookie not possible — use fetch+blob or open with token; exports use cookie-less GET with admin token in query is NOT supported). */
+/** Local FastAPI when developing against uvicorn on port 8000. */
+export const LOCAL_DEV_API = 'http://127.0.0.1:8000';
+
+/**
+ * API base for fetch(). In dev with VITE_API_USE_PROXY=true, returns '' so requests
+ * go to the Vite server (localhost:8080) and are proxied to the local API on :8000.
+ */
 export function getApiBaseUrl(): string {
-  return import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+  const useProxy = import.meta.env.VITE_API_USE_PROXY === 'true';
+  if (import.meta.env.DEV && useProxy) {
+    return '';
+  }
+
+  const raw = String(import.meta.env.VITE_API_URL ?? '').trim();
+  const url = raw || LOCAL_DEV_API;
+  return url.replace(/\/$/, '');
+}
+
+/** For debugging in the browser console. */
+export function getResolvedApiBaseForDisplay(): string {
+  const base = getApiBaseUrl();
+  if (base) return base;
+  if (typeof window !== 'undefined') {
+    return `${window.location.origin} → proxy → ${LOCAL_DEV_API}`;
+  }
+  return `(proxy) → ${LOCAL_DEV_API}`;
 }
 
 /** Public static files mounted on the API (e.g. `/upload/brochures/...`) — prefix API base when the URL is relative. */

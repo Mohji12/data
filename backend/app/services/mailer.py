@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 import smtplib
 from collections.abc import Sequence
 from email.message import EmailMessage
 
-from fastapi import HTTPException
-
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+_SMTP_TIMEOUT = 30  # seconds
 
 
 def _normalize_addr_list(value: str | Sequence[str] | None) -> list[str]:
@@ -28,7 +31,7 @@ def send_html_email(
 ) -> None:
     settings = get_settings()
     if not settings.smtp_host:
-        raise HTTPException(status_code=500, detail="SMTP is not configured")
+        raise RuntimeError("SMTP is not configured (SMTP_HOST is empty)")
 
     msg = EmailMessage()
     msg["From"] = settings.smtp_from
@@ -45,9 +48,12 @@ def send_html_email(
     msg.set_content("This email requires HTML support.")
     msg.add_alternative(html, subtype="html")
 
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as smtp:
+    logger.debug("Sending email to=%s subject=%r via %s:%s", to_email, subject, settings.smtp_host, settings.smtp_port)
+    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=_SMTP_TIMEOUT) as smtp:
+        smtp.ehlo()
         smtp.starttls()
+        smtp.ehlo()
         if settings.smtp_username:
             smtp.login(settings.smtp_username, settings.smtp_password)
         smtp.send_message(msg)
-
+    logger.info("Email sent successfully to=%s subject=%r", to_email, subject)

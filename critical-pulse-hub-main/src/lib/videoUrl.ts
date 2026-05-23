@@ -74,8 +74,8 @@ export function buildVimeoPlayerEmbedUrl(videoId: string): string {
     title: '0',
     byline: '0',
     portrait: '0',
-    keyboard: '0',
-    controls: '0',
+    keyboard: '1',
+    controls: '1',
     dnt: '1',
   });
   return `https://player.vimeo.com/video/${videoId}?${params.toString()}`;
@@ -106,7 +106,7 @@ export function buildYouTubeEmbedUrl(videoId: string, origin: string): string {
     rel: '0',
     modestbranding: '1',
     controls: '1',
-    disablekb: '1',
+    disablekb: '0',
   });
   return `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
 }

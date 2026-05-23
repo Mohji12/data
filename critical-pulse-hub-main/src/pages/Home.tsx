@@ -49,7 +49,7 @@ function HeroImageCarousel() {
             src={src}
             alt=""
             aria-hidden
-            className={`absolute inset-0 w-full h-full object-contain object-top transition-opacity duration-[700ms] ease-out ${i === index ? 'opacity-100 z-[1]' : 'opacity-0 z-0 pointer-events-none'
+            className={`absolute inset-0 w-full h-full object-contain object-top transition-opacity duration-700 ease-out ${i === index ? 'opacity-100 z-[1]' : 'opacity-0 z-0 pointer-events-none'
               }`}
             loading={i === 0 ? 'eager' : 'lazy'}
             decoding="async"

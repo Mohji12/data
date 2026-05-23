@@ -1,4 +1,4 @@
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+import { getApiBaseUrl } from '@/lib/apiBase';
 const STUDENT_TOKEN_KEY = 'access_token';
 const ADMIN_TOKEN_KEY = 'admin_access_token';
 
@@ -13,7 +13,7 @@ export async function apiClient(endpoint: string, options: RequestInit = {}) {
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(`${BASE_URL}${endpoint}`, {
+  const response = await fetch(`${getApiBaseUrl()}${endpoint}`, {
     ...options,
     headers,
   });
@@ -48,7 +48,7 @@ export async function apiDownload(
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const response = await fetch(`${BASE_URL}${endpoint}`, { headers });
+  const response = await fetch(`${getApiBaseUrl()}${endpoint}`, { headers });
   if (!response.ok) {
     let errorMessage = 'Download failed';
     try {
