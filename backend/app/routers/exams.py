@@ -13,6 +13,7 @@ from app.db import get_db
 from app.models import Question, QuizExam, UserAnswer, UserExam, MarkingType, User
 from app.security import get_current_user
 from app.services.access import can_access_mock_test
+from app.services.batch_match import find_in_set_sql
 from app.schemas import (
     AnswerSubmitRequest,
     AnswerSubmitResponse,
@@ -191,8 +192,8 @@ def list_exams(
     if user_id:
         user = db.query(User).filter(User.id == user_id).first()
         if user and user.subscription:
-            # Filter exams that contain the user's subscription (batch) in their batch list
-            query = query.filter(QuizExam.batch.ilike(f"%{user.subscription}%"))
+            # PHP parity: FIND_IN_SET(subscription, quiz_exam.batch) — exact CSV token match
+            query = query.filter(find_in_set_sql(QuizExam.batch, user.subscription.strip()))
 
     # Order by ID to ensure Mock Test 1, 2, etc. appear in order
     exams = query.order_by(QuizExam.id.asc()).all()

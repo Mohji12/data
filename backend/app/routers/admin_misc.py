@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, load_only
 from app.admin_security import get_current_admin, require_admin_type
 from app.db import get_db
 from app.models import BatchMaster, EmailTemplateMaster, LoginActivity, Option, Testimonial, User, Video, VideoQuestion
+from app.services.batch_rename import rename_batch_references
 from app.services.registration import build_registration_catalog
 from app.services.uploads import save_batch_brochure, save_batch_video
 
@@ -451,6 +452,9 @@ def update_batch(batch_id: int, payload: BatchPayload, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="Batch not found")
     old_name = (b.name or "").strip()
     new_name = (payload.name or "").strip()
+    rename_counts = None
+    if old_name.casefold() != new_name.casefold():
+        rename_counts = rename_batch_references(db, old_name, new_name, b.id)
     b.name = new_name
     b.status = payload.status or "1"
     b.display_order = max(0, int(payload.display_order or 0))
@@ -463,14 +467,13 @@ def update_batch(batch_id: int, payload: BatchPayload, db: Session = Depends(get
     if has_brochure:
         b.brochure_file = brochure_file
     elif new_name:
-        if old_name and old_name.casefold() != new_name.casefold():
-            old_row = db.query(Option).filter(Option.option_name == _brochure_option_key(old_name)).first()
-            if old_row:
-                db.delete(old_row)
         _upsert_option(db, _brochure_option_key(new_name), brochure_file or "")
     db.add(b)
     db.commit()
-    return {"status": "ok"}
+    result: dict = {"status": "ok"}
+    if rename_counts is not None:
+        result["rename"] = rename_counts
+    return result
 
 
 @router.post("/batches/upload-brochure", dependencies=[Depends(require_admin_type("techadmin"))])

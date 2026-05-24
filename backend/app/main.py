@@ -39,9 +39,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Mock Test Backend", lifespan=lifespan)
 
+_settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -117,3 +118,4 @@ def health_db(db: Session = Depends(get_db)) -> dict:
 
 
 handler = Mangum(app)
+# Auto-reload trigger (domain update)

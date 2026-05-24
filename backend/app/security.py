@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+import secrets
 import time
 from typing import Any
 
@@ -27,11 +28,19 @@ def _b64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode((data + padding).encode("ascii"))
 
 
-def create_access_token(user_id: int, email: str) -> str:
+SESSION_INVALID_DETAIL = "Logged in on another device"
+
+
+def create_session_id() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def create_access_token(user_id: int, email: str, session_id: str) -> str:
     settings = get_settings()
     payload = {
         "uid": user_id,
         "email": email,
+        "sid": session_id,
         "exp": int(time.time()) + (settings.api_token_ttl_hours * 3600),
     }
     body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
@@ -70,6 +79,17 @@ def decode_access_token(token: str) -> dict[str, Any]:
     return payload
 
 
+def assert_active_user_session(user: User, payload: dict[str, Any]) -> None:
+    """One active session per user — JWT sid must match users.login_token."""
+    stored = (user.login_token or "").strip()
+    token_sid = str(payload.get("sid") or "").strip()
+    if not stored or not token_sid or not hmac.compare_digest(stored, token_sid):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=SESSION_INVALID_DETAIL,
+        )
+
+
 def get_current_user(
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: Session = Depends(get_db),
@@ -87,5 +107,6 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User session not found",
         )
+    assert_active_user_session(user, payload)
     ensure_user_batch_active(db, user)
     return user

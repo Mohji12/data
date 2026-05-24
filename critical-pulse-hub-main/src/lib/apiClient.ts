@@ -1,4 +1,5 @@
 import { getApiBaseUrl } from '@/lib/apiBase';
+import { isSessionInvalidError, notifySessionInvalidated } from '@/lib/sessionEvents';
 const STUDENT_TOKEN_KEY = 'access_token';
 const ADMIN_TOKEN_KEY = 'admin_access_token';
 
@@ -26,6 +27,9 @@ export async function apiClient(endpoint: string, options: RequestInit = {}) {
       errorMessage = errorData.detail || errorData.message || errorMessage;
     } catch (e) {
       errorMessage = `HTTP error ${response.status}`;
+    }
+    if (response.status === 401 && isSessionInvalidError(errorMessage)) {
+      notifySessionInvalidated();
     }
     throw new Error(typeof errorMessage === 'string' ? errorMessage : JSON.stringify(errorMessage));
   }

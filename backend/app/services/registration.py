@@ -297,11 +297,29 @@ def build_registration_catalog(
     return out
 
 
+def _resolve_batch_by_slug_alias(db: Session, slug: str) -> Optional[Tuple[BatchMaster, BatchDefinition]]:
+    """Map a legacy registration URL slug to batch_master after a batch rename."""
+    key = f"batch_slug_alias::{(slug or '').strip().lower()}"
+    opt = db.query(Option).filter(Option.option_name == key).first()
+    if not opt or not (opt.option_value or "").strip().isdigit():
+        return None
+    row = db.query(BatchMaster).filter(BatchMaster.id == int(opt.option_value.strip())).first()
+    if not row:
+        return None
+    return row, batch_definition_from_master_row(row)
+
+
 def _find_registration_batch_row(
     db: Session, batch_slug: str
 ) -> Optional[Tuple[BatchMaster, BatchDefinition]]:
     raw = (batch_slug or "").strip().lower()
     wanted = REGISTRATION_SLUG_ALIASES.get(raw, raw)
+
+    for slug in (wanted, raw):
+        aliased = _resolve_batch_by_slug_alias(db, slug)
+        if aliased:
+            return aliased
+
     rows = _batch_query(db).filter(BatchMaster.status == "1").all()
 
     batch_name_for_slug = REGISTRATION_FEE_SLUG_TO_BATCH_NAME.get(wanted) or REGISTRATION_FEE_SLUG_TO_BATCH_NAME.get(raw)

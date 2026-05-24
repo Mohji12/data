@@ -42,20 +42,38 @@ def _remove_stored_video_thumbnail(filename: Optional[str]) -> None:
                 pass
 
 
-def _folder_names_from_csv(db: Session, folder_csv: Optional[str]) -> str:
+def _parse_folder_ids(folder_csv: Optional[str]) -> list[int]:
     raw = (folder_csv or "").strip()
     if not raw:
-        return ""
+        return []
     ids: list[int] = []
     for part in raw.split(","):
         p = part.strip()
         if p.isdigit():
             ids.append(int(p))
+    return ids
+
+
+def _folder_names_from_ids(ids: list[int], by_id: dict[int, str]) -> str:
+    return ", ".join(by_id.get(i, "") for i in ids if by_id.get(i))
+
+
+def _load_folder_name_map(db: Session, folder_csvs: list[Optional[str]]) -> dict[int, str]:
+    all_ids: set[int] = set()
+    for csv in folder_csvs:
+        all_ids.update(_parse_folder_ids(csv))
+    if not all_ids:
+        return {}
+    rows = db.query(FolderMaster).filter(FolderMaster.id.in_(all_ids)).all()
+    return {r.id: (r.name or "") for r in rows}
+
+
+def _folder_names_from_csv(db: Session, folder_csv: Optional[str]) -> str:
+    ids = _parse_folder_ids(folder_csv)
     if not ids:
         return ""
-    rows = db.query(FolderMaster).filter(FolderMaster.id.in_(ids)).all()
-    by_id = {r.id: (r.name or "") for r in rows}
-    return ", ".join(by_id.get(i, "") for i in ids if by_id.get(i))
+    by_id = _load_folder_name_map(db, [folder_csv])
+    return _folder_names_from_ids(ids, by_id)
 
 
 class FolderPayload(BaseModel):
@@ -179,6 +197,7 @@ def list_videos(
         query = query.order_by(Video.upload_date.desc(), Video.id.desc())
 
     rows = query.all()
+    folder_map = _load_folder_name_map(db, [v.folder for v in rows])
     return [
         {
             "id": v.id,
@@ -186,7 +205,7 @@ def list_videos(
             "description": v.description,
             "status": v.status,
             "folder": v.folder,
-            "folder_names": _folder_names_from_csv(db, v.folder),
+            "folder_names": _folder_names_from_ids(_parse_folder_ids(v.folder), folder_map),
             "batch": v.batch,
             "image": v.image,
             "image_url": _admin_video_image_url(v.image),

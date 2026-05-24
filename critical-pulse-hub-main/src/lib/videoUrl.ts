@@ -68,17 +68,40 @@ export function parseVimeoVideoId(rawUrl?: string | null): string | null {
   return null;
 }
 
-/** Minimal chrome + no keyboard shortcuts; playback controlled via postMessage overlay. */
+/** Minimal chrome; native controls hidden — custom overlay provides all UI. */
 export function buildVimeoPlayerEmbedUrl(videoId: string): string {
   const params = new URLSearchParams({
     title: '0',
     byline: '0',
     portrait: '0',
-    keyboard: '1',
-    controls: '1',
+    keyboard: '0',      // disable Vimeo keyboard (our overlay handles shortcuts)
+    controls: '0',      // hide native controls (custom controls on overlay)
     dnt: '1',
+    transcript: '0',
+    pip: '0',
+    // speed=1 enables the playback-rate API (required for setPlaybackRate postMessage).
+    speed: '1',
   });
   return `https://player.vimeo.com/video/${videoId}?${params.toString()}`;
+}
+
+/** Direct file URLs (MP4 etc.) — use HTML5 <video>, not iframe postMessage. */
+export function isDirectVideoFileUrl(rawUrl?: string | null): boolean {
+  const url = String(rawUrl || '').trim();
+  if (!url) return false;
+  if (parseVimeoVideoId(url) || parseYouTubeVideoId(url)) return false;
+
+  try {
+    const u = new URL(url, 'https://placeholder.local');
+    const path = u.pathname.toLowerCase();
+    return (
+      /\.(mp4|webm|ogg|mov|m4v)(\?|$)/i.test(path) ||
+      path.includes('/upload/batch_videos/') ||
+      path.includes('/upload/videos/')
+    );
+  } catch {
+    return /\.(mp4|webm|ogg|mov|m4v)(\?|$)/i.test(url.toLowerCase());
+  }
 }
 
 export function parseYouTubeVideoId(rawUrl?: string | null): string | null {
@@ -106,7 +129,7 @@ export function buildYouTubeEmbedUrl(videoId: string, origin: string): string {
     rel: '0',
     modestbranding: '1',
     controls: '1',
-    disablekb: '0',
+    disablekb: '0',  // keep keyboard shortcuts enabled (Space, arrows, F, M, K)
   });
   return `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
 }

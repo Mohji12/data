@@ -153,9 +153,11 @@ export const useAuthStore = create<AuthState>((set) => ({
         const adminUser = useAuthStore.getState().user?.role === 'admin';
         if (adminUser) {
           await apiClient('/admin/auth/logout', { method: 'POST' });
+        } else {
+          await apiClient('/auth/logout', { method: 'POST' });
         }
       } catch {
-        /* ignore */
+        /* ignore — token may already be invalid */
       }
     }
     sessionStorage.removeItem(ADMIN_TOKEN_KEY);

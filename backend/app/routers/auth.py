@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db import get_db
 from app.models import LoginActivity, User
-from app.security import create_access_token
+from app.security import create_access_token, create_session_id, get_current_user
 from app.services.batch_access import ensure_user_batch_active
 
 from cryptography.hazmat.backends import default_backend
@@ -291,7 +291,14 @@ def login(
             db.refresh(user)
 
     list_path = f"/exams?user_id={user.id}"
-    token = create_access_token(user_id=user.id, email=user.email)
+    session_id = create_session_id()
+    user.login_token = session_id
+    user.is_login = "Yes"
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token(user_id=user.id, email=user.email, session_id=session_id)
 
     # Same table as PHP Login.php (login_activity).
     try:
@@ -321,3 +328,36 @@ def login(
         access_token=token,
         token_type="bearer",
     )
+
+
+class SessionCheckResponse(BaseModel):
+    valid: bool = True
+
+
+@router.get("/session/check", response_model=SessionCheckResponse)
+def session_check(_current_user: User = Depends(get_current_user)) -> SessionCheckResponse:
+    """Lightweight poll — get_current_user already validates login_token vs JWT sid."""
+    return SessionCheckResponse(valid=True)
+
+
+@router.post("/logout")
+def logout(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    current_user.login_token = ""
+    current_user.is_login = "No"
+    db.add(current_user)
+    try:
+        db.add(
+            LoginActivity(
+                users_id=current_user.id,
+                activity="Logout",
+                activity_datetime=datetime.utcnow(),
+            )
+        )
+        db.commit()
+    except Exception as exc:
+        logger.warning("login_activity insert failed on logout: %s", exc)
+        db.rollback()
+    return {"status": "ok"}

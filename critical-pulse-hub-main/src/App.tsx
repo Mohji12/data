@@ -65,8 +65,14 @@ const AdminExtensions = lazy(() => import('@/pages/admin/AdminExtensions'));
 
 import { useAuthStore } from '@/store/authStore';
 import ContentProtection from '@/components/ContentProtection';
+import { useSingleDeviceSession } from '@/hooks/useSingleDeviceSession';
 
 const queryClient = new QueryClient();
+
+function SessionGuard() {
+  useSingleDeviceSession();
+  return null;
+}
 
 const App = () => {
   const initialize = useAuthStore((state) => state.initialize);
@@ -84,6 +90,7 @@ const App = () => {
         v7_relativeSplatPath: true,
       }}
     >
+      <SessionGuard />
       <ContentProtection />
       <Suspense fallback={<div className="flex items-center justify-center min-h-screen font-serif text-ink">Loading...</div>}>
         <Routes>

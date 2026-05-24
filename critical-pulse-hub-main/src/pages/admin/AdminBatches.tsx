@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { apiClient } from '@/lib/apiClient';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
 import { useIsTechAdmin } from '@/store/authStore';
@@ -17,6 +18,34 @@ type BatchRow = {
   brochure_file?: string | null;
   brochure_url?: string | null;
 };
+
+type BatchRenameCounts = {
+  users?: number;
+  packages?: number;
+  quiz_exams?: number;
+  folder_master?: number;
+  videos?: number;
+  global_access_options?: number;
+  slug_aliases?: number;
+};
+
+type BatchUpdateResponse = {
+  status: string;
+  rename?: BatchRenameCounts;
+};
+
+function formatRenameSummary(rename: BatchRenameCounts): string {
+  const parts: string[] = [];
+  if (rename.users) parts.push(`${rename.users} user(s)`);
+  if (rename.packages) parts.push(`${rename.packages} package(s)`);
+  if (rename.quiz_exams) parts.push(`${rename.quiz_exams} exam(s)`);
+  if (rename.folder_master) parts.push(`${rename.folder_master} folder(s)`);
+  if (rename.videos) parts.push(`${rename.videos} video(s)`);
+  if (rename.global_access_options) parts.push(`${rename.global_access_options} access option(s)`);
+  if (rename.slug_aliases) parts.push(`${rename.slug_aliases} URL alias(es)`);
+  if (!parts.length) return 'Batch updated (no linked references needed changes).';
+  return `Batch updated — also updated ${parts.join(', ')}.`;
+}
 
 export default function AdminBatches() {
   const qc = useQueryClient();
@@ -93,8 +122,8 @@ export default function AdminBatches() {
           video_file: payload.video_file?.trim() || null,
           brochure_file: payload.brochure_file?.trim() || null,
         }),
-      }),
-    onSuccess: () => {
+      }) as Promise<BatchUpdateResponse>,
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['adminMiscBatches'] });
       qc.invalidateQueries({ queryKey: ['regBatchesNavbar'] });
       qc.invalidateQueries({ queryKey: ['registrationCatalogNavbar'] });
@@ -102,7 +131,13 @@ export default function AdminBatches() {
       qc.invalidateQueries({ queryKey: ['registrationCatalogPublic'] });
       qc.invalidateQueries({ queryKey: ['registrationCatalogCoursesPage'] });
       setEditing(null);
+      if (data?.rename) {
+        toast.success(formatRenameSummary(data.rename));
+      } else {
+        toast.success('Batch updated.');
+      }
     },
+    onError: (e: Error) => toast.error(e.message || 'Update failed'),
   });
 
   const delMut = useMutation({
@@ -383,6 +418,9 @@ export default function AdminBatches() {
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
           <div className="w-full max-w-xl bg-chalk border border-border-soft rounded-sm p-5 space-y-3">
             <h3 className="font-display font-bold text-xl text-slate">Edit batch</h3>
+            <p className="font-sans text-xs text-ink-muted">
+              Renaming updates all enrolled users, exams, videos, and access settings linked to this batch.
+            </p>
             <input
               value={editing.name}
               onChange={(e) => setEditing({ ...editing, name: e.target.value })}

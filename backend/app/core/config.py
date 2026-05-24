@@ -36,6 +36,16 @@ class Settings:
             "critical-care-classes-fastapi-secret",
         )
         self.api_token_ttl_hours: int = int(os.getenv("API_TOKEN_TTL_HOURS", "24"))
+        # Comma-separated browser origins allowed for cross-origin API calls (frontend host).
+        _cors = os.getenv("CORS_ORIGINS", "").strip()
+        if _cors:
+            self.cors_origins: list[str] = [o.strip().rstrip("/") for o in _cors.split(",") if o.strip()]
+        else:
+            self.cors_origins = [
+                "https://harishcriticalcareclasses.com",
+                "http://localhost:8080",
+                "http://127.0.0.1:8080",
+            ]
         self.payment_gateway_name: str = os.getenv("PAYMENT_GATEWAY_NAME", "razorpay")
         self.payment_key_id: str = os.getenv("PAYMENT_KEY_ID", "")
         self.payment_key_secret: str = os.getenv("PAYMENT_KEY_SECRET", "")

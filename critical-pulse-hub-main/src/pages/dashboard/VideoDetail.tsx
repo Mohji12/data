@@ -80,7 +80,18 @@ export default function VideoDetail() {
           <div className="font-mono text-[11px] text-ink-faint">
             {video.folder_name || 'General'} · Uploaded on {new Date(video.upload_date).toLocaleDateString()}
           </div>
-          {video.description && <p className="mt-4 font-sans text-sm text-ink-muted">{video.description}</p>}
+          {(() => {
+            if (!video.description) return null;
+            // Check if the HTML is actually empty (e.g. `<p>&nbsp;&nbsp;</p>`)
+            const stripped = video.description.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, '').trim();
+            if (!stripped) return null;
+            return (
+              <div 
+                className="mt-4 font-sans text-sm text-ink-muted [&>p]:mb-2 [&>ul]:list-disc [&>ul]:ml-4 [&>ol]:list-decimal [&>ol]:ml-4"
+                dangerouslySetInnerHTML={{ __html: video.description }}
+              />
+            );
+          })()}
         </>
       )}
     </div>
