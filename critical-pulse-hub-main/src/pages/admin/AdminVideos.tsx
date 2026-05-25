@@ -23,6 +23,13 @@ type VideoAdminRow = {
   status?: string | null;
 };
 
+type VideosListResponse = {
+  items: VideoAdminRow[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
 type FolderRow = { id: number; name: string; status?: string | null; batch?: string | null };
 type BatchRow = { id: number; name: string; status?: string | null };
 
@@ -265,23 +272,31 @@ export default function AdminVideos() {
   const [batch, setBatch] = useState('');
   const [sortBy, setSortBy] = useState<string>('upload_date');
   const [order, setOrder] = useState<'asc' | 'desc'>('desc');
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
   const isTech = useIsTechAdmin();
   const [modal, setModal] = useState<'add' | 'edit' | null>(null);
   const [editId, setEditId] = useState<number | null>(null);
   const [form, setForm] = useState<VideoFormState>(emptyForm);
   const [localPreview, setLocalPreview] = useState<string | null>(null);
 
-  const { data: videos, isLoading, error } = useQuery({
-    queryKey: ['adminVideos', q, batch, sortBy, order],
+  const { data: videosPage, isLoading, error, isFetching } = useQuery({
+    queryKey: ['adminVideos', q, batch, sortBy, order, page],
     queryFn: () => {
       const p = new URLSearchParams();
       if (q.trim()) p.set('q', q.trim());
       if (batch.trim()) p.set('batch', batch.trim());
       p.set('sort_by', sortBy);
       p.set('order', order);
-      return apiClient(`/admin/content/videos?${p.toString()}`) as Promise<VideoAdminRow[]>;
+      p.set('page', String(page));
+      p.set('page_size', String(pageSize));
+      return apiClient(`/admin/content/videos?${p.toString()}`) as Promise<VideosListResponse>;
     },
   });
+
+  const videos = videosPage?.items ?? [];
+  const totalVideos = videosPage?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalVideos / pageSize));
 
   const { data: folders } = useQuery({
     queryKey: ['adminFolders'],
@@ -475,6 +490,7 @@ export default function AdminVideos() {
   };
 
   const toggleSort = (field: string) => {
+    setPage(1);
     if (sortBy === field) {
       setOrder(order === 'asc' ? 'desc' : 'asc');
     } else {
@@ -657,13 +673,19 @@ export default function AdminVideos() {
         <div className="flex flex-wrap gap-2 items-center">
           <input
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setPage(1);
+            }}
             placeholder="Search title…"
             className="bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm min-w-[200px]"
           />
           <select
             value={batch}
-            onChange={(e) => setBatch(e.target.value)}
+            onChange={(e) => {
+              setBatch(e.target.value);
+              setPage(1);
+            }}
             className="bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm min-w-[200px]"
           >
             <option value="">All batches</option>
@@ -696,7 +718,17 @@ export default function AdminVideos() {
       </div>
 
       {isLoading && <div className="font-mono text-xs text-ink-faint py-12 text-center animate-pulse">Loading videos…</div>}
-      {error && <div className="text-red-600 font-sans text-sm py-6">Failed to load videos.</div>}
+      {error && (
+        <div className="text-red-600 font-sans text-sm py-6 space-y-2">
+          <p>Failed to load videos.</p>
+          <p className="text-xs text-ink-muted">
+            If the browser console shows a CORS error, redeploy nginx on the API server using{' '}
+            <span className="font-mono">deploy/ec2/nginx-krintix-api.conf</span> (must include{' '}
+            <span className="font-mono">add_header … always</span>) and ensure{' '}
+            <span className="font-mono">client_max_body_size 50M</span>.
+          </p>
+        </div>
+      )}
 
       <div className="bg-chalk border border-border-soft rounded-sm overflow-x-auto">
         <table className="w-full min-w-[900px]">
@@ -728,8 +760,12 @@ export default function AdminVideos() {
             {(videos || []).map((v) => (
               <tr key={v.id} className="border-b border-border-soft hover:bg-ink-ghost">
                 <td className="px-4 py-3 w-24 align-top">
-                  {v.image_url ? (
-                    <img src={v.image_url} alt="" className="w-20 h-14 object-cover rounded-sm border border-border-soft" />
+                  {v.image_url || v.image ? (
+                    <img
+                      src={resolvePublicUploadUrl(v.image_url) || resolvePublicUploadUrl(`/upload/video/image/${v.image}`) || ''}
+                      alt=""
+                      className="w-20 h-14 object-cover rounded-sm border border-border-soft"
+                    />
                   ) : (
                     <div className="w-20 h-14 bg-chalk-cool rounded-sm border border-border-soft text-[9px] text-slate/70 font-medium flex items-center justify-center text-center px-1">
                       No preview
@@ -798,10 +834,40 @@ export default function AdminVideos() {
             ))}
           </tbody>
         </table>
-        {!isLoading && (videos || []).length === 0 && (
+        {!isLoading && !error && videos.length === 0 && (
           <div className="p-12 text-center font-sans text-sm text-ink-muted">No videos match.</div>
         )}
       </div>
+
+      {!isLoading && !error && totalVideos > 0 && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 font-mono text-xs text-ink-faint">
+          <span>
+            Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalVideos)} of {totalVideos}
+            {isFetching ? ' (updating…)' : ''}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={page <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="px-3 py-1.5 border border-border-soft rounded-sm disabled:opacity-40 hover:bg-chalk-cool"
+            >
+              Previous
+            </button>
+            <span>
+              Page {page} / {totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              className="px-3 py-1.5 border border-border-soft rounded-sm disabled:opacity-40 hover:bg-chalk-cool"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

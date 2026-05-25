@@ -33,8 +33,17 @@ def send_html_email(
     if not settings.smtp_host:
         raise RuntimeError("SMTP is not configured (SMTP_HOST is empty)")
 
+    from_addr = (settings.smtp_from or "").strip()
+    if not from_addr and "@" in (settings.smtp_username or ""):
+        from_addr = settings.smtp_username.strip()
+    if not from_addr:
+        raise RuntimeError(
+            "SMTP_FROM is empty. Set SMTP_FROM to an email address verified in your mail provider "
+            "(ZeptoMail: Mail Agents, or SMTP2GO: Verified Senders)."
+        )
+
     msg = EmailMessage()
-    msg["From"] = settings.smtp_from
+    msg["From"] = from_addr
     msg["To"] = to_email
     msg["Subject"] = subject
     cc_list = _normalize_addr_list(cc)

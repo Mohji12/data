@@ -21,7 +21,7 @@ export const marketingBatches = [
   {
     label: 'CCM Batch 3',
     pillTo: '/register/ccm-practical-series-batch-3',
-    slugCandidates: ['ccm-3', 'ccm-practical-series-batch-3', 'ccm-batch-3'],
+    slugCandidates: ['ccm-3', 'ccm-practical-series-batch-3', 'ccm-batch-3', 'practical-series-batch-3'],
   },
   {
     label: 'Batch 15',
@@ -41,7 +41,7 @@ export const marketingBatches = [
   {
     label: 'Batch 10 EDIC 1',
     pillTo: '/register/batch-10-edic-1',
-    slugCandidates: ['edic-10', 'batch-10-edic-1', 'edic-1', 'batch-edic-10'],
+    slugCandidates: ['batch-edic-10', 'edic-10', 'batch-10-edic-1', 'edic-1', 'batch-edic-10'],
   },
 ] as const;
 

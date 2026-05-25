@@ -17,6 +17,7 @@ type BatchRow = {
   video_resolved_url: string | null;
   brochure_file?: string | null;
   brochure_url?: string | null;
+  package_subscription?: string | null;
 };
 
 type BatchRenameCounts = {
@@ -54,6 +55,7 @@ export default function AdminBatches() {
   const [status, setStatus] = useState<'0' | '1'>('1');
   const [displayOrder, setDisplayOrder] = useState('0');
   const [feeStructure, setFeeStructure] = useState('');
+  const [packageSubscription, setPackageSubscription] = useState('');
   const [description, setDescription] = useState('');
   const [videoUrl, setVideoUrl] = useState('');
   const [videoFile, setVideoFile] = useState<string | null>(null);
@@ -84,6 +86,7 @@ export default function AdminBatches() {
           status,
           display_order: Number(displayOrder || 0),
           registration_fee_structure: feeStructure.trim() || null,
+          package_subscription: packageSubscription.trim() || null,
           description: description.trim() || null,
           video_url: videoUrl.trim() || null,
           video_file: videoFile,
@@ -101,6 +104,7 @@ export default function AdminBatches() {
       setStatus('1');
       setDisplayOrder('0');
       setFeeStructure('');
+      setPackageSubscription('');
       setDescription('');
       setVideoUrl('');
       setVideoFile(null);
@@ -117,6 +121,7 @@ export default function AdminBatches() {
           status: payload.status,
           display_order: Number(payload.display_order || 0),
           registration_fee_structure: payload.registration_fee_structure?.trim() || null,
+          package_subscription: payload.package_subscription?.trim() || null,
           description: payload.description?.trim() || null,
           video_url: payload.video_url?.trim() || null,
           video_file: payload.video_file?.trim() || null,
@@ -259,6 +264,15 @@ export default function AdminBatches() {
               placeholder="e.g. Practical Series Fee Structure"
             />
           </div>
+          <div className="flex-1 min-w-[220px]">
+            <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Package subscription name (optional)</label>
+            <input
+              value={packageSubscription}
+              onChange={(e) => setPackageSubscription(e.target.value)}
+              className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm"
+              placeholder="e.g. CP 7 — must match package.subscription in DB"
+            />
+          </div>
           <div className="flex-1 min-w-[300px]">
             <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Batch Description</label>
             <textarea
@@ -352,6 +366,9 @@ export default function AdminBatches() {
               </div>
               {!!b.registration_fee_structure && (
                 <div className="font-mono text-[10px] text-ink-faint mt-1">Fee label: {b.registration_fee_structure}</div>
+              )}
+              {!!b.package_subscription && (
+                <div className="font-mono text-[10px] text-ink-faint mt-1">Packages: {b.package_subscription}</div>
               )}
               {!!b.description && (
                 <div className="font-sans text-xs text-slate-light mt-1 max-w-md line-clamp-2">{b.description}</div>
@@ -450,6 +467,15 @@ export default function AdminBatches() {
               className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm"
               placeholder="Fee structure label (optional)"
             />
+            <input
+              value={editing.package_subscription || ''}
+              onChange={(e) => setEditing({ ...editing, package_subscription: e.target.value })}
+              className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm"
+              placeholder="Package subscription name (e.g. CP 7, CCM Batch 3)"
+            />
+            <p className="font-sans text-[11px] text-ink-muted -mt-1">
+              Display name above is shown on the website. Package subscription must match the batch name in the Packages table.
+            </p>
             <textarea
               value={editing.description || ''}
               onChange={(e) => setEditing({ ...editing, description: e.target.value })}

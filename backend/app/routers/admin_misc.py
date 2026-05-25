@@ -25,6 +25,31 @@ def _batch_has_column(db: Session, column_name: str) -> bool:
     return any((c.get("name") or "").lower() == column_name.lower() for c in cols)
 
 
+def _batch_load_only(db: Session):
+    fields = [
+        BatchMaster.id,
+        BatchMaster.name,
+        BatchMaster.status,
+        BatchMaster.display_order,
+        BatchMaster.registration_fee_structure,
+        BatchMaster.description,
+        BatchMaster.video_url,
+        BatchMaster.video_file,
+        BatchMaster.brochure_file,
+    ]
+    if _batch_has_column(db, "package_subscription"):
+        fields.append(BatchMaster.package_subscription)
+    return load_only(*fields)
+
+
+def _batch_package_subscription_value(db: Session, row: BatchMaster) -> str | None:
+    if _batch_has_column(db, "package_subscription"):
+        val = getattr(row, "package_subscription", None)
+        if val is not None and str(val).strip():
+            return str(val).strip()
+    return None
+
+
 def _brochure_option_key(batch_name: str) -> str:
     return f"batch_brochure::{(batch_name or '').strip().casefold()}"
 
@@ -260,6 +285,7 @@ class BatchPayload(BaseModel):
     video_url: Optional[str] = None
     video_file: Optional[str] = None
     brochure_file: Optional[str] = None
+    package_subscription: Optional[str] = None
 
 
 ALLOWED_EMAIL_TEMPLATE_TYPES = {
@@ -323,19 +349,7 @@ def list_batches(
     db: Session = Depends(get_db),
 ) -> list[dict]:
     has_brochure = _batch_has_column(db, "brochure_file")
-    query = db.query(BatchMaster).options(
-        load_only(
-            BatchMaster.id,
-            BatchMaster.name,
-            BatchMaster.status,
-            BatchMaster.display_order,
-            BatchMaster.registration_fee_structure,
-            BatchMaster.description,
-            BatchMaster.video_url,
-            BatchMaster.video_file,
-            BatchMaster.brochure_file,
-        )
-    )
+    query = db.query(BatchMaster).options(_batch_load_only(db))
     
     if q:
         query = query.filter(BatchMaster.name.ilike(f"%{q}%"))
@@ -381,6 +395,7 @@ def list_batches(
                     )
                 )
             ),
+            "package_subscription": _batch_package_subscription_value(db, b),
         }
         for b in rows
     ]
@@ -418,8 +433,11 @@ def create_batch(payload: BatchPayload, db: Session = Depends(get_db)) -> dict:
     )
     brochure_file = (payload.brochure_file or "").strip() or None
     has_brochure = _batch_has_column(db, "brochure_file")
+    has_pkg_sub = _batch_has_column(db, "package_subscription")
     if has_brochure:
         b.brochure_file = brochure_file
+    if has_pkg_sub:
+        b.package_subscription = (payload.package_subscription or "").strip() or None
     db.add(b)
     if (not has_brochure) and name:
         _upsert_option(db, _brochure_option_key(name), brochure_file or "")
@@ -432,19 +450,7 @@ def create_batch(payload: BatchPayload, db: Session = Depends(get_db)) -> dict:
 def update_batch(batch_id: int, payload: BatchPayload, db: Session = Depends(get_db)) -> dict:
     b = (
         db.query(BatchMaster)
-        .options(
-            load_only(
-                BatchMaster.id,
-                BatchMaster.name,
-                BatchMaster.status,
-                BatchMaster.display_order,
-                BatchMaster.registration_fee_structure,
-                BatchMaster.description,
-                BatchMaster.video_url,
-                BatchMaster.video_file,
-                BatchMaster.brochure_file,
-            )
-        )
+        .options(_batch_load_only(db))
         .filter(BatchMaster.id == batch_id)
         .first()
     )
@@ -464,10 +470,13 @@ def update_batch(batch_id: int, payload: BatchPayload, db: Session = Depends(get
     b.video_file = (payload.video_file or "").strip() or None
     brochure_file = (payload.brochure_file or "").strip() or None
     has_brochure = _batch_has_column(db, "brochure_file")
+    has_pkg_sub = _batch_has_column(db, "package_subscription")
     if has_brochure:
         b.brochure_file = brochure_file
     elif new_name:
         _upsert_option(db, _brochure_option_key(new_name), brochure_file or "")
+    if has_pkg_sub:
+        b.package_subscription = (payload.package_subscription or "").strip() or None
     db.add(b)
     db.commit()
     result: dict = {"status": "ok"}

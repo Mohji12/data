@@ -43,6 +43,7 @@ class Settings:
         else:
             self.cors_origins = [
                 "https://harishcriticalcareclasses.com",
+                "https://www.harishcriticalcareclasses.com",
                 "http://localhost:8080",
                 "http://127.0.0.1:8080",
             ]
@@ -68,6 +69,8 @@ class Settings:
         # Base URL for <?=resources_url()?> in copied PHP templates (logo, etc.). No trailing slash.
         _asset = os.getenv("EMAIL_ASSET_BASE_URL", "").strip().rstrip("/")
         self.email_asset_base_url: str = _asset or "https://harishcriticalcareclasses.com"
+        _logo = os.getenv("EMAIL_LOGO_URL", "").strip()
+        self.email_logo_url: str = _logo or f"{self.email_asset_base_url}/hero/logo.png"
         # Root folder containing PHP views: application/views/email_template (override if repo layout differs).
         _default_tpl = Path(__file__).resolve().parents[4] / "application" / "views" / "email_template"
         self.email_template_php_root: str = os.getenv(

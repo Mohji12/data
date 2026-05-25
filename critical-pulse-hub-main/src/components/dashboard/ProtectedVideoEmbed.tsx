@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Maximize2, Minimize2, Play, Pause, Settings, FastForward, Volume2, VolumeX } from 'lucide-react';
+import { Maximize2, Minimize2, Play, Pause, Settings, FastForward, Volume1, Volume2, VolumeX, Plus, Minus } from 'lucide-react';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
 import {
   buildVimeoPlayerEmbedUrl,
@@ -91,13 +91,18 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentSpeedRef = useRef(1);
   const playerReadyRef = useRef(false);
+  const lastVolumeRef = useRef(1);
+
+  const VOLUME_STEP = 0.1;
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isSeeking, setIsSeeking] = useState(false);
+  const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
+  const [showVolumeControl, setShowVolumeControl] = useState(false);
   
   const [qualities, setQualities] = useState<{ id: string; label: string }[]>([]);
   const [currentQuality, setCurrentQuality] = useState<string>('auto');
@@ -191,29 +196,56 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
     }
   }, [isPlaying, detected, isDirectVideo, postVimeo, postYouTube]);
 
-  /* ─── Mute / Unmute ─── */
+  /* ─── Volume / Mute ─── */
+
+  const applyVolume = useCallback(
+    (level: number) => {
+      const clamped = Math.max(0, Math.min(1, level));
+      setVolume(clamped);
+      setIsMuted(clamped === 0);
+      if (clamped > 0) lastVolumeRef.current = clamped;
+
+      if (isDirectVideo) {
+        const video = videoRef.current;
+        if (video) {
+          video.volume = clamped;
+          video.muted = clamped === 0;
+        }
+        return;
+      }
+
+      const iframe = iframeRef.current;
+      if (!iframe?.contentWindow || !detected) return;
+
+      if (detected.provider === 'vimeo') {
+        postVimeo({ method: 'setVolume', value: clamped });
+      } else if (detected.provider === 'youtube') {
+        if (clamped === 0) {
+          postYouTube({ event: 'command', func: 'mute', args: [] });
+        } else {
+          postYouTube({ event: 'command', func: 'unMute', args: [] });
+          postYouTube({ event: 'command', func: 'setVolume', args: [Math.round(clamped * 100)] });
+        }
+      }
+    },
+    [detected, isDirectVideo, postVimeo, postYouTube],
+  );
+
+  const adjustVolume = useCallback(
+    (delta: number) => {
+      const base = isMuted || volume === 0 ? 0 : volume;
+      applyVolume(base + delta);
+    },
+    [applyVolume, isMuted, volume],
+  );
 
   const toggleMute = useCallback(() => {
-    const newMutedState = !isMuted;
-
-    if (isDirectVideo) {
-      const video = videoRef.current;
-      if (video) video.muted = newMutedState;
-      setIsMuted(newMutedState);
-      return;
+    if (isMuted || volume === 0) {
+      applyVolume(lastVolumeRef.current > 0 ? lastVolumeRef.current : 1);
+    } else {
+      applyVolume(0);
     }
-
-    const iframe = iframeRef.current;
-    if (!iframe?.contentWindow || !detected) return;
-
-    if (detected.provider === 'vimeo') {
-      postVimeo({ method: 'setVolume', value: newMutedState ? 0 : 1 });
-    } else if (detected.provider === 'youtube') {
-      postYouTube({ event: 'command', func: newMutedState ? 'mute' : 'unMute', args: [] });
-    }
-
-    setIsMuted(newMutedState);
-  }, [isMuted, detected, isDirectVideo, postVimeo, postYouTube]);
+  }, [applyVolume, isMuted, volume]);
 
   /* ─── Seek ─── */
 
@@ -382,7 +414,11 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
 
         if (data.event === 'volumechange') {
           const vd = data.data as { volume?: number } | undefined;
-          if (typeof vd?.volume === 'number') setIsMuted(vd.volume === 0);
+          if (typeof vd?.volume === 'number') {
+            setVolume(vd.volume);
+            setIsMuted(vd.volume === 0);
+            if (vd.volume > 0) lastVolumeRef.current = vd.volume;
+          }
         }
 
         if (data.event === 'play') setIsPlaying(true);
@@ -439,6 +475,11 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
             }
             if (info.playbackRate) {
               setCurrentSpeed(info.playbackRate);
+            }
+            if (typeof info.volume === 'number') {
+              const vol = info.volume / 100;
+              setVolume(vol);
+              if (vol > 0) lastVolumeRef.current = vol;
             }
             if (typeof info.muted === 'boolean') {
               setIsMuted(info.muted);
@@ -497,7 +538,11 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
     };
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
-    const onVolumeChange = () => setIsMuted(video.muted || video.volume === 0);
+    const onVolumeChange = () => {
+      setVolume(video.volume);
+      setIsMuted(video.muted || video.volume === 0);
+      if (video.volume > 0) lastVolumeRef.current = video.volume;
+    };
 
     video.addEventListener('loadedmetadata', onLoadedMetadata);
     video.addEventListener('timeupdate', onTimeUpdate);
@@ -566,12 +611,20 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
           e.preventDefault();
           toggleMute();
           break;
+        case 'ArrowUp':
+          e.preventDefault();
+          adjustVolume(VOLUME_STEP);
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          adjustVolume(-VOLUME_STEP);
+          break;
       }
     };
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [currentTime, seekTo, togglePlayPause, toggleFullscreen, toggleMute]);
+  }, [currentTime, seekTo, togglePlayPause, toggleFullscreen, toggleMute, adjustVolume]);
 
   /* ─── No video fallback ─── */
 
@@ -594,6 +647,10 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
     }
     if (showSpeedMenu) {
       setShowSpeedMenu(false);
+      return;
+    }
+    if (showVolumeControl) {
+      setShowVolumeControl(false);
       return;
     }
 
@@ -771,27 +828,87 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
               +10
             </button>
 
-            {/* Mute/Unmute */}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleMute();
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-              }}
-              className="
-                flex items-center justify-center w-7 h-7 ml-1
-                text-white/80 hover:text-white
-                transition-colors cursor-pointer
-              "
-              title={isMuted ? 'Unmute (M)' : 'Mute (M)'}
-              aria-label={isMuted ? 'Unmute' : 'Mute'}
+            {/* Volume: mute + slider + increase/decrease */}
+            <div
+              className="relative flex items-center ml-1"
+              onMouseEnter={() => setShowVolumeControl(true)}
+              onMouseLeave={() => setShowVolumeControl(false)}
             >
-              {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-            </button>
+              {showVolumeControl && (
+                <div
+                  className="absolute bottom-full left-0 mb-2 flex items-center gap-1.5 bg-black/95 border border-white/10 rounded-md px-2 py-1.5 z-30"
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      adjustVolume(-VOLUME_STEP);
+                    }}
+                    className="flex items-center justify-center w-6 h-6 text-white/80 hover:text-white transition-colors"
+                    title="Decrease volume"
+                    aria-label="Decrease volume"
+                  >
+                    <Minus size={14} />
+                  </button>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={Math.round((isMuted ? 0 : volume) * 100)}
+                    onChange={(e) => {
+                      e.stopPropagation();
+                      applyVolume(Number(e.target.value) / 100);
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-20 h-1 accent-cyan-400 cursor-pointer"
+                    aria-label="Volume"
+                    title={`Volume ${Math.round((isMuted ? 0 : volume) * 100)}%`}
+                  />
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      adjustVolume(VOLUME_STEP);
+                    }}
+                    className="flex items-center justify-center w-6 h-6 text-white/80 hover:text-white transition-colors"
+                    title="Increase volume"
+                    aria-label="Increase volume"
+                  >
+                    <Plus size={14} />
+                  </button>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleMute();
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                className="
+                  flex items-center justify-center w-7 h-7
+                  text-white/80 hover:text-white
+                  transition-colors cursor-pointer
+                "
+                title={isMuted ? 'Unmute (M)' : 'Mute (M) · ↑↓ volume'}
+                aria-label={isMuted ? 'Unmute' : 'Mute'}
+              >
+                {isMuted || volume === 0 ? (
+                  <VolumeX size={16} />
+                ) : volume < 0.5 ? (
+                  <Volume1 size={16} />
+                ) : (
+                  <Volume2 size={16} />
+                )}
+              </button>
+            </div>
 
             {/* Time display */}
             <span className="text-[11px] font-mono text-white/60 ml-1">

@@ -62,10 +62,40 @@ _SUBSCRIPTION_TO_SLUG: dict[str, str] = {
     "EDIC2026": "batch_edic_9/thank_you",
 }
 
+_LEGACY_EMAIL_LOGO_PATH = "assets/img/logo.png"
+
+
+def email_logo_url() -> str:
+    """Public HTTPS URL for the logo image embedded in HTML emails."""
+    return (get_settings().email_logo_url or "").strip()
+
+
+def _fix_email_logo_src(html: str) -> str:
+    """PHP templates reference legacy /assets/img/logo.png; the React site uses /hero/logo.png."""
+    logo = email_logo_url()
+    if not logo:
+        return html
+    asset_base = (get_settings().email_asset_base_url or "").rstrip("/")
+    replacements = [
+        f"{asset_base}/{_LEGACY_EMAIL_LOGO_PATH}",
+        f"{asset_base}{_LEGACY_EMAIL_LOGO_PATH}",
+        _LEGACY_EMAIL_LOGO_PATH,
+    ]
+    for old in replacements:
+        html = html.replace(old, logo)
+    html = re.sub(
+        rf'src=(["\'])(?:https?://[^"\']+/)?{re.escape(_LEGACY_EMAIL_LOGO_PATH)}\1',
+        lambda m: f'src={m.group(1)}{logo}{m.group(1)}',
+        html,
+        flags=re.IGNORECASE,
+    )
+    return html
+
 
 def _legacy_php_layout(content: str) -> str:
     settings = get_settings()
     asset_base = (settings.email_asset_base_url or "").rstrip("/")
+    logo = email_logo_url()
     app_name = escape(settings.email_app_name)
     return f"""
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
@@ -85,7 +115,7 @@ def _legacy_php_layout(content: str) -> str:
             <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%">
                 <tr>
                     <td style="text-align: center; padding-bottom: 30px;">
-                        <img src="{asset_base}/assets/img/logo.png" width="200" alt="{app_name}">
+                        <img src="{logo}" width="200" alt="{app_name}">
                     </td>
                 </tr>
                 <tr>
@@ -198,7 +228,7 @@ def _substitute_php_echoes(html: str, user: User) -> str:
             html,
         )
 
-    return html
+    return _fix_email_logo_src(html)
 
 
 def _load_php_thank_you(slug: str) -> str | None:
@@ -226,7 +256,9 @@ def render_registration_thank_you_html(user: User, package: Package | None) -> s
     Loads legacy .php view when EMAIL_TEMPLATE_PHP_ROOT points at application/views/email_template.
     """
     pkg_name = (package.name if package else None) or None
-    slug = resolve_registration_thank_you_slug(user.subscription, pkg_name)
+    # Package.subscription matches PHP thank-you templates (CP 7, Batch 15, etc.).
+    sub_for_slug = (package.subscription if package else None) or user.subscription
+    slug = resolve_registration_thank_you_slug(sub_for_slug, pkg_name)
     raw = _load_php_thank_you(slug)
     if raw is None:
         logger.warning("thank-you template missing: %s.php — using generic body", slug)
@@ -235,8 +267,8 @@ def render_registration_thank_you_html(user: User, package: Package | None) -> s
         raw = _strip_payment_status_branch(raw)
         inner = _substitute_php_echoes(raw, user)
     if inner.lstrip().lower().startswith("<!doctype") or inner.lstrip().lower().startswith("<html"):
-        return inner
-    return f"""<html><body>{inner}</body></html>"""
+        return _fix_email_logo_src(inner)
+    return _legacy_php_layout(inner)
 
 
 def registration_success_template(
@@ -356,8 +388,10 @@ def _plain_text_to_email_html(text: str) -> str:
     return "".join(f"<p>{escape(p).replace(chr(10), '<br/>')}</p>" for p in paragraphs)
 
 
-def _batch_for_subscription(db: Session, subscription: str) -> BatchMaster | None:
+def _batch_for_subscription(db: Session, subscription: str, package: Package | None = None) -> BatchMaster | None:
     sub = (subscription or "").strip()
+    if not sub and package and (package.subscription or "").strip():
+        sub = (package.subscription or "").strip()
     if not sub:
         return None
     return (
@@ -376,12 +410,13 @@ def resolve_batch_template_email(
     default_subject: str,
     default_html: str,
     status_label: str = "",
+    package: Package | None = None,
 ) -> tuple[str, str]:
     """
     Resolve custom batch template and render placeholders.
     Falls back to provided subject/body when custom template is missing or invalid.
     """
-    batch = _batch_for_subscription(db, user.subscription or "")
+    batch = _batch_for_subscription(db, user.subscription or "", package)
     if not batch:
         return default_subject, default_html
 
@@ -417,5 +452,5 @@ def resolve_batch_template_email(
     rendered_html = _render_db_template(raw_html, safe_values)
     if not _looks_like_html(rendered_html):
         rendered_html = _legacy_php_layout(_plain_text_to_email_html(rendered_html))
-    return subject, rendered_html
+    return subject, _fix_email_logo_src(rendered_html)
 

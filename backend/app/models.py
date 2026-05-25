@@ -356,6 +356,7 @@ class BatchMaster(Base):
     video_url = Column(String(255))
     video_file = Column(String(255))
     brochure_file = Column(String(255))
+    package_subscription = Column(String(255))
     status = Column(String(1), default="1")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

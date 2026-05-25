@@ -1,4 +1,6 @@
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+import { useState } from 'react';
+import { Menu } from 'lucide-react';
 import {
   LayoutDashboard,
   Users,
@@ -24,6 +26,7 @@ import {
   Mail,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 
 const navItems = [
   {
@@ -89,6 +92,7 @@ export default function AdminLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { logout, user } = useAuthStore();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const isActive = (to: string, match?: 'exact') => {
     if (match === 'exact') return location.pathname === to;
@@ -102,6 +106,45 @@ export default function AdminLayout() {
         ? 'TECH ADMIN'
         : 'ADMIN'
       : '';
+
+  const renderNav = (onNavigate?: () => void) =>
+    navItems.map((section) => (
+      <div key={section.label}>
+        <div className="font-mono text-[10px] text-chalk/30 tracking-[0.14em] uppercase px-5 mb-2 mt-6">{section.label}</div>
+        {section.items.map((item) => {
+          const Icon = item.icon;
+          const isExternal = /^https?:\/\//i.test(item.to);
+          const active = isActive(item.to, 'match' in item ? item.match : undefined);
+          return isExternal ? (
+            <a
+              key={item.to}
+              href={item.to}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={onNavigate}
+              className="flex items-center gap-3 py-2.5 px-4 mx-3 rounded transition-all duration-200 text-sm font-sans text-chalk/50 hover:text-chalk hover:bg-white/[0.05]"
+            >
+              <Icon size={16} />
+              <span>{item.label}</span>
+            </a>
+          ) : (
+            <Link
+              key={item.to}
+              to={item.to}
+              onClick={onNavigate}
+              className={`flex items-center gap-3 py-2.5 px-4 mx-3 rounded transition-all duration-200 text-sm font-sans ${
+                active
+                  ? 'bg-white/[0.08] text-chalk border-l-2 border-mint'
+                  : 'text-chalk/50 hover:text-chalk hover:bg-white/[0.05]'
+              }`}
+            >
+              <Icon size={16} />
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
+      </div>
+    ));
 
   return (
     <div className="flex min-h-screen">
@@ -119,45 +162,7 @@ export default function AdminLayout() {
           </span>
         </div>
 
-        <nav className="flex-1 mt-4">
-          {navItems.map((section) => (
-            <div key={section.label}>
-              <div className="font-mono text-[10px] text-chalk/30 tracking-[0.14em] uppercase px-5 mb-2 mt-6">{section.label}</div>
-              {section.items.map((item) => {
-                const Icon = item.icon;
-                const isExternal = /^https?:\/\//i.test(item.to);
-                const active = isActive(item.to, 'match' in item ? item.match : undefined);
-                return (
-                  isExternal ? (
-                    <a
-                      key={item.to}
-                      href={item.to}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-3 py-2.5 px-4 mx-3 rounded transition-all duration-200 text-sm font-sans text-chalk/50 hover:text-chalk hover:bg-white/[0.05]"
-                    >
-                      <Icon size={16} />
-                      <span>{item.label}</span>
-                    </a>
-                  ) : (
-                    <Link
-                      key={item.to}
-                      to={item.to}
-                      className={`flex items-center gap-3 py-2.5 px-4 mx-3 rounded transition-all duration-200 text-sm font-sans ${
-                        active
-                          ? 'bg-white/[0.08] text-chalk border-l-2 border-mint'
-                          : 'text-chalk/50 hover:text-chalk hover:bg-white/[0.05]'
-                      }`}
-                    >
-                      <Icon size={16} />
-                      <span>{item.label}</span>
-                    </Link>
-                  )
-                );
-              })}
-            </div>
-          ))}
-        </nav>
+        <nav className="flex-1 mt-4">{renderNav()}</nav>
 
         <div className="border-t border-white/10 pt-5 px-5 pb-5 mt-auto">
           {user?.role === 'admin' && user.email && (
@@ -180,6 +185,29 @@ export default function AdminLayout() {
       </aside>
 
       <div className="flex-1 min-w-0 lg:ml-60 bg-chalk-warm min-h-screen">
+        <header className="lg:hidden sticky top-0 z-40 flex items-center justify-between gap-3 border-b border-border-soft bg-monitor-card px-4 py-3">
+          <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+            <SheetTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 rounded-sm border border-white/10 px-3 py-2 text-chalk font-sans text-sm"
+                aria-label="Open admin menu"
+              >
+                <Menu size={18} />
+                Menu
+              </button>
+            </SheetTrigger>
+            <SheetContent side="left" className="w-[min(100vw,18rem)] bg-monitor-card border-white/10 p-0 overflow-y-auto">
+              <SheetHeader className="px-5 pt-6 pb-2 text-left">
+                <SheetTitle className="text-chalk font-display">Admin</SheetTitle>
+              </SheetHeader>
+              <nav className="pb-8">{renderNav(() => setMobileNavOpen(false))}</nav>
+            </SheetContent>
+          </Sheet>
+          <span className="font-mono text-[10px] bg-amber-glow text-amber border border-amber/30 rounded-sm px-2 py-0.5">
+            {roleLabel || 'ADMIN'}
+          </span>
+        </header>
         <Outlet />
       </div>
     </div>

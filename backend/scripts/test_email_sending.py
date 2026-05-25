@@ -29,7 +29,7 @@ def test_smtp():
             cc=settings.smtp_cc,
             bcc=settings.smtp_bcc
         )
-        print("Success! Email sent through SMTP2GO.")
+        print("Success! Email sent via ZeptoMail SMTP.")
     except Exception as e:
         print(f"FAILED: {e}")
 

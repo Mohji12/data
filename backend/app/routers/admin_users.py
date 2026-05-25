@@ -18,7 +18,7 @@ from app.core.config import get_settings
 from app.db import get_db
 from app.models import Country, CouponMaster, Package, User, UserPackagePayment
 from app.services.mailer import send_html_email
-from app.services.payments import apply_offline_registration_credit, sync_registration_payment_from_razorpay
+from app.services.payments import apply_offline_registration_credit, sync_registration_payment_from_razorpay, try_send_registration_thank_you_email, _package_for_thank_you_email
 from app.services.s3_storage import presigned_get_url, resolve_admin_document_url, s3_uploads_enabled
 from app.services.email_templates import (
     EMAIL_TEMPLATE_TYPE_DOCUMENT_DENIED,
@@ -281,6 +281,24 @@ def sync_razorpay_payment(user_id: int, db: Session = Depends(get_db)) -> dict:
         "message": result.message,
         "user_id": result.user_id,
     }
+
+
+@router.post("/{user_id}/resend-thank-you-email")
+def resend_thank_you_email(user_id: int, db: Session = Depends(get_db)) -> dict:
+    """Resend registration thank-you email (e.g. after fixing SMTP_FROM)."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if (user.payment_status or "").strip().lower() != "credit":
+        raise HTTPException(status_code=400, detail="User payment is not Credit")
+    pkg = _package_for_thank_you_email(db, user)
+    sent = try_send_registration_thank_you_email(db, user, pkg, force=True)
+    if not sent:
+        raise HTTPException(
+            status_code=502,
+            detail="Email could not be sent. Check API logs and SMTP_FROM (must be verified in ZeptoMail Mail Agents).",
+        )
+    return {"status": "ok", "email_sent": True, "email": user.email}
 
 
 @router.post("/{user_id}/refund")

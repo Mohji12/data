@@ -7,7 +7,7 @@ from datetime import date, datetime
 from typing import List, Optional, Tuple
 
 from fastapi import HTTPException
-from sqlalchemy import Date, and_, cast, inspect, or_
+from sqlalchemy import Date, and_, cast, func, inspect, or_
 from sqlalchemy.orm import Session, load_only
 
 from app.models import (
@@ -57,13 +57,28 @@ BATCH_DEFINITIONS: dict[str, BatchDefinition] = {
 REGISTRATION_SLUG_ALIASES: dict[str, str] = {
     "comprehensive-1": "comprehensive-course-1",
     "comprehensive-2": "comprehensive-course-2",
+    "ccm-2": "ccm-batch-2",
+    "ccm-practical-series": "ccm-batch-2",
+    "ccm-practical-series-batch-3": "practical-series-batch-3",
+    "ccm-3": "practical-series-batch-3",
+    "ccm-batch-3": "practical-series-batch-3",
+}
+
+# When `batch_master` label differs from `package.subscription` (PHP legacy names).
+# Prefer `batch_master.package_subscription` in the database; these are fallbacks only.
+BATCH_SLUG_TO_PACKAGE_SUBSCRIPTION: dict[str, str] = {
+    "comprehensive-course-1": "CP 7",
+    "comprehensive-1": "CP 7",
+    "comprehensive-course-2": "CP 8",
+    "comprehensive-2": "CP 8",
+    "practical-series-batch-3": "CCM Batch 3",
+    "ccm-practical-series-batch-3": "CCM Batch 3",
+    "ccm-3": "CCM Batch 3",
+    "ccm-batch-3": "CCM Batch 3",
 }
 
 # Public fee/registration URL slug → exact `batch_master.name` (case-insensitive) when DB uses different labels.
-REGISTRATION_FEE_SLUG_TO_BATCH_NAME: dict[str, str] = {
-    "comprehensive-course-1": "CP 7",
-    "comprehensive-course-2": "CP 8",
-}
+REGISTRATION_FEE_SLUG_TO_BATCH_NAME: dict[str, str] = {}
 
 # When `batch_master.name` slugifies differently from the public URL (extra words, punctuation).
 FEE_PAGE_SLUG_NAME_PATTERNS: dict[str, re.Pattern[str]] = {
@@ -80,6 +95,31 @@ FEE_PAGE_SLUG_NAME_PATTERNS: dict[str, re.Pattern[str]] = {
         re.IGNORECASE,
     ),
 }
+
+
+def package_subscription_for_batch(batch: BatchDefinition) -> str:
+    """Package lookup key: DB `package_subscription` when set, else legacy slug map, else display title."""
+    stored = (batch.package_subscription or "").strip()
+    if stored:
+        return stored
+    slug = (batch.slug or "").strip().lower()
+    mapped = BATCH_SLUG_TO_PACKAGE_SUBSCRIPTION.get(slug)
+    if mapped:
+        return mapped.strip()
+    return (batch.title or "").strip()
+
+
+def _row_package_subscription(row: BatchMaster) -> Optional[str]:
+    val = getattr(row, "package_subscription", None)
+    if val is None:
+        return None
+    s = str(val).strip()
+    return s or None
+
+
+def _subscription_name_eq(column, subscription: str):
+    target = (subscription or "").strip().casefold()
+    return func.lower(func.trim(column)) == target
 
 
 def _title_to_slug(name: str) -> str:
@@ -110,6 +150,7 @@ def batch_definition_from_master_row(row: BatchMaster) -> BatchDefinition:
             registration_type=override.registration_type,
             requires_document=override.requires_document,
             coupon_enabled=override.coupon_enabled,
+            package_subscription=_row_package_subscription(row),
         )
     reg_type, req_doc, coupon = _infer_registration_flags(title)
     return BatchDefinition(
@@ -118,6 +159,7 @@ def batch_definition_from_master_row(row: BatchMaster) -> BatchDefinition:
         registration_type=reg_type,
         requires_document=req_doc,
         coupon_enabled=coupon,
+        package_subscription=_row_package_subscription(row),
     )
 
 
@@ -127,20 +169,25 @@ def _batch_has_column(db: Session, column_name: str) -> bool:
     return any((c.get("name") or "").lower() == column_name.lower() for c in cols)
 
 
+def _batch_load_only(db: Session):
+    fields = [
+        BatchMaster.id,
+        BatchMaster.name,
+        BatchMaster.status,
+        BatchMaster.display_order,
+        BatchMaster.registration_fee_structure,
+        BatchMaster.description,
+        BatchMaster.video_url,
+        BatchMaster.video_file,
+        BatchMaster.brochure_file,
+    ]
+    if _batch_has_column(db, "package_subscription"):
+        fields.append(BatchMaster.package_subscription)
+    return load_only(*fields)
+
+
 def _batch_query(db: Session):
-    return db.query(BatchMaster).options(
-        load_only(
-            BatchMaster.id,
-            BatchMaster.name,
-            BatchMaster.status,
-            BatchMaster.display_order,
-            BatchMaster.registration_fee_structure,
-            BatchMaster.description,
-            BatchMaster.video_url,
-            BatchMaster.video_file,
-            BatchMaster.brochure_file,
-        )
-    )
+    return db.query(BatchMaster).options(_batch_load_only(db))
 
 
 def _brochure_option_key(batch_name: str) -> str:
@@ -166,19 +213,25 @@ def _coupon_query(db: Session):
     return db.query(CouponMaster).options(load_only(*cols))
 
 
+def _package_end_open_on_or_after(day: date):
+    """SQL filter: subscription plans, open-ended (null end_date), or end_date on/after day."""
+    return or_(
+        Package.plan_type == "subscription",
+        Package.end_date.is_(None),
+        cast(Package.end_date, Date) >= day,
+    )
+
+
 def _has_registerable_package_today(db: Session, subscription_title: str) -> bool:
     """At least one package row in date window (any delegate category)."""
     today = date.today()
     found = (
         db.query(Package.id)
         .filter(
-            Package.subscription == subscription_title,
+            _subscription_name_eq(Package.subscription, subscription_title),
             Package.status == "1",
             or_(Package.start_date.is_(None), cast(Package.start_date, Date) <= today),
-            or_(
-                (Package.plan_type == "subscription"),
-                and_(Package.end_date.isnot(None), cast(Package.end_date, Date) >= today),
-            ),
+            _package_end_open_on_or_after(today),
         )
         .first()
     )
@@ -198,9 +251,10 @@ def list_batches(db: Session) -> list[BatchDefinition]:
         title = (row.name or "").strip()
         if not title:
             continue
-        if not _has_registerable_package_today(db, title):
+        bd = batch_definition_from_master_row(row)
+        if not _has_registerable_package_today(db, package_subscription_for_batch(bd)):
             continue
-        out.append(batch_definition_from_master_row(row))
+        out.append(bd)
     return out
 
 
@@ -213,14 +267,11 @@ def _count_current_packages_for_delegate(
     return (
         db.query(Package.id)
         .filter(
-            Package.subscription == subscription_title,
+            _subscription_name_eq(Package.subscription, subscription_title),
             Package.status == "1",
             Package.category_name.ilike(f"%{delegate}%"),
             or_(Package.start_date.is_(None), cast(Package.start_date, Date) <= today),
-            or_(
-                (Package.plan_type == "subscription"),
-                and_(Package.end_date.isnot(None), cast(Package.end_date, Date) >= today),
-            ),
+            _package_end_open_on_or_after(today),
         )
         .count()
     )
@@ -252,8 +303,9 @@ def build_registration_catalog(
         name = (row.name or "").strip()
         if not name:
             continue
-        indian_count = _count_current_packages_for_delegate(db, name, "Indian")
-        foreign_count = _count_current_packages_for_delegate(db, name, "Foreign")
+        pkg_sub = package_subscription_for_batch(bd)
+        indian_count = _count_current_packages_for_delegate(db, pkg_sub, "Indian")
+        foreign_count = _count_current_packages_for_delegate(db, pkg_sub, "Foreign")
         has_indian = indian_count > 0
         has_foreign = foreign_count > 0
         active_flag = (row.status or "0") == "1"
@@ -352,7 +404,7 @@ def _get_batch_or_400(db: Session, batch_slug: str) -> BatchDefinition:
             detail=f"Unknown or inactive batch '{batch_slug}'. Active batch slugs: {slugs}",
         )
     _row, bd = found
-    if not _has_registerable_package_today(db, bd.title):
+    if not _has_registerable_package_today(db, package_subscription_for_batch(bd)):
         raise HTTPException(
             status_code=400,
             detail="No active registration package for this batch at this time.",
@@ -401,12 +453,15 @@ def _assert_package_eligible_for_batch(
     """Match Register.php save(): subscription, category_name, date window, status."""
     today = date.today()
     expected_cat = _registration_category_name(db, country_id)
-    if (pkg.subscription or "").strip() != batch.title:
+    pkg_sub = package_subscription_for_batch(batch)
+    pkg_sub_cf = pkg_sub.casefold()
+    batch_title = (batch.title or "").strip().casefold()
+    if (pkg.subscription or "").strip().casefold() != pkg_sub_cf:
         raise HTTPException(
             status_code=400,
             detail="Selected package does not match this batch.",
         )
-    if (pkg.category_name or "").strip() != expected_cat:
+    if (pkg.category_name or "").strip().casefold() != expected_cat.casefold():
         raise HTTPException(
             status_code=400,
             detail="Selected package does not match your country (Indian vs Foreign delegates).",
@@ -429,17 +484,13 @@ def _assert_package_eligible_for_batch(
     # Subscription plans are time-bound by user registration date + duration_months.
     # For one-time plans, package end_date still controls sale-window expiry.
     if (pkg.plan_type or "one_time").strip().lower() != "subscription":
-        if pkg.end_date is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Package has no valid end date in the database.",
-            )
-        end_d = _as_date(pkg.end_date)
-        if end_d < today:
-            raise HTTPException(
-                status_code=400,
-                detail="This package has expired.",
-            )
+        if pkg.end_date is not None:
+            end_d = _as_date(pkg.end_date)
+            if end_d < today:
+                raise HTTPException(
+                    status_code=400,
+                    detail="This package has expired.",
+                )
 
 
 def _package_date_value(val: object) -> date:
@@ -571,17 +622,15 @@ def query_active_packages_for_registration(
     """Same filters as PHP get_payable_amount / save() package lookup (date + subscription + category)."""
     today = date.today()
     category = _registration_category_name(db, country_id)
+    pkg_sub = package_subscription_for_batch(batch)
     q = (
         db.query(Package)
         .filter(
-            Package.subscription == batch.title,
+            _subscription_name_eq(Package.subscription, pkg_sub),
             Package.status == "1",
             Package.category_name == category,
             or_(Package.start_date.is_(None), cast(Package.start_date, Date) <= today),
-            or_(
-                (Package.plan_type == "subscription"),
-                and_(Package.end_date.isnot(None), cast(Package.end_date, Date) >= today),
-            ),
+            _package_end_open_on_or_after(today),
         )
         .order_by(Package.id.asc())
     )
@@ -929,7 +978,7 @@ def _query_packages_for_fee_table(db: Session, subscription: str, *, indian: boo
     return (
         db.query(Package)
         .filter(
-            Package.subscription == subscription.strip(),
+            _subscription_name_eq(Package.subscription, subscription.strip()),
             Package.status == "1",
             Package.category_name.ilike(f"%{needle}%"),
         )
@@ -1002,7 +1051,7 @@ def get_batch_master_row_by_slug(db: Session, batch_slug: str) -> Tuple[BatchMas
 def build_fee_structure_response(db: Session, batch_slug: str) -> FeeStructureResponse:
     """Build fee table from all active `package` rows (any date window)."""
     row, bd = get_batch_master_row_by_slug(db, batch_slug)
-    sub = (bd.title or "").strip()
+    sub = package_subscription_for_batch(bd)
     usd_rate = _get_usd_rate(db)
     ind_pkgs = _query_packages_for_fee_table(db, sub, indian=True)
     for_pkgs = _query_packages_for_fee_table(db, sub, indian=False)

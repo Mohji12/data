@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import Date, and_, cast, or_
+from sqlalchemy import Date, and_, cast, func, or_
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -28,6 +28,7 @@ from app.schemas import (
     ExtensionInitResponse,
 )
 from app.services.payments import (
+    confirm_registration_after_payment,
     create_payment_order,
     finalize_payment,
     init_extension_payment,
@@ -37,6 +38,8 @@ from app.services.payments import (
 from app.services.registration import (
     build_registration_catalog,
     _to_display_usd,
+    _package_end_open_on_or_after,
+    package_subscription_for_batch,
     build_fee_structure_response,
     check_old_student_discount,
     get_payable_amount,
@@ -112,18 +115,16 @@ def registration_packages(
     # If user clicked "Apply for this plan", force-include that specific valid package
     # so Step 3 never collapses to a different overlapping tier.
     if selected_package_id and not any(p.id == selected_package_id for p in pkgs):
+        pkg_sub = package_subscription_for_batch(batch)
         picked = (
             db.query(Package)
             .filter(
                 Package.id == selected_package_id,
-                Package.subscription == batch.title,
+                func.lower(func.trim(Package.subscription)) == pkg_sub.casefold(),
                 Package.status == "1",
                 Package.category_name == expected_category,
                 or_(Package.start_date.is_(None), cast(Package.start_date, Date) <= date.today()),
-                or_(
-                    (Package.plan_type == "subscription"),
-                    and_(Package.end_date.isnot(None), cast(Package.end_date, Date) >= date.today()),
-                ),
+                _package_end_open_on_or_after(date.today()),
             )
             .first()
         )
@@ -229,6 +230,15 @@ def payment_callback(
         raw_payload=payload.raw_payload,
         source="callback",
     )
+
+
+@router.post("/{registration_id}/confirm")
+def registration_confirm(
+    registration_id: int,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Finalize payment if needed and send registration thank-you email (idempotent)."""
+    return confirm_registration_after_payment(db, registration_id)
 
 
 @router.post("/payment/webhook", response_model=None)

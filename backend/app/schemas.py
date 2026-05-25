@@ -231,6 +231,8 @@ class BatchDefinition(BaseModel):
     registration_type: str
     requires_document: bool = False
     coupon_enabled: bool = False
+    # When set, `package.subscription` is matched by this value instead of `title` (display name).
+    package_subscription: Optional[str] = None
 
 
 class FeeStructureBlock(BaseModel):

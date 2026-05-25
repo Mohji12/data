@@ -15,7 +15,7 @@ from sqlalchemy import inspect
 from sqlalchemy.orm import Session, load_only
 
 from app.core.config import get_settings
-from app.models import CouponMaster, Package, RegistrationPaymentTxn, User, UserPackagePayment, UserSubscription
+from app.models import CouponMaster, Option, Package, RegistrationPaymentTxn, User, UserPackagePayment, UserSubscription
 from app.services.email_templates import (
     EMAIL_TEMPLATE_TYPE_REGISTRATION_THANK_YOU,
     REGISTRATION_THANK_YOU_SUBJECT,
@@ -27,6 +27,52 @@ from app.services.access import get_extension_offer
 from app.services.registration import activate_user_subscription, extend_active_subscription
 
 logger = logging.getLogger(__name__)
+
+THANK_YOU_SENT_OPTION_PREFIX = "thank_you_sent::"
+
+
+def _thank_you_sent_option_key(user_id: int) -> str:
+    return f"{THANK_YOU_SENT_OPTION_PREFIX}{user_id}"
+
+
+def registration_thank_you_was_sent(db: Session, user_id: int) -> bool:
+    row = db.query(Option).filter(Option.option_name == _thank_you_sent_option_key(user_id)).first()
+    return bool(row and (row.option_value or "").strip())
+
+
+def _mark_registration_thank_you_sent(db: Session, user_id: int) -> None:
+    key = _thank_you_sent_option_key(user_id)
+    row = db.query(Option).filter(Option.option_name == key).first()
+    if not row:
+        row = Option(option_name=key, option_value="1")
+    else:
+        row.option_value = "1"
+    db.add(row)
+    db.commit()
+
+
+def _package_for_thank_you_email(db: Session, user: User, txn: RegistrationPaymentTxn | None = None) -> Package | None:
+    pkg_id = (txn.package_id if txn else None) or user.package_id
+    if not pkg_id:
+        return None
+    return db.query(Package).filter(Package.id == pkg_id).first()
+
+
+def try_send_registration_thank_you_email(
+    db: Session,
+    user: User,
+    pkg: Package | None = None,
+    *,
+    force: bool = False,
+) -> bool:
+    """Send thank-you email once per user unless force=True (admin resend)."""
+    if not force and registration_thank_you_was_sent(db, user.id):
+        logger.info("thank-you email already recorded for user_id=%s", user.id)
+        return True
+    if _send_registration_thank_you_email(db, user, pkg):
+        _mark_registration_thank_you_sent(db, user.id)
+        return True
+    return False
 from app.schemas import PaymentFinalizeResponse, PaymentOrderResponse
 
 
@@ -290,7 +336,7 @@ def _txn_by_request_or_order(
     return None
 
 
-def _send_registration_thank_you_email(db: Session, user: User, pkg: Package | None) -> None:
+def _send_registration_thank_you_email(db: Session, user: User, pkg: Package | None) -> bool:
     settings = get_settings()
     if not (settings.smtp_host or "").strip() or not (user.email or "").strip():
         logger.warning(
@@ -299,7 +345,7 @@ def _send_registration_thank_you_email(db: Session, user: User, pkg: Package | N
             user.email,
             user.id,
         )
-        return
+        return False
     try:
         html = render_registration_thank_you_html(user, pkg)
         subject, html = resolve_batch_template_email(
@@ -308,6 +354,7 @@ def _send_registration_thank_you_email(db: Session, user: User, pkg: Package | N
             EMAIL_TEMPLATE_TYPE_REGISTRATION_THANK_YOU,
             default_subject=REGISTRATION_THANK_YOU_SUBJECT,
             default_html=html,
+            package=pkg,
         )
         send_html_email(
             (user.email or "").strip(),
@@ -317,14 +364,25 @@ def _send_registration_thank_you_email(db: Session, user: User, pkg: Package | N
             bcc=settings.smtp_bcc or None,
         )
         logger.info("thank-you email sent to user_id=%s email=%s", user.id, user.email)
+        return True
     except Exception as exc:
-        logger.error(
-            "post-payment thank-you email FAILED for user_id=%s email=%s: %s",
-            user.id,
-            user.email,
-            exc,
-            exc_info=True,
-        )
+        err = str(exc)
+        if "550" in err and "not verified" in err.lower():
+            logger.error(
+                "thank-you email FAILED (SMTP sender not verified). Set SMTP_FROM to an address "
+                "verified in ZeptoMail (Mail Agents) or your SMTP provider, then retry. user_id=%s email=%s",
+                user.id,
+                user.email,
+            )
+        else:
+            logger.error(
+                "post-payment thank-you email FAILED for user_id=%s email=%s: %s",
+                user.id,
+                user.email,
+                exc,
+                exc_info=True,
+            )
+        return False
 
 
 def _apply_registration_payment_success(
@@ -421,7 +479,7 @@ def _apply_registration_payment_success(
     db.add(user)
     db.commit()
     if not is_extension:
-        _send_registration_thank_you_email(db, user, pkg)
+        try_send_registration_thank_you_email(db, user, pkg)
     logger.info(
         "registration payment captured user_id=%s request_id=%s order_id=%s payment_id=%s source=%s",
         user.id,
@@ -441,6 +499,8 @@ def sync_registration_payment_from_razorpay(db: Session, user_id: int) -> Paymen
         raise HTTPException(status_code=404, detail="User not found")
 
     if (user.payment_status or "").strip().lower() == "credit":
+        pkg = _package_for_thank_you_email(db, user)
+        try_send_registration_thank_you_email(db, user, pkg)
         return PaymentFinalizeResponse(
             request_id=(user.payment_request_id or ""),
             status="ok",
@@ -500,6 +560,8 @@ def sync_registration_payment_from_razorpay(db: Session, user_id: int) -> Paymen
             user.payment_id = payment_id
         db.add(user)
         db.commit()
+        pkg = _package_for_thank_you_email(db, user, txn)
+        try_send_registration_thank_you_email(db, user, pkg)
         return PaymentFinalizeResponse(
             request_id=txn.request_id,
             status="ok",
@@ -621,7 +683,49 @@ def apply_offline_registration_credit(
 
     db.add(user)
     db.commit()
-    _send_registration_thank_you_email(db, user, pkg)
+    try_send_registration_thank_you_email(db, user, pkg)
+
+
+def confirm_registration_after_payment(db: Session, registration_id: int) -> dict:
+    """
+    Thank-you page hook: finalize Razorpay payment if needed and (re)send thank-you email.
+    Idempotent — safe to call after /payment/callback.
+    """
+    user = db.query(User).filter(User.id == registration_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Registration not found")
+
+    payment_status = (user.payment_status or "").strip()
+    if payment_status.lower() != "credit":
+        try:
+            sync_registration_payment_from_razorpay(db, user.id)
+            db.refresh(user)
+            payment_status = (user.payment_status or "").strip()
+        except HTTPException:
+            pass
+
+    if payment_status.lower() != "credit":
+        return {
+            "status": "pending",
+            "payment_status": payment_status or "Pending",
+            "email_sent": False,
+            "message": "Payment not completed yet",
+        }
+
+    txn = (
+        db.query(RegistrationPaymentTxn)
+        .filter(RegistrationPaymentTxn.user_id == user.id)
+        .order_by(RegistrationPaymentTxn.id.desc())
+        .first()
+    )
+    pkg = _package_for_thank_you_email(db, user, txn)
+    email_sent = try_send_registration_thank_you_email(db, user, pkg)
+    return {
+        "status": "ok",
+        "payment_status": "Credit",
+        "email_sent": email_sent,
+        "message": "Thank-you email sent" if email_sent else "Thank-you email could not be sent (check SMTP logs)",
+    }
 
 
 def _verify_webhook_signature(body: bytes, signature_header: str) -> bool:
@@ -700,6 +804,9 @@ def finalize_payment(
         raise HTTPException(status_code=404, detail="User not found")
 
     if txn.is_finalized == "1":
+        if (user.payment_status or "").strip().lower() == "credit":
+            pkg = _package_for_thank_you_email(db, user, txn)
+            try_send_registration_thank_you_email(db, user, pkg)
         return PaymentFinalizeResponse(
             request_id=request_id,
             status="ok",

@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.admin_security import get_current_admin, require_admin_type
 from app.core.config import get_settings
@@ -22,10 +22,15 @@ router = APIRouter(prefix="/admin/content", tags=["admin-content"], dependencies
 def _admin_video_image_url(filename: Optional[str]) -> Optional[str]:
     if not filename or not str(filename).strip():
         return None
-    base = get_settings().legacy_upload_base_url.strip().rstrip("/")
-    if base:
-        return f"{base}/upload/video/image/{str(filename).strip()}"
-    return None
+    settings = get_settings()
+    # Thumbnails are served by the API (`/upload/video/image` mount), not the static SPA host.
+    base = (
+        (settings.legacy_upload_base_url or "").strip().rstrip("/")
+        or (settings.api_public_base_url or "").strip().rstrip("/")
+    )
+    if not base:
+        return None
+    return f"{base}/upload/video/image/{str(filename).strip()}"
 
 
 def _remove_stored_video_thumbnail(filename: Optional[str]) -> None:
@@ -168,52 +173,79 @@ def _normalize_csv_field(s: Optional[str]) -> Optional[str]:
     return t if t else None
 
 
+_VIDEO_LIST_COLUMNS = (
+    Video.id,
+    Video.title,
+    Video.description,
+    Video.status,
+    Video.folder,
+    Video.batch,
+    Video.image,
+    Video.video_link,
+    Video.upload_date,
+)
+
+_VIDEO_SORT_COLUMNS = {"id", "title", "upload_date"}
+
+
+def _serialize_video_row(v: Video, folder_map: dict[int, str]) -> dict:
+    upload_date = v.upload_date
+    if upload_date is not None and hasattr(upload_date, "isoformat"):
+        upload_date_str = upload_date.isoformat()
+    else:
+        upload_date_str = str(upload_date) if upload_date else None
+    return {
+        "id": v.id,
+        "title": v.title,
+        "description": v.description,
+        "status": v.status,
+        "folder": v.folder,
+        "folder_names": _folder_names_from_ids(_parse_folder_ids(v.folder), folder_map),
+        "batch": v.batch,
+        "image": v.image,
+        "image_url": _admin_video_image_url(v.image),
+        "video_link": v.video_link,
+        "upload_date": upload_date_str,
+    }
+
+
 @router.get("/videos")
 def list_videos(
     q: Optional[str] = Query(None),
     batch: Optional[str] = Query(None),
     sort_by: Optional[str] = Query(None, description="id, title, upload_date"),
     order: str = Query("desc"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
-) -> list[dict]:
-    query = db.query(Video)
+) -> dict:
+    query = db.query(Video).options(load_only(*_VIDEO_LIST_COLUMNS))
     if q:
         s = f"%{q.strip().lower()}%"
         query = query.filter(func.lower(func.coalesce(Video.title, "")).like(s))
     if batch:
         query = query.filter(func.lower(func.coalesce(Video.batch, "")).like(f"%{batch.strip().lower()}%"))
 
-    # Dynamic sorting
-    if sort_by:
-        col = getattr(Video, sort_by, None)
-        if col:
-            if order.lower() == "asc":
-                query = query.order_by(col.asc())
-            else:
-                query = query.order_by(col.desc())
+    sort_key = (sort_by or "").strip().lower()
+    if sort_key in _VIDEO_SORT_COLUMNS:
+        col = getattr(Video, sort_key)
+        if order.lower() == "asc":
+            query = query.order_by(col.asc(), Video.id.asc())
         else:
-            query = query.order_by(Video.upload_date.desc(), Video.id.desc())
+            query = query.order_by(col.desc(), Video.id.desc())
     else:
         query = query.order_by(Video.upload_date.desc(), Video.id.desc())
 
-    rows = query.all()
+    total = query.count()
+    offset = (page - 1) * page_size
+    rows = query.offset(offset).limit(page_size).all()
     folder_map = _load_folder_name_map(db, [v.folder for v in rows])
-    return [
-        {
-            "id": v.id,
-            "title": v.title,
-            "description": v.description,
-            "status": v.status,
-            "folder": v.folder,
-            "folder_names": _folder_names_from_ids(_parse_folder_ids(v.folder), folder_map),
-            "batch": v.batch,
-            "image": v.image,
-            "image_url": _admin_video_image_url(v.image),
-            "video_link": v.video_link,
-            "upload_date": v.upload_date.isoformat() if v.upload_date else None,
-        }
-        for v in rows
-    ]
+    return {
+        "items": [_serialize_video_row(v, folder_map) for v in rows],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 @router.get("/videos/{video_id}")
