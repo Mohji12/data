@@ -53,7 +53,7 @@ export default function VideoDetail() {
   }, [video?.video_url, id]);
 
   return (
-    <div className="p-6 lg:p-8" onContextMenu={blockRightClick}>
+    <div className="px-3 py-4 sm:p-6 lg:p-8" onContextMenu={blockRightClick}>
       <Link
         to="/dashboard/videos"
         className="flex items-center gap-2 font-mono text-xs text-ink-faint hover:text-mint mb-6"
@@ -71,7 +71,7 @@ export default function VideoDetail() {
       {video && (
         <>
           <div
-            className="bg-monitor-bg rounded-sm aspect-video mb-6 overflow-hidden"
+            className="bg-monitor-bg rounded-sm w-full aspect-video min-h-[220px] sm:min-h-0 mb-4 sm:mb-6 overflow-hidden -mx-3 sm:mx-0 max-w-[100vw] sm:max-w-none"
             onContextMenu={blockRightClick}
           >
             <ProtectedVideoEmbed videoUrl={video.video_url} title={video.title} />

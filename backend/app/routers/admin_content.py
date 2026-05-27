@@ -153,6 +153,162 @@ def delete_folder(folder_id: int, db: Session = Depends(get_db)) -> dict:
     return {"status": "ok"}
 
 
+class CopyFolderVideosPayload(BaseModel):
+    source_folder_id: int
+    target_folder_id: int
+    add_target_batch_access: bool = True
+    dry_run: bool = False
+
+
+class BulkCopyFolderVideosPayload(BaseModel):
+    source_batch: str
+    target_batch: str
+    name_from: str = "B15_"
+    name_to: str = "B16_"
+    add_target_batch_access: bool = True
+    dry_run: bool = False
+
+
+class CloneBatchFoldersPayload(BaseModel):
+    """Create missing target-batch folders from source batch, then link videos."""
+
+    source_batch: str
+    target_batch: str
+    name_from: str = "B15_"
+    name_to: str = "B16_"
+    create_missing_folders: bool = True
+    copy_videos: bool = True
+    add_target_batch_access: bool = True
+    dry_run: bool = False
+
+
+def _validate_clone_batch_payload(payload: CloneBatchFoldersPayload) -> None:
+    if not (payload.source_batch or "").strip() or not (payload.target_batch or "").strip():
+        raise HTTPException(status_code=422, detail="source_batch and target_batch are required.")
+    if payload.source_batch.strip().casefold() == payload.target_batch.strip().casefold():
+        raise HTTPException(
+            status_code=422,
+            detail="Copy from and Copy to batch must be different.",
+        )
+
+
+@router.post(
+    "/folders/copy-videos",
+    dependencies=[Depends(require_admin_type("techadmin"))],
+)
+def copy_folder_videos(payload: CopyFolderVideosPayload, db: Session = Depends(get_db)) -> dict:
+    """Link all videos in source folder to target folder (+ optional batch access from target folder)."""
+    from app.services.folder_video_copy import copy_videos_between_folders
+
+    tgt = db.query(FolderMaster).filter(FolderMaster.id == payload.target_folder_id).first()
+    if not tgt:
+        raise HTTPException(status_code=404, detail="Target folder not found")
+    add_batches = None
+    if payload.add_target_batch_access:
+        add_batches = [p.strip() for p in (tgt.batch or "").split(",") if p.strip()]
+    try:
+        return copy_videos_between_folders(
+            db,
+            source_folder_id=payload.source_folder_id,
+            target_folder_id=payload.target_folder_id,
+            add_batch_names=add_batches,
+            dry_run=payload.dry_run,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post(
+    "/folders/bulk-copy-videos/preview",
+    dependencies=[Depends(require_admin_type("techadmin"))],
+)
+def preview_bulk_copy_folder_videos(
+    payload: BulkCopyFolderVideosPayload,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Preview folder pairs matched by batch + name prefix swap (e.g. B15_ → B16_)."""
+    from app.services.folder_video_copy import preview_bulk_copy_by_batch
+
+    if not (payload.source_batch or "").strip() or not (payload.target_batch or "").strip():
+        raise HTTPException(status_code=422, detail="source_batch and target_batch are required.")
+    return preview_bulk_copy_by_batch(
+        db,
+        source_batch=payload.source_batch.strip(),
+        target_batch=payload.target_batch.strip(),
+        name_from=(payload.name_from or "").strip(),
+        name_to=(payload.name_to or "").strip(),
+    )
+
+
+@router.post(
+    "/folders/bulk-copy-videos",
+    dependencies=[Depends(require_admin_type("techadmin"))],
+)
+def bulk_copy_folder_videos(payload: BulkCopyFolderVideosPayload, db: Session = Depends(get_db)) -> dict:
+    """Copy videos for all matched source→target folder pairs (Batch 15 → Batch 16, etc.)."""
+    from app.services.folder_video_copy import bulk_copy_videos_by_batch
+
+    if not (payload.source_batch or "").strip() or not (payload.target_batch or "").strip():
+        raise HTTPException(status_code=422, detail="source_batch and target_batch are required.")
+    if payload.source_batch.strip().casefold() == payload.target_batch.strip().casefold():
+        raise HTTPException(
+            status_code=422,
+            detail="Copy from and Copy to batch must be different.",
+        )
+    return bulk_copy_videos_by_batch(
+        db,
+        source_batch=payload.source_batch.strip(),
+        target_batch=payload.target_batch.strip(),
+        name_from=(payload.name_from or "").strip(),
+        name_to=(payload.name_to or "").strip(),
+        add_target_batch_access=payload.add_target_batch_access,
+        dry_run=payload.dry_run,
+    )
+
+
+@router.post(
+    "/folders/clone-batch/preview",
+    dependencies=[Depends(require_admin_type("techadmin"))],
+)
+def preview_clone_batch_folders_route(
+    payload: CloneBatchFoldersPayload,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Preview new folders to create + video pairs for Batch 15 → Batch 16 clone."""
+    from app.services.folder_video_copy import preview_clone_batch_folders
+
+    _validate_clone_batch_payload(payload)
+    return preview_clone_batch_folders(
+        db,
+        source_batch=payload.source_batch.strip(),
+        target_batch=payload.target_batch.strip(),
+        name_from=(payload.name_from or "").strip(),
+        name_to=(payload.name_to or "").strip(),
+    )
+
+
+@router.post(
+    "/folders/clone-batch",
+    dependencies=[Depends(require_admin_type("techadmin"))],
+)
+def clone_batch_folders_route(payload: CloneBatchFoldersPayload, db: Session = Depends(get_db)) -> dict:
+    """Create missing Batch 16 folders from Batch 15 names, then copy/link all videos."""
+    from app.services.folder_video_copy import clone_batch_folders_and_videos
+
+    _validate_clone_batch_payload(payload)
+    return clone_batch_folders_and_videos(
+        db,
+        source_batch=payload.source_batch.strip(),
+        target_batch=payload.target_batch.strip(),
+        name_from=(payload.name_from or "").strip(),
+        name_to=(payload.name_to or "").strip(),
+        create_missing_folders=payload.create_missing_folders,
+        copy_videos=payload.copy_videos,
+        add_target_batch_access=payload.add_target_batch_access,
+        dry_run=payload.dry_run,
+    )
+
+
 class VideoPayload(BaseModel):
     """Mirrors PHP admin Videos save/update (batch = comma-separated batch names, folder = comma-separated folder ids)."""
 

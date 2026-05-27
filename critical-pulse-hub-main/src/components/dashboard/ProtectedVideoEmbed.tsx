@@ -25,6 +25,64 @@ type ProtectedVideoEmbedProps = {
   title: string;
 };
 
+function isMobileViewport(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia('(max-width: 768px)').matches;
+}
+
+function getFullscreenElement(): Element | null {
+  const doc = document as Document & {
+    webkitFullscreenElement?: Element | null;
+  };
+  return doc.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
+}
+
+async function requestElementFullscreen(el: HTMLElement): Promise<boolean> {
+  const anyEl = el as HTMLElement & {
+    webkitRequestFullscreen?: () => Promise<void> | void;
+    msRequestFullscreen?: () => Promise<void> | void;
+  };
+  try {
+    if (anyEl.requestFullscreen) {
+      await anyEl.requestFullscreen();
+      return true;
+    }
+    if (anyEl.webkitRequestFullscreen) {
+      await anyEl.webkitRequestFullscreen();
+      return true;
+    }
+    if (anyEl.msRequestFullscreen) {
+      await anyEl.msRequestFullscreen();
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+async function exitDocumentFullscreen(): Promise<void> {
+  const doc = document as Document & {
+    webkitExitFullscreen?: () => Promise<void> | void;
+    msExitFullscreen?: () => Promise<void> | void;
+  };
+  try {
+    if (doc.exitFullscreen) {
+      await doc.exitFullscreen();
+      return;
+    }
+    if (doc.webkitExitFullscreen) {
+      await doc.webkitExitFullscreen();
+      return;
+    }
+    if (doc.msExitFullscreen) {
+      await doc.msExitFullscreen();
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Format seconds as M:SS or H:MM:SS. */
 function formatTime(seconds: number): string {
   if (!seconds || !isFinite(seconds)) return '0:00';
@@ -92,6 +150,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
   const currentSpeedRef = useRef(1);
   const playerReadyRef = useRef(false);
   const lastVolumeRef = useRef(1);
+  const isSeekingRef = useRef(false);
 
   const VOLUME_STEP = 0.1;
 
@@ -111,19 +170,25 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
   const speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
   const [currentSpeed, setCurrentSpeed] = useState<number>(1);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const [viewportExpanded, setViewportExpanded] = useState(false);
 
   const isDirectVideo = isDirectVideoFileUrl(videoUrl);
   const detected = isDirectVideo ? null : detectProvider(videoUrl);
+  const vimeoPlayerId = detected?.provider === 'vimeo' ? `vimeo-player-${detected.id}` : undefined;
   const directVideoSrc = isDirectVideo
     ? resolvePublicUploadUrl(videoUrl) || toEmbeddableVideoUrl(videoUrl)
     : null;
   const embedSrc = detected
     ? detected.provider === 'vimeo'
-      ? buildVimeoPlayerEmbedUrl(detected.id)
+      ? buildVimeoPlayerEmbedUrl(detected.id, vimeoPlayerId)
       : buildYouTubeEmbedUrl(detected.id, window.location.origin)
     : isDirectVideo
       ? null
       : toEmbeddableVideoUrl(videoUrl);
+
+  useEffect(() => {
+    isSeekingRef.current = isSeeking;
+  }, [isSeeking]);
 
   const postVimeo = useCallback((payload: Record<string, unknown>) => {
     iframeRef.current?.contentWindow?.postMessage(
@@ -160,17 +225,55 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
     [detected, isDirectVideo, postVimeo, postYouTube],
   );
 
-  /* ─── Fullscreen ─── */
+  const exitExpandedView = useCallback(async () => {
+    setViewportExpanded(false);
+    document.body.style.overflow = '';
+    if (getFullscreenElement()) {
+      await exitDocumentFullscreen();
+    }
+    if (detected?.provider === 'vimeo') {
+      postVimeo({ method: 'exitFullscreen' });
+    }
+  }, [detected, postVimeo]);
+
+  /* ─── Fullscreen (native API + provider API + mobile CSS fallback) ─── */
 
   const toggleFullscreen = useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
-    } else {
-      el.requestFullscreen().catch(() => {});
+    const container = containerRef.current;
+    const video = videoRef.current;
+
+    if (viewportExpanded || getFullscreenElement()) {
+      void exitExpandedView();
+      return;
     }
-  }, []);
+
+    if (isDirectVideo && video) {
+      const anyVideo = video as HTMLVideoElement & { webkitEnterFullscreen?: () => void };
+      if (anyVideo.webkitEnterFullscreen) {
+        anyVideo.webkitEnterFullscreen();
+        return;
+      }
+    }
+
+    if (detected?.provider === 'vimeo') {
+      postVimeo({ method: 'requestFullscreen' });
+    }
+
+    if (container) {
+      void requestElementFullscreen(container).then((ok) => {
+        if (!ok && isMobileViewport()) {
+          setViewportExpanded(true);
+          document.body.style.overflow = 'hidden';
+        }
+      });
+      return;
+    }
+
+    if (isMobileViewport()) {
+      setViewportExpanded(true);
+      document.body.style.overflow = 'hidden';
+    }
+  }, [detected, exitExpandedView, isDirectVideo, postVimeo, viewportExpanded]);
 
   /* ─── Play / Pause ─── */
 
@@ -360,7 +463,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
         // When Vimeo is ready, subscribe to events
         if (data.event === 'ready' && iframe?.contentWindow) {
           playerReadyRef.current = true;
-          ['play', 'pause', 'timeupdate', 'qualitychange', 'playbackratechange', 'volumechange'].forEach((evt) => {
+          ['play', 'pause', 'timeupdate', 'qualitychange', 'playbackratechange', 'volumechange', 'fullscreenchange'].forEach((evt) => {
             iframe.contentWindow?.postMessage(
               JSON.stringify({ method: 'addEventListener', value: evt }),
               'https://player.vimeo.com',
@@ -369,6 +472,10 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
           // Request duration and qualities
           iframe.contentWindow?.postMessage(
             JSON.stringify({ method: 'getDuration' }),
+            'https://player.vimeo.com',
+          );
+          iframe.contentWindow?.postMessage(
+            JSON.stringify({ method: 'getCurrentTime' }),
             'https://player.vimeo.com',
           );
           iframe.contentWindow?.postMessage(
@@ -386,13 +493,27 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
         if (data.event === 'timeupdate') {
           const td = data.data as Record<string, number> | undefined;
           if (td) {
-            if (!isSeeking) setCurrentTime(td.seconds ?? 0);
-            if (td.duration) setDuration(td.duration);
+            if (!isSeekingRef.current && typeof td.seconds === 'number') {
+              setCurrentTime(td.seconds);
+            }
+            if (typeof td.duration === 'number' && td.duration > 0) {
+              setDuration((prev) => Math.max(prev, td.duration));
+            }
+          }
+        }
+
+        if (data.method === 'getCurrentTime') {
+          const t = data.value as number;
+          if (typeof t === 'number' && !isSeekingRef.current) {
+            setCurrentTime(t);
           }
         }
 
         if (data.method === 'getDuration') {
-          setDuration((data.value as number) || 0);
+          const d = data.value as number;
+          if (typeof d === 'number' && d > 0) {
+            setDuration((prev) => Math.max(prev, d));
+          }
         }
 
         if (data.method === 'getQualities' && Array.isArray(data.value)) {
@@ -418,6 +539,15 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
             setVolume(vd.volume);
             setIsMuted(vd.volume === 0);
             if (vd.volume > 0) lastVolumeRef.current = vd.volume;
+          }
+        }
+
+        if (data.event === 'fullscreenchange') {
+          const fd = data.data as { fullscreen?: boolean } | undefined;
+          setIsFullscreen(!!fd?.fullscreen);
+          if (!fd?.fullscreen) {
+            setViewportExpanded(false);
+            document.body.style.overflow = '';
           }
         }
 
@@ -456,11 +586,11 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
         if (data.event === 'infoDelivery') {
           const info = data.info as Record<string, any> | undefined;
           if (info) {
-            if (typeof info.currentTime === 'number' && !isSeeking) {
+            if (typeof info.currentTime === 'number' && !isSeekingRef.current) {
               setCurrentTime(info.currentTime);
             }
             if (typeof info.duration === 'number' && info.duration > 0) {
-              setDuration(info.duration);
+              setDuration((prev) => Math.max(prev, info.duration));
             }
             if (typeof info.playerState === 'number') {
               setIsPlaying(info.playerState === 1);
@@ -495,13 +625,35 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSeeking]);
+  }, [currentSpeed]);
+
+  /* Poll playback position — timeupdate postMessage can stop after long playback without api=1 */
+  useEffect(() => {
+    if (isDirectVideo || !detected) return;
+
+    const poll = () => {
+      if (!playerReadyRef.current || isSeekingRef.current) return;
+      if (detected.provider === 'vimeo') {
+        postVimeo({ method: 'getCurrentTime' });
+        postVimeo({ method: 'getDuration' });
+      } else if (detected.provider === 'youtube') {
+        postYouTube({ event: 'command', func: 'getCurrentTime', args: [] });
+        postYouTube({ event: 'command', func: 'getDuration', args: [] });
+      }
+    };
+
+    poll();
+    const id = window.setInterval(poll, isPlaying ? 400 : 1500);
+    return () => window.clearInterval(id);
+  }, [detected, isDirectVideo, isPlaying, embedSrc, postVimeo, postYouTube]);
 
   /* ─── YouTube: start listening for player events on iframe load ─── */
 
   useEffect(() => {
     playerReadyRef.current = false;
+    setCurrentTime(0);
+    setDuration(0);
+    setIsPlaying(false);
   }, [embedSrc, directVideoSrc]);
 
   useEffect(() => {
@@ -563,20 +715,33 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      const fsEl = document.fullscreenElement;
+      const fsEl = getFullscreenElement();
       const iframe = iframeRef.current;
       const container = containerRef.current;
-      setIsFullscreen(!!fsEl);
+      const active = !!fsEl || viewportExpanded;
+      setIsFullscreen(active);
 
       if (fsEl && fsEl === iframe && container) {
-        document.exitFullscreen()
-          .then(() => container.requestFullscreen())
-          .catch(() => {});
+        void exitDocumentFullscreen().then(() => requestElementFullscreen(container));
+      }
+      if (!fsEl && !viewportExpanded) {
+        document.body.style.overflow = '';
       }
     };
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.body.style.overflow = '';
+    };
+  }, [viewportExpanded]);
+
+  useEffect(() => {
+    return () => {
+      document.body.style.overflow = '';
+    };
   }, []);
 
   /* ─── Keyboard: ← → seek, Space play/pause, F fullscreen ─── */
@@ -669,10 +834,17 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
 
   const progress = duration ? (currentTime / duration) * 100 : 0;
 
+  const isExpanded = isFullscreen || viewportExpanded;
+
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full min-h-[280px] bg-black aspect-video rounded overflow-hidden select-none group"
+      className={`
+        relative w-full h-full bg-black overflow-hidden select-none group
+        ${isExpanded
+          ? 'fixed inset-0 z-[200] w-[100dvw] h-[100dvh] max-w-none max-h-none rounded-none aspect-auto min-h-0'
+          : 'min-h-[220px] sm:min-h-[280px] aspect-video rounded'}
+      `}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -690,10 +862,16 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
       ) : (
         <iframe
           ref={iframeRef}
+          id={vimeoPlayerId}
           src={embedSrc ?? undefined}
           title={title}
           className="absolute inset-0 h-full w-full border-0"
           allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+          allowFullScreen
+          // @ts-expect-error legacy WebKit attribute for older mobile browsers
+          webkitallowfullscreen="true"
+          // @ts-expect-error legacy Mozilla attribute
+          mozallowfullscreen="true"
         />
       )}
 

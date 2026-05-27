@@ -69,8 +69,9 @@ export function parseVimeoVideoId(rawUrl?: string | null): string | null {
 }
 
 /** Minimal chrome; native controls hidden — custom overlay provides all UI. */
-export function buildVimeoPlayerEmbedUrl(videoId: string): string {
+export function buildVimeoPlayerEmbedUrl(videoId: string, playerId?: string): string {
   const params = new URLSearchParams({
+    api: '1',           // required for postMessage timeupdate / getCurrentTime
     title: '0',
     byline: '0',
     portrait: '0',
@@ -79,9 +80,11 @@ export function buildVimeoPlayerEmbedUrl(videoId: string): string {
     dnt: '1',
     transcript: '0',
     pip: '0',
+    allowfullscreen: '1',
     // speed=1 enables the playback-rate API (required for setPlaybackRate postMessage).
     speed: '1',
   });
+  if (playerId) params.set('player_id', playerId);
   return `https://player.vimeo.com/video/${videoId}?${params.toString()}`;
 }
 
@@ -128,8 +131,8 @@ export function buildYouTubeEmbedUrl(videoId: string, origin: string): string {
     origin,
     rel: '0',
     modestbranding: '1',
-    controls: '1',
-    disablekb: '0',  // keep keyboard shortcuts enabled (Space, arrows, F, M, K)
+    controls: '0',      // custom overlay controls; we poll getCurrentTime via JS API
+    disablekb: '1',     // keyboard handled by overlay
   });
   return `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
 }
