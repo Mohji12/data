@@ -3,7 +3,7 @@ export const LOCAL_DEV_API = 'http://127.0.0.1:8000';
 
 /**
  * API base for fetch(). In dev with VITE_API_USE_PROXY=true, returns '' so requests
- * go to the Vite server (localhost:8080) and are proxied to the local API on :8000.
+ * go to the Vite server (localhost:8080) and are proxied to VITE_API_URL (or :8000).
  */
 export function getApiBaseUrl(): string {
   const useProxy = import.meta.env.VITE_API_USE_PROXY === 'true';
@@ -16,14 +16,19 @@ export function getApiBaseUrl(): string {
   return url.replace(/\/$/, '');
 }
 
+function getProxyTargetForDisplay(): string {
+  const raw = String(import.meta.env.VITE_API_URL ?? '').trim();
+  return raw.replace(/\/$/, '') || LOCAL_DEV_API;
+}
+
 /** For debugging in the browser console. */
 export function getResolvedApiBaseForDisplay(): string {
   const base = getApiBaseUrl();
   if (base) return base;
   if (typeof window !== 'undefined') {
-    return `${window.location.origin} → proxy → ${LOCAL_DEV_API}`;
+    return `${window.location.origin} → proxy → ${getProxyTargetForDisplay()}`;
   }
-  return `(proxy) → ${LOCAL_DEV_API}`;
+  return `(proxy) → ${getProxyTargetForDisplay()}`;
 }
 
 /** Public static files mounted on the API (e.g. `/upload/brochures/...`) — prefix API base when the URL is relative. */

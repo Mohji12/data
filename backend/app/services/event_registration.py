@@ -118,14 +118,12 @@ def _normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
-def _allocate_registration_number(db: Session, event_slug: str) -> str:
+def _allocate_registration_number(db: Session, _event_slug: str) -> str:
+    """Next ICUD2026-NNNNNN. Numbers are globally unique (not per event_slug)."""
     prefix = REG_NUMBER_PREFIX
     last = (
         db.query(EventRegistration)
-        .filter(
-            EventRegistration.event_slug == event_slug,
-            EventRegistration.registration_number.like(f"{prefix}%"),
-        )
+        .filter(EventRegistration.registration_number.like(f"{prefix}%"))
         .order_by(EventRegistration.id.desc())
         .first()
     )
@@ -136,7 +134,7 @@ def _allocate_registration_number(db: Session, event_slug: str) -> str:
         except ValueError:
             seq = (
                 db.query(func.count(EventRegistration.id))
-                .filter(EventRegistration.event_slug == event_slug)
+                .filter(EventRegistration.registration_number.like(f"{prefix}%"))
                 .scalar()
                 or 0
             ) + 1
