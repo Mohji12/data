@@ -35,7 +35,7 @@ class Settings:
         self.password_reset_otp_ttl_minutes: int = max(5, int(os.getenv("PASSWORD_RESET_OTP_TTL_MINUTES", "10")))
         self.password_reset_otp_resend_seconds: int = max(30, int(os.getenv("PASSWORD_RESET_OTP_RESEND_SECONDS", "60")))
         self.event_icu_d_conclave_slug: str = os.getenv(
-            "EVENT_ICU_D_CONCLAVE_SLUG", "icu-d-conclave-2026"
+            "EVENT_ICU_D_CONCLAVE_SLUG", "icu-id-conclave-2026"
         ).strip()
         self.event_icu_d_conclave_fee_inr: float = float(os.getenv("EVENT_ICU_D_CONCLAVE_FEE_INR", "3200"))
         self.event_icu_d_conclave_gst_percent: float = float(

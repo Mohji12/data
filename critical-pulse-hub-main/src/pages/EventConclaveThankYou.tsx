@@ -5,7 +5,9 @@ import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { apiClient } from '@/lib/apiClient';
 
-const EVENT_SLUG = 'icu-d-conclave-2026';
+import { EVENT_DISPLAY_NAME, EVENT_SLUG } from '@/lib/eventConclave';
+
+const API_BASE = `/events/${EVENT_SLUG}`;
 
 export default function EventConclaveThankYou() {
   const [searchParams] = useSearchParams();
@@ -48,7 +50,7 @@ export default function EventConclaveThankYou() {
           </div>
           <h1 className="font-display font-black text-4xl text-slate mb-4">THANK YOU.</h1>
           <p className="font-sans text-lg text-ink-secondary mb-2">
-            Your registration for ICU-D CONCLAVE is confirmed.
+            Your registration for {EVENT_DISPLAY_NAME} is confirmed.
           </p>
           {regNumber && (
             <p className="font-mono text-lg text-slate bg-chalk border border-mint/20 rounded-sm py-3 px-6 my-6 inline-block">

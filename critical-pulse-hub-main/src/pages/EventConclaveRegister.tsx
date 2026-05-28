@@ -5,8 +5,11 @@ import { toast } from 'sonner';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { apiClient } from '@/lib/apiClient';
+import {
+  EVENT_DISPLAY_NAME,
+  EVENT_SLUG,
+} from '@/lib/eventConclave';
 
-const EVENT_SLUG = 'icu-d-conclave-2026';
 const API_BASE = `/events/${EVENT_SLUG}`;
 
 type Category = 'clinician' | 'student';
@@ -101,7 +104,7 @@ export default function EventConclaveRegister() {
           amount: Math.round(order.amount * 100),
           currency: order.currency,
           name: 'Dr. Harish CCM',
-          description: 'ICU-D CONCLAVE Registration',
+          description: `${EVENT_DISPLAY_NAME} Registration`,
           order_id: order.order_id,
           handler: async (response: {
             razorpay_order_id: string;
@@ -188,7 +191,7 @@ export default function EventConclaveRegister() {
         <Navbar />
         <div className="max-w-lg mx-auto px-4 py-24 text-center">
           <h1 className="font-display font-bold text-3xl text-slate mb-4">Registration closed</h1>
-          <p className="font-sans text-ink-muted mb-8">ICU-D CONCLAVE registration is not open at this time.</p>
+          <p className="font-sans text-ink-muted mb-8">{EVENT_DISPLAY_NAME} registration is not open at this time.</p>
           <Link to="/" className="text-mint hover:text-mint-dark font-sans">
             ← Back to home
           </Link>
@@ -214,7 +217,7 @@ export default function EventConclaveRegister() {
         <header className="mb-10 border-b border-border-soft pb-8">
           <p className="font-mono text-[10px] text-mint tracking-[0.2em] uppercase mb-2">Registration form</p>
           <h1 className="font-display font-extrabold text-3xl lg:text-4xl text-slate leading-tight">
-            1st NATIONAL &ldquo;ICU-D CONCLAVE&rdquo;
+            1st NATIONAL &ldquo;ICU-ID CONCLAVE&rdquo;
           </h1>
           <p className="font-sans text-lg text-ink-secondary mt-2">11th and 12th July 2026</p>
         </header>

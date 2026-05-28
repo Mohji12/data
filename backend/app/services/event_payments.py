@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.models import EventPaymentTxn, EventRegistration
 from app.schemas import PaymentOrderResponse
 from app.services.event_registration import (
+    event_registration_slugs,
     icu_d_conclave_slug,
     try_send_event_confirmation_email,
 )
@@ -250,7 +251,7 @@ def sync_event_payment_from_razorpay(db: Session, registration_id: int) -> dict:
         db.query(EventRegistration)
         .filter(
             EventRegistration.id == registration_id,
-            EventRegistration.event_slug == icu_d_conclave_slug(),
+            EventRegistration.event_slug.in_(event_registration_slugs()),
         )
         .first()
     )
@@ -332,7 +333,7 @@ def confirm_event_registration_after_payment(db: Session, registration_id: int) 
         db.query(EventRegistration)
         .filter(
             EventRegistration.id == registration_id,
-            EventRegistration.event_slug == icu_d_conclave_slug(),
+            EventRegistration.event_slug.in_(event_registration_slugs()),
         )
         .first()
     )
@@ -381,7 +382,7 @@ def process_event_razorpay_webhook(
     if not txn:
         return None
     reg = db.query(EventRegistration).filter(EventRegistration.id == txn.event_registration_id).first()
-    if not reg or reg.event_slug != icu_d_conclave_slug():
+    if not reg or reg.event_slug not in event_registration_slugs():
         return None
     return finalize_event_payment(
         db=db,

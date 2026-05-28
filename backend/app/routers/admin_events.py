@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.admin_security import get_current_admin
 from app.db import get_db
 from app.models import EventPaymentTxn, EventRegistration
-from app.services.event_registration import icu_d_conclave_slug
+from app.services.event_registration import event_registration_slugs, icu_d_conclave_slug
 
 router = APIRouter(
     prefix="/admin/events",
@@ -57,7 +57,9 @@ def _serialize_registration(row: EventRegistration) -> dict[str, Any]:
 
 
 def _base_query(db: Session):
-    return db.query(EventRegistration).filter(EventRegistration.event_slug == _EVENT_SLUG)
+    return db.query(EventRegistration).filter(
+        EventRegistration.event_slug.in_(event_registration_slugs())
+    )
 
 
 @router.get("/registrations", response_model=PagedEventRegistrationsResponse)

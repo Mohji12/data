@@ -1,4 +1,4 @@
--- ICU-D CONCLAVE and other event registrations (FastAPI). Run once on admin_CriticalCareClasses.
+-- ICU-ID CONCLAVE and other event registrations (FastAPI). Run once on admin_CriticalCareClasses.
 
 CREATE TABLE IF NOT EXISTS `event_registration` (
   `id` int NOT NULL AUTO_INCREMENT,

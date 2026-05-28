@@ -18,10 +18,11 @@ from app.services.mailer import send_html_email
 
 logger = logging.getLogger(__name__)
 
-EVENT_TITLE = '1st NATIONAL "ICU-D CONCLAVE"'
+EVENT_TITLE = '1st NATIONAL "ICU-ID CONCLAVE"'
 EVENT_DATES = "11th and 12th July 2026"
 EVENT_CONFIRMATION_EMAIL_SUBJECT = 'Welcome to 1st National "ICU-ID Conclave 2026"'
 REG_NUMBER_PREFIX = "ICUD2026-"
+LEGACY_EVENT_SLUG = "icu-d-conclave-2026"
 _EVENT_CONFIRMATION_SENT_PREFIX = "event_confirmation_sent::"
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _VALID_CATEGORIES = {"clinician", "student"}
@@ -32,7 +33,15 @@ _CATEGORY_LABELS = {
 
 
 def icu_d_conclave_slug() -> str:
-    return get_settings().event_icu_d_conclave_slug or "icu-d-conclave-2026"
+    return get_settings().event_icu_d_conclave_slug or "icu-id-conclave-2026"
+
+
+def event_registration_slugs() -> tuple[str, ...]:
+    """Current slug plus legacy icu-d slug so existing rows stay visible."""
+    current = icu_d_conclave_slug()
+    if current == LEGACY_EVENT_SLUG:
+        return (current,)
+    return (current, LEGACY_EVENT_SLUG)
 
 
 def _event_fee_breakdown() -> dict[str, float]:
@@ -511,7 +520,7 @@ def get_event_registration_by_number(
     return (
         db.query(EventRegistration)
         .filter(
-            EventRegistration.event_slug == icu_d_conclave_slug(),
+            EventRegistration.event_slug.in_(event_registration_slugs()),
             EventRegistration.registration_number == registration_number.strip(),
         )
         .first()

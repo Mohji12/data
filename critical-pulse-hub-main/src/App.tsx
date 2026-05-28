@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from '@/components/ui/sonner';
 
@@ -8,6 +8,7 @@ import Home from '@/pages/Home';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
 import QuizExam from '@/pages/dashboard/QuizExam';
+import { EVENT_SLUG, EVENT_SLUG_LEGACY } from '@/lib/eventConclave';
 
 // Lazy loaded pages
 const Faculty = lazy(() => import('@/pages/Faculty'));
@@ -121,8 +122,16 @@ const App = () => {
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/thank-you" element={<ThankYou />} />
-          <Route path="/events/icu-d-conclave-2026/register" element={<EventConclaveRegister />} />
-          <Route path="/events/icu-d-conclave-2026/thank-you" element={<EventConclaveThankYou />} />
+          <Route path={`/events/${EVENT_SLUG}/register`} element={<EventConclaveRegister />} />
+          <Route path={`/events/${EVENT_SLUG}/thank-you`} element={<EventConclaveThankYou />} />
+          <Route
+            path={`/events/${EVENT_SLUG_LEGACY}/register`}
+            element={<Navigate to={`/events/${EVENT_SLUG}/register`} replace />}
+          />
+          <Route
+            path={`/events/${EVENT_SLUG_LEGACY}/thank-you`}
+            element={<Navigate to={`/events/${EVENT_SLUG}/thank-you`} replace />}
+          />
           <Route path="/dashboard" element={<ProtectedRoute><StudentLayout /></ProtectedRoute>}>
             <Route index element={<Dashboard />} />
             <Route path="videos" element={<Videos />} />

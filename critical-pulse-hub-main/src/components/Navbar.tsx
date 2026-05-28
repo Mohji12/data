@@ -7,8 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
 import { filterPublicBatches, getPublicBatchDisplayName, type RegistrationCatalogRow } from '@/lib/publicBatches';
-
-const EVENT_REGISTER_PATH = '/events/icu-d-conclave-2026/register';
+import { EVENT_DISPLAY_NAME, EVENT_REGISTER_PATH } from '@/lib/eventConclave';
 
 const navLinks = [
   { label: 'Home', to: '/' },
@@ -103,7 +102,7 @@ export default function Navbar() {
               to={EVENT_REGISTER_PATH}
               className="h-8 inline-flex items-center rounded-md border border-mint/35 px-3 font-sans text-xs font-semibold text-mint hover:border-mint hover:bg-mint/10 transition-colors whitespace-nowrap"
             >
-              ICU-D Conclave
+              {EVENT_DISPLAY_NAME}
             </Link>
             <Link
               to="/login"

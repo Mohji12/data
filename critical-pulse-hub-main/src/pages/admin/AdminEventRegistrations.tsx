@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiClient } from '@/lib/apiClient';
 import { getApiBaseUrl } from '@/lib/apiBase';
+import { EVENT_DISPLAY_NAME } from '@/lib/eventConclave';
 
 type EventRow = {
   id: number;
@@ -169,7 +170,7 @@ export default function AdminEventRegistrations() {
         <div>
           <h1 className="font-display font-bold text-3xl text-slate">Event registrations</h1>
           <p className="font-mono text-[11px] text-ink-faint mt-1 uppercase tracking-wider">
-            ICU-D CONCLAVE — 11–12 July 2026
+            {EVENT_DISPLAY_NAME} — 11–12 July 2026
           </p>
         </div>
         <button

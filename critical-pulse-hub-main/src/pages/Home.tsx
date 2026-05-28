@@ -13,6 +13,7 @@ import { filterPublicBatches, getPublicBatchDisplayName } from '@/lib/publicBatc
 import { useEffect, useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
+import { EVENT_DISPLAY_NAME, EVENT_REGISTER_PATH } from '@/lib/eventConclave';
 
 /** Filenames in `public/hero/`. Spaces/special chars are URL-encoded for the browser. */
 const HERO_FILES = [
@@ -132,10 +133,10 @@ function HeroSection({
             {/* Buttons */}
             <motion.div variants={fadeUp} className="flex flex-wrap gap-4 mt-12">
               <Link
-                to="/events/icu-d-conclave-2026/register"
+                to={EVENT_REGISTER_PATH}
                 className="magnetic bg-slate text-chalk rounded-sm px-9 py-4 font-sans text-[15px] font-semibold hover:bg-slate-light transition-all duration-300"
               >
-                Register for ICU-D CONCLAVE
+                Register for {EVENT_DISPLAY_NAME}
               </Link>
               <Link to="/courses" className="magnetic border border-border-strong text-ink-secondary rounded-sm px-9 py-4 font-sans text-[15px] hover:border-slate-400 hover:text-ink transition-all duration-300">
                 Explore Courses
