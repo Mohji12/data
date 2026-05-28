@@ -6,7 +6,7 @@ import re
 from sqlalchemy.orm import Session
 
 from app.models import Country, Option, Package, User, UserSubscription
-from app.services.registration import _to_display_usd
+from app.services.registration import _add_months, _to_display_usd
 
 
 def _csv_tokens(value: str | None) -> set[str]:
@@ -40,6 +40,35 @@ def batch_slug(batch_name: str | None) -> str:
         return ""
     slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
     return slug
+
+
+def subscription_batch_keys(batch_name: str | None) -> set[str]:
+    """Match user.subscription to user_subscriptions.batch_slug (hyphen vs space variants)."""
+    raw = (batch_name or "").strip()
+    if not raw:
+        return set()
+    lowered = raw.lower()
+    hyphen = batch_slug(raw)
+    keys = {lowered, hyphen, lowered.replace(" ", "-"), lowered.replace("-", " ")}
+    return {k for k in keys if k}
+
+
+def find_active_user_subscription(db: Session, user: User) -> UserSubscription | None:
+    keys = subscription_batch_keys(user.subscription)
+    q = (
+        db.query(UserSubscription)
+        .filter(
+            UserSubscription.user_id == user.id,
+            UserSubscription.status == "active",
+        )
+        .order_by(UserSubscription.end_at.desc())
+    )
+    if keys:
+        rows = q.all()
+        for row in rows:
+            if (row.batch_slug or "").strip().lower() in keys:
+                return row
+    return q.first()
 
 
 def certificate_option_key(kind: str, batch_name: str | None) -> str:
@@ -91,38 +120,44 @@ def get_extension_batch_settings(db: Session, batch_name: str | None) -> dict[st
 def has_active_subscription(db: Session, user: User, batch_name: str | None = None) -> bool:
     if not user:
         return False
-    sub_name = (batch_name or user.subscription or "").strip().lower()
-    if not sub_name:
-        return False
     now = datetime.utcnow()
-    row = (
-        db.query(UserSubscription.id)
-        .filter(
-            UserSubscription.user_id == user.id,
-            UserSubscription.batch_slug == sub_name,
-            UserSubscription.status == "active",
-            UserSubscription.start_at <= now,
-            UserSubscription.end_at >= now,
+    if batch_name:
+        keys = subscription_batch_keys(batch_name)
+        row = (
+            db.query(UserSubscription)
+            .filter(
+                UserSubscription.user_id == user.id,
+                UserSubscription.status == "active",
+                UserSubscription.start_at <= now,
+                UserSubscription.end_at >= now,
+            )
+            .order_by(UserSubscription.end_at.desc())
+            .all()
         )
-        .first()
-    )
-    return row is not None
+        for sub in row:
+            if (sub.batch_slug or "").strip().lower() in keys:
+                return True
+        return False
+    active = find_active_user_subscription(db, user)
+    if not active:
+        return False
+    return active.start_at <= now <= active.end_at
 
 
 def ensure_subscription_entitlement(db: Session, user: User, batch_name: str | None = None) -> tuple[bool, str | None]:
     # Backward compatibility: only enforce when user has subscription rows for this batch.
-    sub_name = (batch_name or user.subscription or "").strip().lower()
+    sub_name = (batch_name or user.subscription or "").strip()
     if not sub_name:
         return False, "No subscription assigned."
-    has_any = (
-        db.query(UserSubscription.id)
-        .filter(
-            UserSubscription.user_id == user.id,
-            UserSubscription.batch_slug == sub_name,
-        )
-        .first()
+    keys = subscription_batch_keys(sub_name)
+    rows = (
+        db.query(UserSubscription.batch_slug)
+        .filter(UserSubscription.user_id == user.id)
+        .all()
     )
-    if not has_any:
+    if not rows:
+        return True, None
+    if keys and not any((slug or "").strip().lower() in keys for (slug,) in rows):
         return True, None
     if not has_active_subscription(db, user, sub_name):
         return False, "Your subscription plan has expired."
@@ -167,21 +202,64 @@ def can_access_mock_test(db: Session, user: User) -> tuple[bool, str | None]:
     return True, None
 
 
+def get_subscription_period_for_profile(db: Session, user: User) -> dict | None:
+    """Subscription window for profile UI; None when plan is not time-bound."""
+    pkg = db.query(Package).filter(Package.id == user.package_id).first() if user.package_id else None
+    plan_type = (pkg.plan_type or "one_time").strip().lower() if pkg else "one_time"
+    if plan_type != "subscription":
+        return None
+
+    now = datetime.utcnow()
+    active = find_active_user_subscription(db, user)
+    if not active:
+        expired = (
+            db.query(UserSubscription)
+            .filter(UserSubscription.user_id == user.id)
+            .order_by(UserSubscription.end_at.desc())
+            .first()
+        )
+        if not expired:
+            return {
+                "plan_type": "subscription",
+                "status": "pending",
+                "start_at": None,
+                "end_at": None,
+                "duration_months": int(pkg.duration_months or 0) if pkg and pkg.duration_months else None,
+                "days_remaining": None,
+                "extension_months": None,
+                "end_at_if_extended": None,
+            }
+        active = expired
+        status = "expired"
+    else:
+        status = "active" if active.start_at <= now <= active.end_at else "expired"
+
+    days_remaining = (active.end_at.date() - now.date()).days if active.end_at else None
+    duration = int(active.duration_months or 0) or (int(pkg.duration_months or 0) if pkg else 0) or None
+
+    offer = get_extension_offer(db, user)
+    ext_months = int(offer.get("extension_months") or 0) if offer.get("enabled") else None
+    end_if_extended = None
+    if ext_months and active.end_at:
+        end_if_extended = _add_months(active.end_at, ext_months)
+
+    return {
+        "plan_type": "subscription",
+        "status": status,
+        "start_at": active.start_at,
+        "end_at": active.end_at,
+        "duration_months": duration,
+        "days_remaining": days_remaining,
+        "extension_months": ext_months,
+        "end_at_if_extended": end_if_extended,
+    }
+
+
 def get_extension_offer(db: Session, user: User) -> dict:
     now = datetime.utcnow()
-    sub_name = (user.subscription or "").strip().lower()
-    if not sub_name:
+    if not (user.subscription or "").strip():
         return {"enabled": False, "reason": "No subscription assigned.", "extension_months": 2}
-    active_sub = (
-        db.query(UserSubscription)
-        .filter(
-            UserSubscription.user_id == user.id,
-            UserSubscription.batch_slug == sub_name,
-            UserSubscription.status == "active",
-        )
-        .order_by(UserSubscription.end_at.desc())
-        .first()
-    )
+    active_sub = find_active_user_subscription(db, user)
     if not active_sub:
         return {"enabled": False, "reason": "No active subscription found.", "extension_months": 2}
 

@@ -83,8 +83,10 @@ export default function AdminUserDetail() {
         method: 'POST',
         body: JSON.stringify({ document_file_status }),
       }),
-    onSuccess: () => {
-      toast.success('Document status saved (email sent if configured)');
+    onSuccess: (res: { message?: string; smtp_configured?: boolean; email_queued?: boolean }) => {
+      const msg = res?.message || 'Document status saved';
+      if (res?.smtp_configured === false) toast.warning(msg);
+      else toast.success(msg);
       invalidate();
     },
     onError: (e: Error) => toast.error(e.message),

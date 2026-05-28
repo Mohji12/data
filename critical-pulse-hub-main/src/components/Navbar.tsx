@@ -8,6 +8,8 @@ import { apiClient } from '@/lib/apiClient';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
 import { filterPublicBatches, getPublicBatchDisplayName, type RegistrationCatalogRow } from '@/lib/publicBatches';
 
+const EVENT_REGISTER_PATH = '/events/icu-d-conclave-2026/register';
+
 const navLinks = [
   { label: 'Home', to: '/' },
   { label: 'Faculty', to: '/faculty' },
@@ -97,6 +99,12 @@ export default function Navbar() {
                 </option>
               ))}
             </select>
+            <Link
+              to={EVENT_REGISTER_PATH}
+              className="h-8 inline-flex items-center rounded-md border border-mint/35 px-3 font-sans text-xs font-semibold text-mint hover:border-mint hover:bg-mint/10 transition-colors whitespace-nowrap"
+            >
+              ICU-D Conclave
+            </Link>
             <Link
               to="/login"
               className="h-8 inline-flex items-center rounded-md border border-white/25 px-3 font-sans text-xs font-semibold text-white/85 hover:border-mint hover:text-mint transition-colors"

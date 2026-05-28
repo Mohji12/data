@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models import BatchMaster, EmailTemplateMaster, Package, User
-from app.routers.auth import my_simple_crypt
+from app.services.password_crypto import my_simple_crypt
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,8 @@ _SUBSCRIPTION_TO_SLUG: dict[str, str] = {
     "Batch EDIC 9": "batch_edic_9/thank_you",
     "CCM Batch 2": "ccm_batch_2/thank_you",
     "Batch 15": "batch_15/thank_you",
+    "BATCH 16-MCCM": "batch_15/thank_you",
+    "Batch 16": "batch_15/thank_you",
     "CP 9": "cp_8/thank_you",
     "CP 10": "cp_8/thank_you",
     "Batch EDIC 10": "batch_edic_9/thank_you",
@@ -171,9 +173,31 @@ def _decrypt_password_for_email(user: User) -> str:
         return ""
 
 
+def stored_password_for_email(user: User) -> str:
+    """users.password column value (legacy encrypted ciphertext) for login emails."""
+    return (user.password or "").strip()
+
+
 def plaintext_password_for_password_mail(user: User) -> str:
-    """Legacy my_simple_crypt password for admin “send login mail” (PHP send_user_password_mail)."""
+    """Decrypted password — admin UI only when ADMIN_EXPOSE_PLAINTEXT_PASSWORD is enabled."""
     return _decrypt_password_for_email(user)
+
+
+_PASSWORD_DECRYPT_PHP = re.compile(
+    r"<\?=\s*my_simple_crypt\s*\(\s*\$user(?:_data)?->password\s*,\s*['\"]decrypt['\"]\s*\)\s*;?\s*\?>",
+    re.IGNORECASE,
+)
+_PASSWORD_FIELD_PHP = re.compile(r"<\?=\s*\$user(?:_data)?->password\s*\?>", re.IGNORECASE)
+_PASSWORD_PHP_ORPHAN = re.compile(r"password\s*,\s*['\"]decrypt['\"]\s*\)\s*\?>", re.IGNORECASE)
+
+
+def _substitute_password_in_template(html: str, user: User) -> str:
+    """Replace PHP password echoes with the stored encrypted password (not decrypted plaintext)."""
+    pwd_esc = escape(stored_password_for_email(user))
+    html = _PASSWORD_DECRYPT_PHP.sub(pwd_esc, html)
+    html = _PASSWORD_FIELD_PHP.sub(pwd_esc, html)
+    html = _PASSWORD_PHP_ORPHAN.sub(pwd_esc, html)
+    return html
 
 
 def _strip_payment_status_branch(html: str) -> str:
@@ -199,8 +223,6 @@ def _substitute_php_echoes(html: str, user: User) -> str:
     asset_base = (settings.email_asset_base_url or "").rstrip("/")
     full_name = escape(f"{(user.title or '').strip()} {(user.name or '').strip()}".strip() or "Learner")
     email_esc = escape((user.email or "").strip())
-    pwd_plain = _decrypt_password_for_email(user)
-    pwd_esc = escape(pwd_plain)
     subscription_esc = escape((user.subscription or "").strip())
 
     # Core site variables
@@ -221,13 +243,8 @@ def _substitute_php_echoes(html: str, user: User) -> str:
             full_name,
             html,
         )
-        # Password decryption variants
-        html = re.sub(
-            rf"<\?=\s*my_simple_crypt\s*\(\s*\{re.escape(pfx)}->password\s*,\s*'decrypt'\s*\)\s*;?\s*\?>",
-            pwd_esc,
-            html,
-        )
 
+    html = _substitute_password_in_template(html, user)
     return _fix_email_logo_src(html)
 
 
@@ -308,25 +325,32 @@ def paynow_template(name: str, subscription: str) -> str:
 PASSWORD_MAIL_SUBJECT = "Login Details - harishcriticalcareclasses.com"
 
 
-def password_template(name: str, email: str, password: str) -> str:
-    # Try the most likely PHP view names first
+def password_template_for_user(user: User) -> str:
+    """Login-details email — password line shows users.password (encrypted), matching legacy PHP storage."""
     for slug in ["send_user_password", "send_password"]:
         raw = _load_php_thank_you(slug)
         if raw:
-            u = User(name=name, email=email, password=password)
-            return _substitute_php_echoes(raw, u)
+            return _substitute_php_echoes(raw, user)
 
+    name = escape(f"{(user.title or '').strip()} {(user.name or '').strip()}".strip() or "Learner")
+    email_esc = escape((user.email or "").strip())
+    pwd_esc = escape(stored_password_for_email(user))
     return _legacy_php_layout(f"""
       <h2 style="color: #1f6798;">Your Login Details</h2>
-      <p>Dear {escape(name)},</p>
+      <p>Dear {name},</p>
       <p>Your account has been activated. You can now login to access your classes.</p>
-      <p>Email: <strong>{escape(email)}</strong></p>
-      <p>Password: <strong>{escape(password)}</strong></p>
-      <p>Please login and change your password after your first login.</p>
+      <p>Email: <strong>{email_esc}</strong></p>
+      <p>Password: <strong>{pwd_esc}</strong></p>
       <p style="margin-top: 20px;">
         <a href="{get_settings().email_asset_base_url}/login" style="display: inline-block; padding: 10px 20px; background-color: #1f6798; color: #ffffff; text-decoration: none; border-radius: 4px; font-weight: bold;">Login Now</a>
       </p>
     """)
+
+
+def password_template(name: str, email: str, password: str) -> str:
+    """Backward-compatible wrapper; prefer password_template_for_user with a real User row."""
+    u = User(name=name, email=email, password=password)
+    return password_template_for_user(u)
 
 
 def custom_template(subject: str, body_html: str) -> str:
@@ -453,4 +477,53 @@ def resolve_batch_template_email(
     if not _looks_like_html(rendered_html):
         rendered_html = _legacy_php_layout(_plain_text_to_email_html(rendered_html))
     return subject, _fix_email_logo_src(rendered_html)
+
+
+def password_reset_otp_template(name: str, otp: str, ttl_minutes: int) -> str:
+    safe_name = escape((name or "Learner").strip() or "Learner")
+    safe_otp = escape(otp.strip())
+    ttl = max(1, int(ttl_minutes))
+    content = f"""
+        <p style="font-family: 'Quicksand', sans-serif; font-size: 15px;">Hello {safe_name},</p>
+        <p style="font-family: 'Quicksand', sans-serif; font-size: 15px;">
+            Use this verification code to reset your Harish Critical Care Classes password.
+            It expires in <strong>{ttl} minutes</strong>.
+        </p>
+        <p style="text-align: center; margin: 32px 0;">
+            <span style="display: inline-block; font-size: 28px; font-weight: 700; letter-spacing: 0.35em;
+                color: #1f6798; font-family: 'Quicksand', monospace; padding: 16px 28px;
+                background: #f0f7fc; border-radius: 6px; border: 1px solid #cfe4f3;">
+                {safe_otp}
+            </span>
+        </p>
+        <p style="font-family: 'Quicksand', sans-serif; font-size: 14px; color: #64748b;">
+            If you did not request this, you can ignore this email. Your password will not change
+            unless you enter this code on the forgot-password page.
+        </p>
+    """
+    return _legacy_php_layout(content)
+
+
+def event_registration_confirmation_template(*, registration_number: str) -> str:
+    safe_reg = escape((registration_number or "").strip())
+    content = f"""
+        <p style="font-family: 'Quicksand', sans-serif; font-size: 15px;">Dear Delegate,</p>
+        <p style="font-family: 'Quicksand', sans-serif; font-size: 15px;">
+            Thank you for registering for the 1st National ICU-ID Conclave 2026.
+        </p>
+        <p style="font-family: 'Quicksand', sans-serif; font-size: 15px;">
+            We are happy to welcome you to the conference and look forward to your participation in this
+            academic event focused on Intensive Care Medicine and Infectious Diseases.
+        </p>
+        <p style="font-family: 'Quicksand', sans-serif; font-size: 15px; margin: 24px 0;">
+            Your registration number — <strong style="font-size: 18px; color: #1f6798;">{safe_reg}</strong>
+        </p>
+        <p style="font-family: 'Quicksand', sans-serif; font-size: 15px; margin-top: 28px;">
+            Warm regards,<br/><br/>
+            <strong>Dr. Harish Mallapura Maheshwarappa</strong><br/>
+            Organizing Chairman<br/>
+            ICU-ID Conclave 2026
+        </p>
+    """
+    return _legacy_php_layout(content)
 

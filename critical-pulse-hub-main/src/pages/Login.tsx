@@ -1,6 +1,10 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
+import {
+  PASSWORD_EXACT_LENGTH,
+  PasswordEightHint,
+} from '@/components/PasswordEightHint';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -87,9 +91,11 @@ export default function Login() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full bg-chalk border border-border-soft rounded-sm py-3.5 px-4 font-sans text-[15px] text-ink focus:border-mint/50 focus:ring-1 focus:ring-mint/15 outline-none transition-all"
-                placeholder="••••••••"
+                placeholder="8 characters"
+                maxLength={PASSWORD_EXACT_LENGTH}
                 required
               />
+              {password.length > 0 && <PasswordEightHint value={password} />}
               <Link to="/forgot-password" className="font-sans text-[13px] text-mint text-right mt-2 block hover:text-mint-dark">
                 Forgot password?
               </Link>

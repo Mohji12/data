@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db import engine, get_db
-from app.models import EmailTemplateMaster, RegistrationPaymentTxn
+from app.models import EmailTemplateMaster, EventPaymentTxn, EventRegistration, RegistrationPaymentTxn
 from app.routers.dashboard import router as dashboard_router
 from app.routers.exams import router as exams_router
 from app.routers.auth import router as auth_router
@@ -27,13 +27,19 @@ from app.routers.admin_misc import router as admin_misc_router
 from app.routers.admin_auditorium import router as admin_auditorium_router
 from app.routers.admin_whatsapp import router as admin_whatsapp_router
 from app.routers.certificate import router as certificate_router
+from app.routers.events import router as events_router
+from app.routers.admin_events import router as admin_events_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if get_settings().auto_create_registration_txn_table:
+    settings = get_settings()
+    if settings.auto_create_registration_txn_table:
         RegistrationPaymentTxn.__table__.create(bind=engine, checkfirst=True)
         EmailTemplateMaster.__table__.create(bind=engine, checkfirst=True)
+    if settings.auto_create_event_tables:
+        EventRegistration.__table__.create(bind=engine, checkfirst=True)
+        EventPaymentTxn.__table__.create(bind=engine, checkfirst=True)
     yield
 
 
@@ -63,6 +69,8 @@ app.include_router(admin_misc_router)
 app.include_router(admin_auditorium_router)
 app.include_router(admin_whatsapp_router)
 app.include_router(certificate_router)
+app.include_router(events_router)
+app.include_router(admin_events_router)
 
 # Same URL shape as PHP: files saved under uploads/registration (see uploads.save_registration_document).
 registration_uploads = Path(__file__).resolve().parent.parent / "uploads" / "registration"

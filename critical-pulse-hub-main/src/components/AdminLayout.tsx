@@ -12,6 +12,7 @@ import {
   MessageCircle,
   BarChart3,
   Ticket,
+  CalendarDays,
   Settings,
   Activity,
   LogOut,
@@ -54,6 +55,7 @@ const navItems = [
       { label: 'Packages', to: '/admin/packages', icon: Package },
       { label: 'Extensions', to: '/admin/extensions', icon: Layers },
       { label: 'Coupons', to: '/admin/coupons', icon: Ticket },
+      { label: 'Event registrations', to: '/admin/events', icon: CalendarDays },
     ],
   },
   {

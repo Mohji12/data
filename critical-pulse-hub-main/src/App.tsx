@@ -23,6 +23,8 @@ const ForgotPassword = lazy(() => import('@/pages/ForgotPassword'));
 const ResetPassword = lazy(() => import('@/pages/ResetPassword'));
 const ThankYou = lazy(() => import('@/pages/ThankYou'));
 const RegistrationFeePage = lazy(() => import('@/pages/RegistrationFeePage'));
+const EventConclaveRegister = lazy(() => import('@/pages/EventConclaveRegister'));
+const EventConclaveThankYou = lazy(() => import('@/pages/EventConclaveThankYou'));
 
 // Layouts & Protected Routes
 import StudentLayout from '@/components/StudentLayout';
@@ -62,6 +64,7 @@ const AdminAuditorium = lazy(() => import('@/pages/admin/AdminAuditorium'));
 const AdminVideoQuestions = lazy(() => import('@/pages/admin/AdminVideoQuestions'));
 const AdminWhatsApp = lazy(() => import('./pages/admin/AdminWhatsApp.tsx'));
 const AdminExtensions = lazy(() => import('@/pages/admin/AdminExtensions'));
+const AdminEventRegistrations = lazy(() => import('@/pages/admin/AdminEventRegistrations'));
 
 import { useAuthStore } from '@/store/authStore';
 import ContentProtection from '@/components/ContentProtection';
@@ -118,6 +121,8 @@ const App = () => {
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/thank-you" element={<ThankYou />} />
+          <Route path="/events/icu-d-conclave-2026/register" element={<EventConclaveRegister />} />
+          <Route path="/events/icu-d-conclave-2026/thank-you" element={<EventConclaveThankYou />} />
           <Route path="/dashboard" element={<ProtectedRoute><StudentLayout /></ProtectedRoute>}>
             <Route index element={<Dashboard />} />
             <Route path="videos" element={<Videos />} />
@@ -136,6 +141,7 @@ const App = () => {
             <Route path="payments" element={<AdminPayments />} />
             <Route path="packages" element={<AdminPackages />} />
             <Route path="extensions" element={<AdminExtensions />} />
+            <Route path="events" element={<AdminEventRegistrations />} />
             <Route path="content/videos" element={<AdminVideos />} />
             <Route path="content/folders" element={<AdminFolders />} />
             <Route path="content/batches" element={<AdminBatches />} />

@@ -10,6 +10,7 @@ from app.schemas import (
     DashboardProfileUpdateRequest,
     DashboardSummary,
     FeatureAccess,
+    SubscriptionPeriodInfo,
 )
 from app.security import get_current_user
 from app.services.access import (
@@ -20,10 +21,36 @@ from app.services.access import (
     get_extension_offer,
     get_certificate_batch_settings,
     get_option_value,
+    get_subscription_period_for_profile,
     subscription_allowed,
 )
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+
+def _build_dashboard_profile(db: Session, user: User) -> DashboardProfile:
+    period_raw = get_subscription_period_for_profile(db, user)
+    period = SubscriptionPeriodInfo(**period_raw) if period_raw else None
+    return DashboardProfile(
+        id=user.id,
+        registration_type=user.registration_type,
+        subscription=user.subscription,
+        title=user.title,
+        name=user.name,
+        email=user.email,
+        contact_number=user.contact_number,
+        hospital=user.hospital,
+        qualification=user.qualification,
+        speciality=user.speciality,
+        country_id=user.country_id,
+        state=user.state,
+        city=user.city,
+        pin_code=user.pin_code,
+        currency_name=user.currency_name,
+        payment_status=user.payment_status,
+        approve=user.approve,
+        subscription_period=period,
+    )
 
 
 @router.get("/summary", response_model=DashboardSummary)
@@ -73,26 +100,17 @@ def dashboard_summary(
 @router.get("/profile", response_model=DashboardProfile)
 def dashboard_profile(
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> DashboardProfile:
-    return DashboardProfile(
-        id=current_user.id,
-        registration_type=current_user.registration_type,
-        subscription=current_user.subscription,
-        title=current_user.title,
-        name=current_user.name,
-        email=current_user.email,
-        contact_number=current_user.contact_number,
-        hospital=current_user.hospital,
-        qualification=current_user.qualification,
-        speciality=current_user.speciality,
-        country_id=current_user.country_id,
-        state=current_user.state,
-        city=current_user.city,
-        pin_code=current_user.pin_code,
-        currency_name=current_user.currency_name,
-        payment_status=current_user.payment_status,
-        approve=current_user.approve,
-    )
+    return _build_dashboard_profile(db, current_user)
+
+
+@router.get("/extension-offer")
+def dashboard_extension_offer(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    return get_extension_offer(db, current_user)
 
 
 @router.put("/profile", response_model=DashboardProfile)
@@ -122,25 +140,7 @@ def update_dashboard_profile(
     db.commit()
     db.refresh(current_user)
 
-    return DashboardProfile(
-        id=current_user.id,
-        registration_type=current_user.registration_type,
-        subscription=current_user.subscription,
-        title=current_user.title,
-        name=current_user.name,
-        email=current_user.email,
-        contact_number=current_user.contact_number,
-        hospital=current_user.hospital,
-        qualification=current_user.qualification,
-        speciality=current_user.speciality,
-        country_id=current_user.country_id,
-        state=current_user.state,
-        city=current_user.city,
-        pin_code=current_user.pin_code,
-        currency_name=current_user.currency_name,
-        payment_status=current_user.payment_status,
-        approve=current_user.approve,
-    )
+    return _build_dashboard_profile(db, current_user)
 
 
 @router.get("/payments", response_model=list[DashboardPaymentItem])

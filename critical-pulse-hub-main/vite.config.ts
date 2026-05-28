@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => ({
     },
     // Dev: browser calls http://localhost:8080/admin/... → proxied to uvicorn :8000
     proxy: {
-      "^/(admin|auth|registration|dashboard|exams|videos|certificate|upload|health)": {
+      "^/(admin|auth|registration|dashboard|exams|videos|certificate|upload|health|events)": {
         target: LOCAL_API,
         changeOrigin: true,
         bypass: (req) => {

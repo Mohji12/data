@@ -138,6 +138,19 @@ class DashboardSummary(BaseModel):
     extension: ExtensionAccess
 
 
+class SubscriptionPeriodInfo(BaseModel):
+    """Active time-bound entitlement for subscription plan_type packages."""
+
+    plan_type: str = "one_time"
+    status: Optional[str] = None
+    start_at: Optional[datetime] = None
+    end_at: Optional[datetime] = None
+    duration_months: Optional[int] = None
+    days_remaining: Optional[int] = None
+    extension_months: Optional[int] = None
+    end_at_if_extended: Optional[datetime] = None
+
+
 class DashboardProfile(BaseModel):
     id: int
     registration_type: Optional[str] = None
@@ -156,6 +169,7 @@ class DashboardProfile(BaseModel):
     currency_name: Optional[str] = None
     payment_status: Optional[str] = None
     approve: Optional[str] = None
+    subscription_period: Optional[SubscriptionPeriodInfo] = None
 
 
 class DashboardProfileUpdateRequest(BaseModel):

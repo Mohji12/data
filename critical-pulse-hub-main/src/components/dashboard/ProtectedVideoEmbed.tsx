@@ -342,6 +342,17 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
     [applyVolume, isMuted, volume],
   );
 
+  const handleVolumeWheel = useCallback(
+    (e: React.WheelEvent<HTMLElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.deltaY === 0) return;
+      setShowVolumeControl(true);
+      adjustVolume(e.deltaY < 0 ? VOLUME_STEP : -VOLUME_STEP);
+    },
+    [adjustVolume],
+  );
+
   const toggleMute = useCallback(() => {
     if (isMuted || volume === 0) {
       applyVolume(lastVolumeRef.current > 0 ? lastVolumeRef.current : 1);
@@ -1008,17 +1019,21 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
 
             {/* Volume: mute + slider + increase/decrease */}
             <div
-              className="relative flex items-center ml-1"
+              className="relative flex items-center ml-1 touch-none"
               onMouseEnter={() => setShowVolumeControl(true)}
               onMouseLeave={() => setShowVolumeControl(false)}
+              onWheel={handleVolumeWheel}
             >
               {showVolumeControl && (
                 <div
-                  className="absolute bottom-full left-0 mb-2 flex items-center gap-1.5 bg-black/95 border border-white/10 rounded-md px-2 py-1.5 z-30"
+                  className="absolute bottom-full left-0 mb-2 flex items-center gap-1.5 bg-black/95 border border-white/10 rounded-md px-2 py-2 z-30 touch-none"
                   onContextMenu={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
                   }}
+                  onWheel={handleVolumeWheel}
+                  onClick={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
                 >
                   <button
                     type="button"
@@ -1036,15 +1051,22 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
                     type="range"
                     min={0}
                     max={100}
+                    step={1}
                     value={Math.round((isMuted ? 0 : volume) * 100)}
                     onChange={(e) => {
                       e.stopPropagation();
                       applyVolume(Number(e.target.value) / 100);
                     }}
+                    onInput={(e) => {
+                      e.stopPropagation();
+                      applyVolume(Number(e.currentTarget.value) / 100);
+                    }}
                     onClick={(e) => e.stopPropagation()}
-                    className="w-20 h-1 accent-cyan-400 cursor-pointer"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onWheel={handleVolumeWheel}
+                    className="w-24 h-2 accent-cyan-400 cursor-pointer appearance-auto"
                     aria-label="Volume"
-                    title={`Volume ${Math.round((isMuted ? 0 : volume) * 100)}%`}
+                    title={`Volume ${Math.round((isMuted ? 0 : volume) * 100)}% — scroll or drag`}
                   />
                   <button
                     type="button"
@@ -1070,12 +1092,13 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
                   e.preventDefault();
                   e.stopPropagation();
                 }}
+                onWheel={handleVolumeWheel}
                 className="
                   flex items-center justify-center w-7 h-7
                   text-white/80 hover:text-white
                   transition-colors cursor-pointer
                 "
-                title={isMuted ? 'Unmute (M)' : 'Mute (M) · ↑↓ volume'}
+                title={isMuted ? 'Unmute (M)' : 'Mute (M) · scroll or ↑↓ for volume'}
                 aria-label={isMuted ? 'Unmute' : 'Mute'}
               >
                 {isMuted || volume === 0 ? (

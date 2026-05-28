@@ -4,7 +4,16 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import { openAuthenticatedExport } from '@/lib/apiBase';
 import { toast } from 'sonner';
-import { Clock, HelpCircle, Plus, Pencil, Trash2, BarChart3, Download, List, X } from 'lucide-react';
+import { Clock, HelpCircle, Plus, Pencil, Trash2, BarChart3, Download, List, X, Copy } from 'lucide-react';
+import { useIsTechAdmin } from '@/store/authStore';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 type ExamRow = {
   id: number;
@@ -38,6 +47,23 @@ type GraphDetail = {
 
 type PoolQ = { id: number; section_name: string; question: string; answer_type_label: string };
 
+type CloneExamsPreview = {
+  source_batch: string;
+  target_batch: string;
+  source_exam_count: number;
+  exams_to_create_count: number;
+  exams_already_count: number;
+  mock_test_access_enabled: boolean;
+  exams_to_create: { source_exam_id: number; source_title: string; total_questions?: number }[];
+  exams_already: { source_exam_id: number; source_title: string; target_exam_id: number }[];
+};
+
+const emptyCloneForm = () => ({
+  source_batch: 'Batch 15',
+  target_batch: 'BATCH 16-MCCM',
+  enable_mock_test_access: true,
+});
+
 const emptyExam = () => ({
   title: '',
   description: '',
@@ -54,6 +80,7 @@ const emptyExam = () => ({
 
 export default function AdminExams() {
   const qc = useQueryClient();
+  const isTech = useIsTechAdmin();
   const [graphExamId, setGraphExamId] = useState<number | ''>('');
   const [graphQuestionId, setGraphQuestionId] = useState<number | ''>('');
   const [q, setQ] = useState('');
@@ -62,6 +89,9 @@ export default function AdminExams() {
   const [modal, setModal] = useState<'add' | 'edit' | null>(null);
   const [editId, setEditId] = useState<number | null>(null);
   const [form, setForm] = useState(emptyExam());
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [cloneForm, setCloneForm] = useState(emptyCloneForm);
+  const [clonePreview, setClonePreview] = useState<CloneExamsPreview | null>(null);
 
   const { data: exams, isLoading, error } = useQuery({
     queryKey: ['adminExams', q, sortBy, order],
@@ -111,6 +141,58 @@ export default function AdminExams() {
   const activeBatches = useMemo(() => (batches || []).filter((b) => String(b.status ?? '1') === '1'), [batches]);
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['adminExams'] });
+
+  const cloneBatchesValid =
+    cloneForm.source_batch.trim().length > 0 &&
+    cloneForm.target_batch.trim().length > 0 &&
+    cloneForm.source_batch.trim().toLowerCase() !== cloneForm.target_batch.trim().toLowerCase();
+
+  const clonePreviewMut = useMutation({
+    mutationFn: async () => {
+      if (!cloneBatchesValid) {
+        throw new Error('Copy from and Copy to must be different (e.g. Batch 15 → BATCH 16-MCCM).');
+      }
+      return apiClient('/admin/quiz/exams/clone-batch/preview', {
+        method: 'POST',
+        body: JSON.stringify({ ...cloneForm, dry_run: true }),
+      }) as Promise<CloneExamsPreview>;
+    },
+    onSuccess: (data) => {
+      setClonePreview(data);
+      if (data.source_exam_count === 0) {
+        toast.warning(`No mock tests found for ${data.source_batch}.`);
+      } else {
+        toast.success(
+          `Found ${data.source_exam_count} exam(s): ${data.exams_to_create_count} to create, ${data.exams_already_count} already on target batch.`,
+        );
+      }
+    },
+    onError: (e: Error) => toast.error(e.message || 'Preview failed'),
+  });
+
+  const cloneApplyMut = useMutation({
+    mutationFn: async (dryRun: boolean) => {
+      return apiClient('/admin/quiz/exams/clone-batch', {
+        method: 'POST',
+        body: JSON.stringify({ ...cloneForm, dry_run: dryRun }),
+      }) as Promise<{ exams_created: number; mock_test_access?: { updated?: boolean } }>;
+    },
+    onSuccess: (data, dryRun) => {
+      if (dryRun) {
+        toast.info(`Dry run: would create ${data.exams_created ?? 0} exam(s).`);
+      } else {
+        toast.success(
+          `Created ${data.exams_created ?? 0} mock test(s) for Batch 16${
+            data.mock_test_access?.updated ? ' and enabled mock test access' : ''
+          }.`,
+        );
+        setCloneOpen(false);
+        setClonePreview(null);
+        invalidate();
+      }
+    },
+    onError: (e: Error) => toast.error(e.message || 'Clone failed'),
+  });
 
   const createMut = useMutation({
     mutationFn: () => {
@@ -266,6 +348,135 @@ export default function AdminExams() {
 
   return (
     <div className="p-6 lg:p-8">
+      <Dialog
+        open={cloneOpen}
+        onOpenChange={(o) => {
+          if (!o) {
+            setCloneOpen(false);
+            setClonePreview(null);
+            setCloneForm(emptyCloneForm());
+          }
+        }}
+      >
+        <DialogContent className="bg-chalk border-border-soft sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-display text-slate">Clone mock tests (batch → batch)</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-ink-muted">
+            Duplicates each <strong>Batch 15</strong> quiz exam for <strong>BATCH 16-MCCM</strong> using the same
+            question sections. Student attempts stay separate per exam row.
+          </p>
+          {!cloneBatchesValid && (
+            <p className="text-sm text-red-600">Copy from and Copy to must be different batches.</p>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 py-2">
+            <label className="block">
+              <span className="font-mono text-xs text-ink-faint uppercase block mb-1">Copy from batch</span>
+              <select
+                value={cloneForm.source_batch}
+                onChange={(e) => {
+                  setClonePreview(null);
+                  setCloneForm((x) => ({ ...x, source_batch: e.target.value }));
+                }}
+                className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm"
+              >
+                {activeBatches.map((b) => (
+                  <option key={b.id} value={b.name}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="font-mono text-xs text-ink-faint uppercase block mb-1">Copy to batch</span>
+              <select
+                value={cloneForm.target_batch}
+                onChange={(e) => {
+                  setClonePreview(null);
+                  setCloneForm((x) => ({ ...x, target_batch: e.target.value }));
+                }}
+                className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm"
+              >
+                {activeBatches.map((b) => (
+                  <option key={b.id} value={b.name}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-ink">
+            <input
+              type="checkbox"
+              checked={cloneForm.enable_mock_test_access}
+              onChange={(e) => setCloneForm((x) => ({ ...x, enable_mock_test_access: e.target.checked }))}
+            />
+            Enable mock test access for target batch (access_quiz_link)
+          </label>
+          {clonePreview && (
+            <div className="border border-border-soft rounded-sm p-3 max-h-48 overflow-y-auto text-xs space-y-2">
+              <p className="font-mono text-ink-faint uppercase">
+                Source: {clonePreview.source_exam_count} exam(s) · Create: {clonePreview.exams_to_create_count} ·
+                Already on target: {clonePreview.exams_already_count}
+                {clonePreview.mock_test_access_enabled ? ' · Access already enabled' : ''}
+              </p>
+              {clonePreview.exams_to_create.slice(0, 10).map((e) => (
+                <div key={e.source_exam_id} className="text-ink">
+                  <span className="text-mint font-semibold">{e.source_title}</span>
+                  <span className="text-ink-faint"> → new exam for {cloneForm.target_batch}</span>
+                </div>
+              ))}
+              {clonePreview.exams_to_create.length > 10 && (
+                <div className="text-ink-faint">…and {clonePreview.exams_to_create.length - 10} more</div>
+              )}
+            </div>
+          )}
+          <DialogFooter className="gap-2 flex-wrap sm:gap-0">
+            <Button type="button" variant="outline" onClick={() => setCloneOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={clonePreviewMut.isPending || !cloneBatchesValid}
+              onClick={() => clonePreviewMut.mutate()}
+            >
+              {clonePreviewMut.isPending ? 'Previewing…' : 'Preview'}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!clonePreview || cloneApplyMut.isPending || !cloneBatchesValid}
+              onClick={() => cloneApplyMut.mutate(true)}
+            >
+              Dry run
+            </Button>
+            <Button
+              type="button"
+              className="bg-slate text-chalk hover:bg-slate-light"
+              disabled={
+                !clonePreview ||
+                cloneApplyMut.isPending ||
+                !cloneBatchesValid ||
+                clonePreview.exams_to_create_count === 0
+              }
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    `Create ${clonePreview?.exams_to_create_count ?? 0} mock test(s) for ${cloneForm.target_batch}?`,
+                  )
+                ) {
+                  return;
+                }
+                cloneApplyMut.mutate(false);
+              }}
+            >
+              {cloneApplyMut.isPending ? 'Cloning…' : 'Clone mock tests'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 overflow-y-auto">
           <div className="bg-chalk border border-border-soft rounded-sm shadow-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-4 my-8">
@@ -423,6 +634,15 @@ export default function AdminExams() {
             placeholder="Search exam title..."
             className="bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm min-w-[240px]"
           />
+          <button
+            type="button"
+            disabled={!isTech}
+            onClick={() => isTech && (setCloneForm(emptyCloneForm()), setClonePreview(null), setCloneOpen(true))}
+            title={!isTech ? 'Tech admin only' : 'Clone mock tests from Batch 15 to Batch 16'}
+            className="border border-border-strong text-slate rounded-sm px-5 py-3 font-sans text-sm font-semibold hover:bg-chalk-cool transition-all flex items-center justify-center gap-2 disabled:opacity-40"
+          >
+            <Copy size={16} /> Clone Batch 15 → 16
+          </button>
           <button
             type="button"
             onClick={openAdd}

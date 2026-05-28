@@ -30,7 +30,7 @@ from app.schemas import (
     RegistrationInitRequest,
     RegistrationInitResponse,
 )
-from app.routers.auth import _php_password_for_db
+from app.services.password_crypto import php_password_for_db
 
 # ── Old student discount rates (matching PHP hardcoded values) ────────────
 OLD_STUDENT_RATE_INR = {"gross": 18000, "gst_pct": 18, "gst_amt": 3240, "total": 21240}
@@ -75,6 +75,7 @@ BATCH_SLUG_TO_PACKAGE_SUBSCRIPTION: dict[str, str] = {
     "ccm-practical-series-batch-3": "CCM Batch 3",
     "ccm-3": "CCM Batch 3",
     "ccm-batch-3": "CCM Batch 3",
+    "batch-16-mccm": "BATCH 16-MCCM",
 }
 
 # Public fee/registration URL slug → exact `batch_master.name` (case-insensitive) when DB uses different labels.
@@ -634,7 +635,13 @@ def query_active_packages_for_registration(
         )
         .order_by(Package.id.asc())
     )
-    return _narrow_packages_to_single_pricing_tier(q.all())
+    pkgs = q.all()
+    if not pkgs:
+        return []
+    if any((p.plan_type or "").strip().lower() == "subscription" for p in pkgs):
+        sub_rows = [p for p in pkgs if (p.plan_type or "").strip().lower() == "subscription"]
+        return sorted(sub_rows, key=lambda p: (int(p.duration_months or 0), p.id))
+    return _narrow_packages_to_single_pricing_tier(pkgs)
 
 
 def _calendar_early_bird_active(today: Optional[date] = None) -> bool:
@@ -903,7 +910,7 @@ def initialize_registration(
         title=payload.title,
         name=payload.name,
         email=payload.email.strip().lower(),
-        password=_php_password_for_db(payload.password),
+        password=php_password_for_db(payload.password),
         contact_number=payload.contact_number,
         hospital=payload.hospital,
         qualification=payload.qualification,

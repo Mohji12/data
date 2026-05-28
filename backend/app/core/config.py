@@ -31,6 +31,26 @@ class Settings:
         self.email_only_login_strict: bool = os.getenv(
             "EMAIL_ONLY_LOGIN_STRICT", "true"
         ).lower() in ("1", "true", "yes")
+        self.password_reset_otp_length: int = max(4, min(8, int(os.getenv("PASSWORD_RESET_OTP_LENGTH", "6"))))
+        self.password_reset_otp_ttl_minutes: int = max(5, int(os.getenv("PASSWORD_RESET_OTP_TTL_MINUTES", "10")))
+        self.password_reset_otp_resend_seconds: int = max(30, int(os.getenv("PASSWORD_RESET_OTP_RESEND_SECONDS", "60")))
+        self.event_icu_d_conclave_slug: str = os.getenv(
+            "EVENT_ICU_D_CONCLAVE_SLUG", "icu-d-conclave-2026"
+        ).strip()
+        self.event_icu_d_conclave_fee_inr: float = float(os.getenv("EVENT_ICU_D_CONCLAVE_FEE_INR", "3200"))
+        self.event_icu_d_conclave_gst_percent: float = float(
+            os.getenv("EVENT_ICU_D_CONCLAVE_GST_PERCENT", "18")
+        )
+        self.event_icu_d_conclave_active: bool = os.getenv(
+            "EVENT_ICU_D_CONCLAVE_ACTIVE", "true"
+        ).lower() in ("1", "true", "yes")
+        _promo = os.getenv("EVENT_ICU_D_CONCLAVE_PROMO_CODES", "CONCLAVE100").strip()
+        self.event_icu_d_conclave_promo_codes: list[str] = [
+            c.strip().upper() for c in _promo.split(",") if c.strip()
+        ]
+        self.auto_create_event_tables: bool = os.getenv(
+            "AUTO_CREATE_EVENT_TABLES", "true"
+        ).lower() in ("1", "true", "yes")
         self.api_token_secret: str = os.getenv(
             "API_TOKEN_SECRET",
             "critical-care-classes-fastapi-secret",
@@ -44,8 +64,11 @@ class Settings:
             self.cors_origins = [
                 "https://harishcriticalcareclasses.com",
                 "https://www.harishcriticalcareclasses.com",
+                "https://krintixsample.site",
                 "http://localhost:8080",
                 "http://127.0.0.1:8080",
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
             ]
         self.payment_gateway_name: str = os.getenv("PAYMENT_GATEWAY_NAME", "razorpay")
         self.payment_key_id: str = os.getenv("PAYMENT_KEY_ID", "")
@@ -76,12 +99,10 @@ class Settings:
         self.email_template_php_root: str = os.getenv(
             "EMAIL_TEMPLATE_PHP_ROOT", str(_default_tpl)
         ).strip()
-        # Public site base URL (no trailing slash) for legacy PHP uploads, e.g. https://harishcriticalcareclasses.com
-        # Used to build /upload/user/document_file/{filename} links in admin user list/detail.
-        # Default matches public site / email assets so admin document links work without extra .env.
+        # Legacy PHP static uploads (old rows only). Do not default to marketing site — new docs use API_PUBLIC_BASE_URL.
         _legacy = os.getenv("LEGACY_UPLOAD_BASE_URL", "").strip().rstrip("/")
-        self.legacy_upload_base_url: str = _legacy or self.email_asset_base_url
-        # FastAPI public base for locally stored registration uploads (admin "View document").
+        self.legacy_upload_base_url: str = _legacy
+        # FastAPI host where /upload/user/document_file/ and admin API run (e.g. https://krintixsample.site).
         _api_public = os.getenv("API_PUBLIC_BASE_URL", "").strip().rstrip("/")
         self.api_public_base_url: str = _api_public or "http://127.0.0.1:8000"
         # S3 user documents (registration uploads). Prefer AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in .env (never commit).

@@ -3,6 +3,17 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiClient } from '@/lib/apiClient';
 
+type SubscriptionPeriodInfo = {
+  plan_type: string;
+  status?: string | null;
+  start_at?: string | null;
+  end_at?: string | null;
+  duration_months?: number | null;
+  days_remaining?: number | null;
+  extension_months?: number | null;
+  end_at_if_extended?: string | null;
+};
+
 type DashboardProfile = {
   id: number;
   registration_type?: string | null;
@@ -21,7 +32,23 @@ type DashboardProfile = {
   currency_name?: string | null;
   payment_status?: string | null;
   approve?: string | null;
+  subscription_period?: SubscriptionPeriodInfo | null;
 };
+
+function formatSubscriptionDate(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
 
 type ProfileFormState = {
   title: string;
@@ -119,6 +146,9 @@ export default function Profile() {
     return <div className="p-6 lg:p-8 font-mono text-xs text-ink-faint animate-pulse">Loading profile...</div>;
   }
 
+  const period = data?.subscription_period;
+  const showPeriod = period?.plan_type === 'subscription';
+
   return (
     <div className="p-6 lg:p-8">
       <h1 className="font-display font-bold text-3xl text-slate mb-8">Profile</h1>
@@ -132,6 +162,70 @@ export default function Profile() {
             <div className="font-mono text-xs text-ink-faint">{data?.subscription || '—'}</div>
           </div>
         </div>
+
+        {showPeriod && (
+          <div className="mb-8 p-5 bg-chalk-warm border border-border-soft rounded-sm">
+            <h2 className="font-mono text-[11px] text-ink-faint uppercase tracking-[0.12em] mb-4">
+              Subscription access period
+            </h2>
+            {period?.status === 'pending' ? (
+              <p className="font-sans text-sm text-ink-muted">
+                Your subscription period will appear here after payment is confirmed.
+              </p>
+            ) : (
+              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-4 font-sans text-sm">
+                <div>
+                  <dt className="font-mono text-[10px] text-ink-faint uppercase tracking-wider mb-1">Starts</dt>
+                  <dd className="text-ink font-medium">{formatSubscriptionDate(period?.start_at)}</dd>
+                </div>
+                <div>
+                  <dt className="font-mono text-[10px] text-ink-faint uppercase tracking-wider mb-1">Ends</dt>
+                  <dd className="text-ink font-medium">{formatSubscriptionDate(period?.end_at)}</dd>
+                </div>
+                {period?.duration_months != null && period.duration_months > 0 && (
+                  <div>
+                    <dt className="font-mono text-[10px] text-ink-faint uppercase tracking-wider mb-1">Plan duration</dt>
+                    <dd className="text-ink">{period.duration_months} months</dd>
+                  </div>
+                )}
+                {period?.days_remaining != null && (
+                  <div>
+                    <dt className="font-mono text-[10px] text-ink-faint uppercase tracking-wider mb-1">Time remaining</dt>
+                    <dd
+                      className={
+                        period.days_remaining < 0
+                          ? 'text-red-600 font-medium'
+                          : period.days_remaining <= 15
+                            ? 'text-amber-700 font-medium'
+                            : 'text-ink'
+                      }
+                    >
+                      {period.days_remaining < 0
+                        ? `Expired ${Math.abs(period.days_remaining)} day(s) ago`
+                        : `${period.days_remaining} day(s) left`}
+                    </dd>
+                  </div>
+                )}
+                {period?.extension_months != null && period?.end_at_if_extended && (
+                  <div className="sm:col-span-2 pt-2 border-t border-border-soft">
+                    <dt className="font-mono text-[10px] text-ink-faint uppercase tracking-wider mb-1">
+                      If you extend by {period.extension_months} months
+                    </dt>
+                    <dd className="text-mint font-medium">
+                      New end date: {formatSubscriptionDate(period.end_at_if_extended)}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            )}
+            {period?.status === 'expired' && (
+              <p className="mt-3 font-sans text-xs text-red-600">
+                Your subscription has ended. Use Extend Subscription on the dashboard if offered.
+              </p>
+            )}
+          </div>
+        )}
+
         <form
           className="space-y-5"
           onSubmit={(e) => {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 import uuid
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlparse
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -47,6 +47,40 @@ def upload_user_document(content: bytes, suffix: str, s: "Settings") -> str:
     return key
 
 
+DOC_UPLOAD_PATH = "/upload/user/document_file/"
+_MARKETING_DOC_HOSTS = frozenset({"harishcriticalcareclasses.com", "www.harishcriticalcareclasses.com"})
+
+
+def registration_document_filename(stored: Optional[str]) -> Optional[str]:
+    """Plain filename from DB value or from a full /upload/user/document_file/ URL."""
+    if not stored or not str(stored).strip():
+        return None
+    v = str(stored).strip()
+    if not v.lower().startswith(("http://", "https://")):
+        return v if "/" not in v else None
+    try:
+        path = urlparse(v).path
+        lower = path.lower()
+        marker = DOC_UPLOAD_PATH.lower()
+        idx = lower.find(marker)
+        if idx == -1:
+            return None
+        name = path[idx + len(DOC_UPLOAD_PATH) :]
+        return unquote(name) if name else None
+    except Exception:
+        return None
+
+
+def public_registration_document_url(filename: str, s: "Settings", *, api_base: Optional[str] = None) -> Optional[str]:
+    fn = (filename or "").strip()
+    if not fn:
+        return None
+    base = (api_base or getattr(s, "api_public_base_url", "") or "").strip().rstrip("/")
+    if not base:
+        return None
+    return f"{base}{DOC_UPLOAD_PATH}{quote(fn, safe='')}"
+
+
 def presigned_get_url(key: str, s: "Settings") -> Optional[str]:
     if not s3_uploads_enabled(s):
         return None
@@ -75,15 +109,26 @@ def resolve_admin_document_url(
         return None
     v = str(stored).strip()
     low = v.lower()
+    public_api = (api_base or getattr(s, "api_public_base_url", "") or "").strip().rstrip("/")
+
+    plain = registration_document_filename(v)
+    if plain and public_api:
+        return public_registration_document_url(plain, s, api_base=public_api)
+
     if low.startswith("http://") or low.startswith("https://"):
+        try:
+            host = urlparse(v).hostname or ""
+            if host.lower() in _MARKETING_DOC_HOSTS and plain and public_api:
+                return public_registration_document_url(plain, s, api_base=public_api)
+        except Exception:
+            pass
         return v
     if s3_uploads_enabled(s) and "/" in v:
         url = presigned_get_url(v, s)
         if url:
             return url
-    public_api = (api_base or getattr(s, "api_public_base_url", "") or "").strip().rstrip("/")
-    if public_api and "/" not in v:
-        return f"{public_api}/upload/user/document_file/{quote(v, safe='')}"
+    if "/" not in v:
+        return public_registration_document_url(v, s, api_base=public_api)
     base = (legacy_base or "").strip().rstrip("/")
     if base:
         return f"{base}/upload/user/document_file/{quote(v, safe='')}"

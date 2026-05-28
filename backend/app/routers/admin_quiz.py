@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.admin_security import get_current_admin
+from app.admin_security import get_current_admin, require_admin_type
 from app.db import get_db
 from app.models import MarkingType, Question, QuizExam, QuizSection, User, UserAnswer, UserExam
 from app.services.pdfs import quiz_result_pdf
@@ -466,6 +466,60 @@ def delete_exam(exam_id: int, db: Session = Depends(get_db)) -> dict:
     db.delete(e)
     db.commit()
     return {"status": "ok"}
+
+
+class CloneBatchExamsPayload(BaseModel):
+    source_batch: str
+    target_batch: str
+    enable_mock_test_access: bool = True
+    dry_run: bool = False
+
+
+def _validate_clone_batch_exams_payload(payload: CloneBatchExamsPayload) -> None:
+    if not (payload.source_batch or "").strip() or not (payload.target_batch or "").strip():
+        raise HTTPException(status_code=422, detail="source_batch and target_batch are required.")
+    if payload.source_batch.strip().casefold() == payload.target_batch.strip().casefold():
+        raise HTTPException(
+            status_code=422,
+            detail="Copy from and Copy to batch must be different.",
+        )
+
+
+@router.post(
+    "/exams/clone-batch/preview",
+    dependencies=[Depends(require_admin_type("techadmin"))],
+)
+def preview_clone_batch_exams_route(
+    payload: CloneBatchExamsPayload,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Preview duplicating quiz_exam rows from source batch to target batch."""
+    from app.services.exam_batch_copy import preview_clone_batch_exams
+
+    _validate_clone_batch_exams_payload(payload)
+    return preview_clone_batch_exams(
+        db,
+        source_batch=payload.source_batch.strip(),
+        target_batch=payload.target_batch.strip(),
+    )
+
+
+@router.post(
+    "/exams/clone-batch",
+    dependencies=[Depends(require_admin_type("techadmin"))],
+)
+def clone_batch_exams_route(payload: CloneBatchExamsPayload, db: Session = Depends(get_db)) -> dict:
+    """Duplicate Batch 15 mock tests for Batch 16 MCCM (same question sections)."""
+    from app.services.exam_batch_copy import clone_batch_exams
+
+    _validate_clone_batch_exams_payload(payload)
+    return clone_batch_exams(
+        db,
+        source_batch=payload.source_batch.strip(),
+        target_batch=payload.target_batch.strip(),
+        enable_mock_test_access_flag=payload.enable_mock_test_access,
+        dry_run=payload.dry_run,
+    )
 
 
 @router.get("/exams/{exam_id}/pool-questions")

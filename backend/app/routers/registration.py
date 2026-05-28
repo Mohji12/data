@@ -62,8 +62,22 @@ class CountryOut(BaseModel):
 
 @router.get("/countries", response_model=list[CountryOut])
 def registration_countries(db: Session = Depends(get_db)) -> list[CountryOut]:
-    rows = db.query(Country).filter(Country.status == "1").order_by(Country.name).all()
-    return [CountryOut(id=r.id, name=r.name) for r in rows]
+    """Country list for registration (legacy PHP loads all rows from `country`, no status filter)."""
+    rows = db.query(Country).order_by(Country.name).all()
+    if not rows:
+        return []
+    out: list[CountryOut] = []
+    for r in rows:
+        name = (r.name or "").strip()
+        if not name:
+            continue
+        status = str(r.status).strip() if r.status is not None else ""
+        if status and status not in {"1", "true", "yes", "on"}:
+            continue
+        out.append(CountryOut(id=r.id, name=name))
+    if not out:
+        out = [CountryOut(id=r.id, name=(r.name or "").strip()) for r in rows if (r.name or "").strip()]
+    return out
 
 
 @router.get("/batches", response_model=list[BatchDefinition])
@@ -237,7 +251,10 @@ def registration_confirm(
     registration_id: int,
     db: Session = Depends(get_db),
 ) -> dict:
-    """Finalize payment if needed and send registration thank-you email (idempotent)."""
+    """Finalize payment if needed and send registration thank-you email (idempotent).
+
+    Thank-you mail is sent only when payment_status is Credit and SMTP is configured on the API server.
+    """
     return confirm_registration_after_payment(db, registration_id)
 
 
@@ -301,9 +318,11 @@ def list_public_testimonials(db: Session = Depends(get_db)) -> list[dict]:
 def upload_document(file: UploadFile = File(...)) -> dict:
     from app.core.config import get_settings
 
+    from app.services.s3_storage import public_registration_document_url
+
     filename = save_registration_document(file)
     settings = get_settings()
-    view_url = f"{settings.api_public_base_url.rstrip('/')}/upload/user/document_file/{filename}"
+    view_url = public_registration_document_url(filename, settings) or ""
     return {"filename": filename, "view_url": view_url}
 
 

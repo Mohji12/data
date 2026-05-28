@@ -30,11 +30,15 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from app.routers.auth import _php_password_for_db, _stored_password_variants, my_simple_crypt  # noqa: E402
+from app.services.password_crypto import (  # noqa: E402
+    my_simple_crypt,
+    php_password_for_db,
+    stored_password_variants,
+)
 
 
 def student_password_values(plain: str) -> dict[str, str]:
-    inner, outer = _stored_password_variants(plain)
+    inner, outer = stored_password_variants(plain)
     return {
         "plain": plain,
         "inner_single_base64": inner,

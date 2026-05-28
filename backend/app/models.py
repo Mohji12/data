@@ -378,6 +378,57 @@ class EmailTemplateMaster(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class EventRegistration(Base):
+    __tablename__ = "event_registration"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_slug = Column(String(128), nullable=False)
+    registration_number = Column(String(32), nullable=False, unique=True)
+    full_name = Column(String(255), nullable=False)
+    designation = Column(String(255), nullable=False)
+    category = Column(String(32), nullable=False)  # clinician | student
+    specialty = Column(String(255), nullable=False)
+    email = Column(String(255), nullable=False)
+    phone = Column(String(50), nullable=False)
+    country_id = Column(Integer)
+    country_name = Column(String(255))
+    hospital = Column(String(255), nullable=False)
+    city = Column(String(128), nullable=False)
+    state = Column(String(128), nullable=False)
+    council_state = Column(String(128), nullable=False)
+    council_registration_number = Column(String(128), nullable=False)
+    declaration_accepted = Column(String(1), nullable=False, default="1")
+    payment_status = Column(String(32), default="Pending")
+    amount_inr = Column(Float, default=0.0)
+    payment_id = Column(String(255))
+    payment_signature = Column(String(255))
+    payment_type = Column(String(50))
+    payment_date = Column(DateTime)
+    payment_details = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class EventPaymentTxn(Base):
+    __tablename__ = "event_payment_txn"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    request_id = Column(String(255), nullable=False, unique=True)
+    event_registration_id = Column(Integer, nullable=False)
+    amount = Column(Float, default=0.0)
+    currency = Column(String(20), default="INR")
+    gateway = Column(String(50), default="razorpay")
+    gateway_order_id = Column(String(255))
+    gateway_payment_id = Column(String(255))
+    gateway_signature = Column(String(255))
+    gateway_status = Column(String(50), default="created")
+    callback_payload = Column(Text)
+    webhook_payload = Column(Text)
+    is_finalized = Column(String(1), default="0")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Admin(Base):
     __tablename__ = "admin"
 

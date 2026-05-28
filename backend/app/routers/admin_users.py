@@ -15,18 +15,23 @@ from sqlalchemy.orm import Session, load_only
 
 from app.admin_security import get_current_admin
 from app.core.config import get_settings
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.models import Country, CouponMaster, Package, User, UserPackagePayment
 from app.services.mailer import send_html_email
 from app.services.payments import apply_offline_registration_credit, sync_registration_payment_from_razorpay, try_send_registration_thank_you_email, _package_for_thank_you_email
-from app.services.s3_storage import presigned_get_url, resolve_admin_document_url, s3_uploads_enabled
+from app.services.s3_storage import (
+    presigned_get_url,
+    registration_document_filename,
+    resolve_admin_document_url,
+    s3_uploads_enabled,
+)
 from app.services.email_templates import (
     EMAIL_TEMPLATE_TYPE_DOCUMENT_DENIED,
     EMAIL_TEMPLATE_TYPE_DOCUMENT_VERIFIED,
     PASSWORD_MAIL_SUBJECT,
     custom_template,
     document_status_template,
-    password_template,
+    password_template_for_user,
     paynow_template,
     plaintext_password_for_password_mail,
     resolve_batch_template_email,
@@ -324,11 +329,19 @@ def refund(user_id: int, db: Session = Depends(get_db)) -> dict:
     return {"status": "ok"}
 
 
-def _try_send_document_status_email(to_email: str, subject: str, html: str) -> None:
-    """Runs after HTTP response; avoids blocking the client on slow SMTP."""
+def _smtp_configured() -> bool:
     settings = get_settings()
-    if not (settings.smtp_host or "").strip() or not (to_email or "").strip():
-        return
+    return bool((settings.smtp_host or "").strip())
+
+
+def _send_document_status_email(to_email: str, subject: str, html: str) -> bool:
+    settings = get_settings()
+    if not _smtp_configured():
+        logger.warning("document status email skipped: SMTP_HOST is empty")
+        return False
+    if not (to_email or "").strip():
+        logger.warning("document status email skipped: user has no email")
+        return False
     try:
         send_html_email(
             to_email=to_email.strip(),
@@ -337,8 +350,31 @@ def _try_send_document_status_email(to_email: str, subject: str, html: str) -> N
             cc=settings.smtp_cc or None,
             bcc=settings.smtp_bcc or None,
         )
+        return True
     except Exception as exc:
-        logger.warning("document status email failed: %s", exc)
+        logger.warning("document status email failed to=%s: %s", to_email, exc)
+        return False
+
+
+def _background_document_status_emails(
+    user_id: int,
+    status: str,
+    subject: str,
+    html: str,
+) -> None:
+    """Fresh DB session — request-scoped Session must not be used after the response."""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return
+        if status in ("1", "2"):
+            _send_document_status_email((user.email or "").strip(), subject, html)
+        if status == "1" and (user.payment_status or "").strip().lower() == "credit":
+            pkg = _package_for_thank_you_email(db, user)
+            try_send_registration_thank_you_email(db, user, pkg)
+    finally:
+        db.close()
 
 
 class DocumentStatusPayload(BaseModel):
@@ -368,37 +404,59 @@ def update_document_status(
         user.approve = "1"
     db.add(user)
     db.commit()
-    default_subject = "Document status update"
-    default_html = document_status_template(user.name or "Learner", user.subscription or "", status)
-    template_type = (
-        EMAIL_TEMPLATE_TYPE_DOCUMENT_VERIFIED
-        if status == "1"
-        else EMAIL_TEMPLATE_TYPE_DOCUMENT_DENIED
-        if status == "2"
-        else ""
-    )
-    try:
-        subject, html = resolve_batch_template_email(
-            db,
-            user,
-            template_type,
-            default_subject=default_subject,
-            default_html=default_html,
-            status_label="Approved" if status == "1" else "Denied" if status == "2" else "Pending",
+
+    smtp_ok = _smtp_configured()
+    email_queued = False
+    if status in ("1", "2"):
+        default_subject = "Document status update"
+        default_html = document_status_template(user.name or "Learner", user.subscription or "", status)
+        template_type = (
+            EMAIL_TEMPLATE_TYPE_DOCUMENT_VERIFIED
+            if status == "1"
+            else EMAIL_TEMPLATE_TYPE_DOCUMENT_DENIED
         )
-        background_tasks.add_task(
-            _try_send_document_status_email,
-            (user.email or "").strip(),
-            subject,
-            html,
-        )
-    except Exception as exc:
-        logger.warning(
-            "document status email skipped for user_id=%s (status saved): %s",
-            user.id,
-            exc,
-        )
-    return {"status": "ok", "document_file_status": status}
+        try:
+            subject, html = resolve_batch_template_email(
+                db,
+                user,
+                template_type,
+                default_subject=default_subject,
+                default_html=default_html,
+                status_label="Approved" if status == "1" else "Denied",
+            )
+            if smtp_ok and (user.email or "").strip():
+                background_tasks.add_task(
+                    _background_document_status_emails,
+                    user.id,
+                    status,
+                    subject,
+                    html,
+                )
+                email_queued = True
+        except Exception as exc:
+            logger.warning(
+                "document status email skipped for user_id=%s (status saved): %s",
+                user.id,
+                exc,
+            )
+
+    return {
+        "status": "ok",
+        "document_file_status": status,
+        "smtp_configured": smtp_ok,
+        "email_queued": email_queued,
+        "message": (
+            "Document approved; notification email queued."
+            if email_queued and status == "1"
+            else "Document denied; notification email queued."
+            if email_queued and status == "2"
+            else "Status saved. Configure SMTP_HOST on the API server to send notification emails."
+            if status in ("1", "2") and not smtp_ok
+            else "Status saved."
+            if status in ("1", "2")
+            else "Status saved (no email for pending)."
+        ),
+    }
 
 
 class PayNowMailPayload(BaseModel):
@@ -437,13 +495,10 @@ def send_password_mail(payload: PasswordMailPayload, db: Session = Depends(get_d
     if (u.approve or "").strip() != "1":
         raise HTTPException(status_code=400, detail="User must be approved to send login mail.")
 
-    pw = (payload.plain_password or "").strip()
-    if not pw:
-        pw = plaintext_password_for_password_mail(u)
-    if not pw:
+    if not (u.password or "").strip():
         raise HTTPException(
             status_code=422,
-            detail="Could not read password from the database (not legacy encrypted format). Set password in legacy admin or reset the account.",
+            detail="User has no password stored. Complete registration or set password before sending login mail.",
         )
 
     settings = get_settings()
@@ -454,7 +509,7 @@ def send_password_mail(payload: PasswordMailPayload, db: Session = Depends(get_d
         send_html_email(
             (u.email or "").strip(),
             PASSWORD_MAIL_SUBJECT,
-            password_template(u.name or "Learner", (u.email or "").strip(), pw),
+            password_template_for_user(u),
             cc=settings.smtp_cc or None,
             bcc=settings.smtp_bcc or None,
         )
@@ -564,6 +619,10 @@ def admin_download_document(
         raise HTTPException(status_code=404, detail="No document on file for this user")
 
     settings = get_settings()
+    plain = registration_document_filename(v)
+    if plain:
+        v = plain
+
     low = v.lower()
     if low.startswith("http://") or low.startswith("https://"):
         return RedirectResponse(url=v)

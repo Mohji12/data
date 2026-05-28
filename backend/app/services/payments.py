@@ -23,8 +23,9 @@ from app.services.email_templates import (
     resolve_batch_template_email,
 )
 from app.services.mailer import send_html_email
-from app.services.access import get_extension_offer
+from app.services.access import find_active_user_subscription, get_extension_offer
 from app.services.registration import activate_user_subscription, extend_active_subscription
+from app.schemas import PaymentFinalizeResponse, PaymentOrderResponse
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,6 @@ def try_send_registration_thank_you_email(
         _mark_registration_thank_you_sent(db, user.id)
         return True
     return False
-from app.schemas import PaymentFinalizeResponse, PaymentOrderResponse
 
 
 def _coupon_has_column(db: Session, column_name: str) -> bool:
@@ -99,17 +99,7 @@ def init_extension_payment(db: Session, user: User) -> dict:
     offer = get_extension_offer(db, user)
     if not offer.get("enabled"):
         raise HTTPException(status_code=400, detail=offer.get("reason") or "Extension is not available")
-    sub_name = (user.subscription or "").strip().lower()
-    active_sub = (
-        db.query(UserSubscription)
-        .filter(
-            UserSubscription.user_id == user.id,
-            UserSubscription.batch_slug == sub_name,
-            UserSubscription.status == "active",
-        )
-        .order_by(UserSubscription.end_at.desc())
-        .first()
-    )
+    active_sub = find_active_user_subscription(db, user)
     if not active_sub:
         raise HTTPException(status_code=400, detail="No active subscription found")
 
@@ -765,12 +755,24 @@ def process_razorpay_webhook(db: Session, payload: dict) -> PaymentFinalizeRespo
     if isinstance(notes, list):
         notes = {}
     request_id = (notes.get("request_id") or payload.get("request_id") or "").strip()
+    event_request_id = (notes.get("event_request_id") or "").strip()
 
     if not order_id or not payment_id:
         raise HTTPException(status_code=400, detail="Invalid webhook payload: missing order_id or payment_id")
 
     txn = _txn_by_request_or_order(db, request_id=request_id or None, order_id=order_id)
     if not txn:
+        from app.services.event_payments import process_event_razorpay_webhook
+
+        event_result = process_event_razorpay_webhook(
+            db,
+            order_id=order_id,
+            payment_id=payment_id,
+            request_id=event_request_id or request_id or None,
+            payload=payload,
+        )
+        if event_result is not None:
+            return event_result
         raise HTTPException(status_code=404, detail="Transaction not found for webhook")
 
     return finalize_payment(

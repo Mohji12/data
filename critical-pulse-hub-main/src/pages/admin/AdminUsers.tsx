@@ -321,8 +321,11 @@ export default function AdminUsers() {
         method: 'POST',
         body: JSON.stringify({ document_file_status }),
       }),
-    onSuccess: () => {
-      toast.success('Document status updated');
+    onSuccess: (res: { message?: string; smtp_configured?: boolean; email_queued?: boolean }) => {
+      const msg = res?.message || 'Document status updated';
+      if (res?.smtp_configured === false) toast.warning(msg);
+      else if (res?.email_queued) toast.success(msg);
+      else toast.success(msg);
       invalidateUsers();
     },
     onError: (e: Error) => toast.error(e.message),

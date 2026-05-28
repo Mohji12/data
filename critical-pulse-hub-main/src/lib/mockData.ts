@@ -43,6 +43,11 @@ export const marketingBatches = [
     pillTo: '/register/batch-10-edic-1',
     slugCandidates: ['batch-edic-10', 'edic-10', 'batch-10-edic-1', 'edic-1', 'batch-edic-10'],
   },
+  {
+    label: 'BATCH 16-MCCM',
+    pillTo: '/register/batch-16-mccm',
+    slugCandidates: ['batch-16-mccm', 'batch-16', 'batch-16-mccm'],
+  },
 ] as const;
 
 /** Hero / navbar batch pills */

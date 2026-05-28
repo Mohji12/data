@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check, ChevronRight, Sparkles } from 'lucide-react';
+import { Check, ChevronRight } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import { pickRegistrationBatches } from '@/lib/mockData';
+import { PasswordEightHint } from '@/components/PasswordEightHint';
 
 const steps = ['Personal', 'Professional', 'Course & Payment'];
 
@@ -43,9 +44,20 @@ export default function Register() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  const { data: countries } = useQuery({
+  const {
+    data: countries,
+    isLoading: countriesLoading,
+    isError: countriesError,
+    error: countriesErr,
+    refetch: refetchCountries,
+  } = useQuery({
     queryKey: ['regCountries'],
-    queryFn: () => apiClient('/registration/countries')
+    queryFn: async () => {
+      const res = await apiClient('/registration/countries');
+      return Array.isArray(res) ? res : [];
+    },
+    retry: 2,
+    staleTime: 60_000,
   });
 
   const { data: batches } = useQuery({
@@ -115,9 +127,50 @@ export default function Register() {
     }
   });
 
+  const packageList = useMemo(() => (Array.isArray(packages) ? packages : []) as Array<{
+    id: number;
+    name: string;
+    plan_type?: string;
+    duration_months?: number | null;
+    total_amount: number;
+    currency_name?: string;
+  }>, [packages]);
+
+  const subscriptionPackages = useMemo(
+    () =>
+      [...packageList]
+        .filter((p) => (p.plan_type || '').toLowerCase() === 'subscription')
+        .sort((a, b) => (a.duration_months || 0) - (b.duration_months || 0)),
+    [packageList],
+  );
+
+  const isSubscriptionBatch = subscriptionPackages.length > 0;
+
+  const selectedPackage = useMemo(
+    () => packageList.find((p) => String(p.id) === String(form.package_id)),
+    [packageList, form.package_id],
+  );
+
+  useEffect(() => {
+    if (!packageList.length) return;
+    setForm((f) => {
+      if (f.package_id && packageList.some((p) => String(p.id) === String(f.package_id))) {
+        return f;
+      }
+      const urlPkg = searchParams.get('package_id')?.trim();
+      if (urlPkg && packageList.some((p) => String(p.id) === urlPkg)) {
+        return { ...f, package_id: urlPkg };
+      }
+      if (packageList.length === 1) {
+        return { ...f, package_id: String(packageList[0].id) };
+      }
+      return { ...f, package_id: '' };
+    });
+  }, [packageList, searchParams]);
+
   const { data: payablePreview } = useQuery({
-    queryKey: ['regPayablePreview', form.batch_slug, form.package_id, form.country_id, form.email, selectedSubscription],
-    enabled: step === 2 && !!form.batch_slug && !!form.package_id && !!selectedSubscription,
+    queryKey: ['regPayablePreview', form.batch_slug, form.package_id, form.country_id, form.email, selectedSubscription, form.coupon_code],
+    enabled: !!form.batch_slug && !!form.package_id && !!selectedSubscription,
     queryFn: () =>
       apiClient('/registration/payable-amount', {
         method: 'POST',
@@ -127,17 +180,146 @@ export default function Register() {
           country_id: parseInt(String(form.country_id), 10),
           subscription: selectedSubscription,
           email: String(form.email || '').trim().toLowerCase(),
+          coupon_code: String(form.coupon_code || '').trim() || undefined,
         }),
       }),
   });
 
-  const update = (k: string, v: any) => setForm({ ...form, [k]: v });
+  const currencySymbol =
+    (payablePreview?.currency_name || selectedPackage?.currency_name || packageList[0]?.currency_name) === 'USD'
+      ? '$'
+      : '₹';
+
+  const displayTotal = Number(
+    payablePreview?.total_amount ?? selectedPackage?.total_amount ?? 0,
+  );
+
+  const update = (k: string, v: any) => setForm((prev) => ({ ...prev, [k]: v }));
+
+  const selectBatch = (slug: string) => {
+    setForm((prev) => ({ ...prev, batch_slug: slug, package_id: '' }));
+  };
   const formatDurationLabel = (months?: number | null) => {
     if (!months) return '';
-    if (months === 12) return '1 Year';
+    if (months === 12) return '12 Months (1 Year)';
     return `${months} Months`;
   };
   const isPaymentStep = step === 2;
+
+  const renderPackageAndAmount = (opts?: { showCoupon?: boolean }) => {
+    const showCoupon = opts?.showCoupon ?? false;
+    if (!form.batch_slug) return null;
+
+    return (
+      <div className="mt-4 p-4 border border-border-soft rounded-sm bg-chalk-warm/80">
+        <div className="font-mono text-[10px] text-ink-faint uppercase tracking-[0.12em] mb-3">
+          {selectedSubscription ? `${selectedSubscription} — ` : ''}Fee & package
+        </div>
+
+        {pkgsLoading && (
+          <p className="font-mono text-xs text-ink-faint animate-pulse py-4 text-center">Loading packages…</p>
+        )}
+
+        {!pkgsLoading && packageList.length === 0 && (
+          <p className="font-sans text-xs text-amber-700">
+            No active packages for this batch and country. Try another country or contact support.
+          </p>
+        )}
+
+        {!pkgsLoading && packageList.length > 0 && isSubscriptionBatch && (
+          <div className="space-y-3">
+            <label className="font-mono text-[10px] text-ink-faint uppercase tracking-[0.12em] block">
+              Choose subscription plan
+            </label>
+            <div className="grid grid-cols-1 gap-2">
+              {subscriptionPackages.map((p) => (
+                <label
+                  key={p.id}
+                  className={`flex items-center justify-between px-4 py-3 border rounded-sm cursor-pointer transition-all ${
+                    form.package_id === String(p.id)
+                      ? 'border-mint bg-mint-pale'
+                      : 'border-border-soft hover:bg-chalk'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="radio"
+                      name="subscription_package"
+                      value={p.id}
+                      checked={form.package_id === String(p.id)}
+                      onChange={() => update('package_id', String(p.id))}
+                      className="accent-mint w-4 h-4"
+                    />
+                    <span className="font-sans text-sm font-bold text-slate">
+                      {formatDurationLabel(p.duration_months)}
+                    </span>
+                  </div>
+                  <span className="font-display font-bold text-slate">
+                    {p.currency_name === 'USD' ? '$' : '₹'}
+                    {p.total_amount.toLocaleString()}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!pkgsLoading && packageList.length > 0 && !isSubscriptionBatch && (
+          <div className="space-y-2">
+            {packageList.map((p) => (
+              <label
+                key={p.id}
+                className={`flex items-center justify-between p-3 rounded-sm border cursor-pointer transition-all ${
+                  form.package_id === String(p.id) ? 'border-mint bg-mint-pale' : 'border-border-soft hover:bg-chalk'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="package"
+                    value={p.id}
+                    checked={form.package_id === String(p.id)}
+                    onChange={() => update('package_id', String(p.id))}
+                    className="accent-mint"
+                  />
+                  <span className="font-sans text-sm font-semibold text-slate">{p.name}</span>
+                </div>
+                <span className="font-display font-bold text-slate">
+                  {p.currency_name === 'USD' ? '$' : '₹'}
+                  {p.total_amount.toLocaleString()}
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
+
+        {form.package_id && (
+          <div className="mt-4 pt-4 border-t border-border-soft">
+            {showCoupon && (
+              <input
+                value={form.coupon_code || ''}
+                onChange={(e) => update('coupon_code', e.target.value)}
+                placeholder="Coupon Code (Optional)"
+                className="w-full mb-4 bg-chalk border border-border-soft rounded-sm py-3 px-4 font-mono text-xs text-ink focus:border-mint/50 outline-none"
+              />
+            )}
+            <div className="text-right">
+              <div className="font-mono text-xs text-ink-faint mb-1">Amount to pay</div>
+              <div className="font-display font-black text-4xl text-mint leading-none">
+                {currencySymbol}
+                {displayTotal.toLocaleString()}
+              </div>
+              {selectedPackage?.plan_type === 'subscription' && selectedPackage.duration_months && (
+                <p className="font-sans text-xs text-ink-muted mt-2">
+                  Subscription access for {formatDurationLabel(selectedPackage.duration_months)}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -170,11 +352,20 @@ export default function Register() {
                 alert("Please upload the required document");
                 return;
             }
+            if (packageList.length > 0 && !form.package_id) {
+                alert(isSubscriptionBatch ? 'Please select a subscription duration (6, 9, or 12 months)' : 'Please select a package');
+                return;
+            }
         }
         setStep(step + 1); 
         return; 
     }
     
+    if (!form.package_id) {
+      alert(isSubscriptionBatch ? 'Please select a subscription duration' : 'Please select a package');
+      return;
+    }
+
     setLoading(true);
     let resInit;
     try {
@@ -361,10 +552,11 @@ export default function Register() {
                   <div>
                     <label className="font-mono text-[10px] text-ink-faint uppercase tracking-[0.12em] mb-1.5 block">Password (Exact 8 chars)</label>
                     <input type="password" value={form.password || ''} maxLength={8} minLength={8} onChange={(e) => update('password', e.target.value)} className="w-full bg-chalk border border-border-soft rounded-sm py-3 px-4 font-sans text-sm text-ink focus:border-mint/50 outline-none" required />
+                    <PasswordEightHint value={form.password || ''} />
                   </div>
                   <div>
                     <label className="font-mono text-[10px] text-ink-faint uppercase tracking-[0.12em] mb-1.5 block">Re-type Password</label>
-                    <input type="password" value={form.retype_password || ''} onChange={(e) => update('retype_password', e.target.value)} className="w-full bg-chalk border border-border-soft rounded-sm py-3 px-4 font-sans text-sm text-ink focus:border-mint/50 outline-none" required />
+                    <input type="password" value={form.retype_password || ''} maxLength={8} minLength={8} onChange={(e) => update('retype_password', e.target.value)} className="w-full bg-chalk border border-border-soft rounded-sm py-3 px-4 font-sans text-sm text-ink focus:border-mint/50 outline-none" required />
                   </div>
                 </div>
                 <div>
@@ -378,11 +570,38 @@ export default function Register() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                    <div>
                     <label className="font-mono text-[10px] text-ink-faint uppercase tracking-[0.12em] mb-1.5 block">Country</label>
-                    <select value={form.country_id || ''} onChange={(e) => update('country_id', e.target.value)} className="w-full bg-chalk border border-border-soft rounded-sm py-3 px-4 font-sans text-sm text-ink outline-none">
-                      {countries?.map((c: any) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
+                    <select
+                      value={form.country_id || ''}
+                      onChange={(e) => update('country_id', e.target.value)}
+                      disabled={countriesLoading}
+                      className="w-full bg-chalk border border-border-soft rounded-sm py-3 px-4 font-sans text-sm text-ink outline-none disabled:opacity-60"
+                    >
+                      <option value="" disabled>
+                        {countriesLoading ? 'Loading countries…' : 'Select country'}
+                      </option>
+                      {(countries ?? []).map((c: { id: number; name: string }) => (
+                        <option key={c.id} value={c.id} className="text-slate bg-white">
+                          {c.name}
+                        </option>
                       ))}
                     </select>
+                    {countriesError && (
+                      <p className="mt-1.5 font-sans text-xs text-red-600">
+                        Could not load countries: {(countriesErr as Error)?.message || 'network error'}.{' '}
+                        <button
+                          type="button"
+                          className="underline"
+                          onClick={() => void refetchCountries()}
+                        >
+                          Retry
+                        </button>
+                      </p>
+                    )}
+                    {!countriesLoading && !countriesError && (countries?.length ?? 0) === 0 && (
+                      <p className="mt-1.5 font-sans text-xs text-amber-700">
+                        No countries returned from the server. Check that the API is running and reachable.
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="font-mono text-[10px] text-ink-faint uppercase tracking-[0.12em] mb-1.5 block">State / Region</label>
@@ -452,98 +671,46 @@ export default function Register() {
                 </div>
                 <div className="pt-4 border-t border-border-soft">
                   <label className="font-mono text-[10px] text-ink-faint uppercase tracking-[0.12em] mb-2 block">Choose Course</label>
-                  <div className="grid grid-cols-1 gap-2">
+                  <div className="grid grid-cols-1 gap-2" role="radiogroup" aria-label="Choose course">
                     {chooseCourseBatches.map((b: any) => (
-                      <button
+                      <label
                         key={b.slug}
-                        type="button"
-                        onClick={() => update('batch_slug', b.slug)}
-                        className={`flex items-center justify-between px-4 py-3 border rounded-sm transition-all ${
+                        className={`flex items-center justify-between px-4 py-3 border rounded-sm cursor-pointer transition-all ${
                           form.batch_slug === b.slug ? 'border-mint bg-mint-pale' : 'border-border-soft hover:bg-chalk'
                         }`}
                       >
-                         <div className="flex items-center gap-3">
-                            <div className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${form.batch_slug === b.slug ? 'border-mint bg-mint' : 'border-border-strong'}`}>
-                                {form.batch_slug === b.slug && <Check size={8} className="text-white" />}
-                            </div>
-                            <div className="font-sans text-sm font-bold text-slate">{b.displayTitle}</div>
-                         </div>
-                         <ChevronRight size={12} className="text-ink-faint" />
-                      </button>
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="radio"
+                            name="batch_slug"
+                            value={b.slug}
+                            checked={form.batch_slug === b.slug}
+                            onChange={() => selectBatch(b.slug)}
+                            className="accent-mint w-4 h-4 shrink-0"
+                          />
+                          <span className="font-sans text-sm font-bold text-slate">{b.displayTitle}</span>
+                        </div>
+                        <ChevronRight size={12} className="text-ink-faint shrink-0" aria-hidden />
+                      </label>
                     ))}
                   </div>
+                  {!form.batch_slug && (
+                    <p className="mt-2 font-sans text-xs text-ink-muted">Select a batch to see fee and subscription options.</p>
+                  )}
+                  {renderPackageAndAmount()}
                 </div>
               </motion.div>
             )}
             {step === 2 && (
               <motion.div key="s2" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
-                <div className="font-mono text-xs text-ink-faint uppercase tracking-[0.12em] mb-3">Confirm Package & Payment</div>
-                
-                {pkgsLoading && <div className="py-12 text-center animate-pulse font-mono text-xs text-ink-faint">Evaluating regional pricing...</div>}
-                
-                <div className="space-y-3">
-                  {packages?.map((p: any) => (
-                    <label
-                      key={p.id}
-                      className={`flex items-center justify-between p-4 rounded-sm border cursor-pointer transition-all ${
-                        form.package_id === String(p.id) ? 'border-mint bg-mint-pale' : 'border-border-soft hover:border-border-strong'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <input type="radio" name="package" value={p.id} checked={form.package_id === String(p.id)} onChange={() => update('package_id', String(p.id))} className="hidden" />
-                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${form.package_id === String(p.id) ? 'border-mint' : 'border-border-strong'}`}>
-                          {form.package_id === String(p.id) && <div className="w-2 rounded-full bg-mint h-2" />}
-                        </div>
-                        <div>
-                          <div className="font-sans text-sm font-bold text-slate flex items-center gap-2">
-                             {p.name}
-                             {p.name.toLowerCase().includes('early') && <span className="bg-amber/10 text-amber text-[7px] px-1.5 py-0.5 rounded-sm uppercase border border-amber/20 flex items-center gap-1"><Sparkles size={7}/> Early Bird</span>}
-                             {p.plan_type === 'subscription' && (
-                               <span className="bg-mint-pale text-slate text-[9px] px-1.5 py-0.5 rounded-sm uppercase border border-mint/30">
-                                 Subscription {formatDurationLabel(p.duration_months)}
-                               </span>
-                             )}
-                             {p.plan_type !== 'subscription' && (
-                               <span className="bg-ink-ghost text-slate text-[9px] px-1.5 py-0.5 rounded-sm uppercase border border-border-soft">
-                                 One-time
-                               </span>
-                             )}
-                          </div>
-                          {foreignOfferText && form.package_id === String(p.id) && (
-                            <p className="mt-1 font-sans text-[11px] font-semibold uppercase tracking-wide text-amber">
-                              {foreignOfferText}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="font-display font-black text-lg text-slate">{packages[0]?.currency_name === 'USD' ? '$' : '₹'}{p.total_amount.toLocaleString()}</div>
-                    </label>
-                  ))}
-                </div>
-
-                {form.package_id && (
-                  <div className="pt-4 space-y-4">
-                    <div className="flex items-center gap-3">
-                       <input 
-                         value={form.coupon_code || ''} 
-                         onChange={(e) => update('coupon_code', e.target.value)}
-                         placeholder="Coupon Code (Optional)"
-                         className="flex-1 bg-chalk border border-border-soft rounded-sm py-3 px-4 font-mono text-xs text-ink focus:border-mint/50 outline-none"
-                       />
-                    </div>
-                    
-                    <div className="mt-6 pt-6 border-t border-border-soft text-right">
-                      <div className="font-mono text-xs text-ink-faint mb-1">TOTAL PAYABLE</div>
-                      <div className="font-display font-black text-5xl text-mint leading-none">
-                        {(payablePreview?.currency_name || packages?.find((p: any) => String(p.id) === form.package_id)?.currency_name) === 'USD' ? '$' : '₹'}
-                        {Number(payablePreview?.total_amount ?? packages?.find((p: any) => String(p.id) === form.package_id)?.total_amount ?? 0).toLocaleString()}
-                      </div>
-                      <p className="font-sans text-xs text-ink-muted mt-4 text-center sm:text-right max-w-[300px] ml-auto">
-                          Secure payment via Razorpay. Access will be enabled immediately after successful transaction.
-                      </p>
-                    </div>
-                  </div>
+                <div className="font-mono text-xs text-ink-faint uppercase tracking-[0.12em] mb-3">Confirm & pay</div>
+                {foreignOfferText && form.package_id && (
+                  <p className="font-sans text-[11px] font-semibold uppercase tracking-wide text-amber">{foreignOfferText}</p>
                 )}
+                {renderPackageAndAmount({ showCoupon: true })}
+                <p className="font-sans text-xs text-ink-muted text-center sm:text-right">
+                  Secure payment via Razorpay. Access is enabled after successful payment.
+                </p>
               </motion.div>
             )}
           </AnimatePresence>
