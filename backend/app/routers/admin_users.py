@@ -17,6 +17,7 @@ from app.admin_security import get_current_admin
 from app.core.config import get_settings
 from app.db import SessionLocal, get_db
 from app.models import Country, CouponMaster, Package, User, UserPackagePayment
+from app.services.access import admin_subscription_summary, batch_admin_subscription_summaries
 from app.services.mailer import send_html_email
 from app.services.payments import apply_offline_registration_credit, sync_registration_payment_from_razorpay, try_send_registration_thank_you_email, _package_for_thank_you_email
 from app.services.s3_storage import (
@@ -226,12 +227,15 @@ def list_users(
         .all()
     )
     settings = get_settings()
+    user_rows = [row[0] for row in rows]
+    subscription_summaries = batch_admin_subscription_summaries(db, user_rows)
     items = []
     for row in rows:
         u = row[0]
         country_name = row[1]
         d = _serialize_user_admin(u)
         d["country_name"] = country_name
+        d["subscription_access"] = subscription_summaries.get(u.id) or admin_subscription_summary(u)
         _attach_document_urls(d, u, settings)
         items.append(d)
     return PagedUsersResponse(total=total, items=items)
@@ -556,6 +560,11 @@ def export_users_csv(
     if approve is not None and approve != "":
         query = query.filter(func.coalesce(User.approve, "") == approve)
     rows = query.order_by(User.id.desc()).all()
+    packages: dict[int, Package] = {}
+    pkg_ids = {u.package_id for u in rows if u.package_id}
+    if pkg_ids:
+        packages = {p.id: p for p in db.query(Package).filter(Package.id.in_(pkg_ids)).all()}
+    subs_map = batch_admin_subscription_summaries(db, rows)
 
     buf = io.StringIO()
     w = csv.writer(buf)
@@ -566,6 +575,11 @@ def export_users_csv(
             "email",
             "contact_number",
             "subscription",
+            "plan_type",
+            "package_name",
+            "course_start_at",
+            "course_end_at",
+            "access_status",
             "payment_status",
             "payment_type",
             "payment_date",
@@ -577,6 +591,7 @@ def export_users_csv(
         ]
     )
     for u in rows:
+        acc = subs_map.get(u.id) or admin_subscription_summary(u, pkg=packages.get(u.package_id) if u.package_id else None)
         w.writerow(
             [
                 u.id,
@@ -584,6 +599,11 @@ def export_users_csv(
                 u.email or "",
                 u.contact_number or "",
                 u.subscription or "",
+                acc.get("plan_type_label") or "",
+                acc.get("package_name") or "",
+                acc.get("course_start_at") or "",
+                acc.get("course_end_at") or "",
+                acc.get("access_status") or "",
                 u.payment_status or "",
                 u.payment_type or "",
                 u.payment_date.isoformat() if u.payment_date else "",
@@ -652,6 +672,8 @@ def get_user(user_id: int, db: Session = Depends(get_db)) -> dict:
     settings = get_settings()
     udict = _serialize_user_admin(user)
     udict["country_name"] = _country_name_for_user(db, user.country_id)
+    pkg = db.query(Package).filter(Package.id == user.package_id).first() if user.package_id else None
+    udict["subscription_access"] = admin_subscription_summary(user, pkg=pkg)
     _attach_document_urls(udict, user, settings)
     pay_rows = (
         db.query(UserPackagePayment)

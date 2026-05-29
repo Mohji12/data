@@ -62,6 +62,7 @@ REGISTRATION_SLUG_ALIASES: dict[str, str] = {
     "ccm-practical-series-batch-3": "practical-series-batch-3",
     "ccm-3": "practical-series-batch-3",
     "ccm-batch-3": "practical-series-batch-3",
+    "edic-10": "batch-10-edic-1",
 }
 
 # When `batch_master` label differs from `package.subscription` (PHP legacy names).
@@ -76,6 +77,8 @@ BATCH_SLUG_TO_PACKAGE_SUBSCRIPTION: dict[str, str] = {
     "ccm-3": "CCM Batch 3",
     "ccm-batch-3": "CCM Batch 3",
     "batch-16-mccm": "BATCH 16-MCCM",
+    "edic-10": "Batch EDIC 10",
+    "batch-10-edic-1": "Batch EDIC 10",
 }
 
 # Public fee/registration URL slug → exact `batch_master.name` (case-insensitive) when DB uses different labels.
@@ -871,8 +874,12 @@ def initialize_registration(
     db: Session, payload: RegistrationInitRequest
 ) -> RegistrationInitResponse:
     batch = _validate_registration_payload(db, payload)
+    batch_row, _ = get_batch_master_row_by_slug(db, payload.batch_slug)
     package = _resolve_package_or_400(db, payload.package_id)
     _assert_package_eligible_for_batch(db, package, batch, payload.country_id)
+
+    # Always store canonical batch_master.name on users.subscription (matches PHP hidden fields).
+    canonical_subscription = (batch_row.name or "").strip() or package_subscription_for_batch(batch)
 
     # Auto-set registration_type based on country (PHP parity)
     if _is_india_country(db, payload.country_id):
@@ -906,7 +913,7 @@ def initialize_registration(
 
     user = User(
         registration_type=reg_type,
-        subscription=payload.subscription,
+        subscription=canonical_subscription,
         title=payload.title,
         name=payload.name,
         email=payload.email.strip().lower(),

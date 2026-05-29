@@ -142,6 +142,22 @@ export default function AdminUserDetail() {
     u.document_file_2_url != null ? String(u.document_file_2_url) : null,
     u.document_file_2 != null ? String(u.document_file_2) : null,
   );
+  const access = (u.subscription_access || null) as {
+    plan_type_label?: string;
+    package_name?: string;
+    course_start_at?: string;
+    course_end_at?: string;
+    access_status?: string;
+    days_remaining?: number | null;
+    duration_months?: number | null;
+  } | null;
+
+  const formatCourseDate = (iso?: string) => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleString();
+  };
 
   return (
     <div className="p-6 lg:p-8">
@@ -177,6 +193,32 @@ export default function AdminUserDetail() {
             <div key={key} className="flex justify-between gap-4 text-sm border-b border-border-soft/60 pb-2 last:border-0">
               <span className="font-mono text-[10px] text-ink-faint uppercase">{label}</span>
               <span className="text-ink text-right break-all">{str(key)}</span>
+            </div>
+          ))}
+        </section>
+
+        <section className="bg-chalk border border-border-soft rounded-sm p-6 space-y-3">
+          <h2 className="font-display font-bold text-lg text-slate">Course access</h2>
+          {[
+            ['Plan type', access?.plan_type_label || '—'],
+            ['Package', access?.package_name || '—'],
+            ['Duration', access?.duration_months ? `${access.duration_months} months` : '—'],
+            ['Course started', formatCourseDate(access?.course_start_at)],
+            ['Course ends', formatCourseDate(access?.course_end_at)],
+            [
+              'Access status',
+              access?.access_status
+                ? access.access_status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+                : '—',
+            ],
+            [
+              'Days remaining',
+              typeof access?.days_remaining === 'number' ? String(access.days_remaining) : '—',
+            ],
+          ].map(([label, value]) => (
+            <div key={label} className="flex justify-between gap-4 text-sm border-b border-border-soft/60 pb-2 last:border-0">
+              <span className="font-mono text-[10px] text-ink-faint uppercase">{label}</span>
+              <span className="text-ink text-right break-all">{value}</span>
             </div>
           ))}
         </section>

@@ -146,6 +146,10 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const seekBarRef = useRef<HTMLDivElement>(null);
+  const volumeBarRef = useRef<HTMLDivElement>(null);
+  const volumeControlRef = useRef<HTMLDivElement>(null);
+  const hideVolumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isVolumeDraggingRef = useRef(false);
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentSpeedRef = useRef(1);
   const playerReadyRef = useRef(false);
@@ -342,16 +346,75 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
     [applyVolume, isMuted, volume],
   );
 
-  const handleVolumeWheel = useCallback(
-    (e: React.WheelEvent<HTMLElement>) => {
+  const openVolumeControl = useCallback(() => {
+    if (hideVolumeTimerRef.current) {
+      clearTimeout(hideVolumeTimerRef.current);
+      hideVolumeTimerRef.current = null;
+    }
+    setShowVolumeControl(true);
+  }, []);
+
+  const scheduleHideVolumeControl = useCallback(() => {
+    if (isVolumeDraggingRef.current) return;
+    if (hideVolumeTimerRef.current) clearTimeout(hideVolumeTimerRef.current);
+    hideVolumeTimerRef.current = setTimeout(() => {
+      setShowVolumeControl(false);
+      hideVolumeTimerRef.current = null;
+    }, 400);
+  }, []);
+
+  const calcVolumeFromMouse = useCallback(
+    (clientX: number) => {
+      const bar = volumeBarRef.current;
+      if (!bar) return;
+      const rect = bar.getBoundingClientRect();
+      const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      applyVolume(pct);
+    },
+    [applyVolume],
+  );
+
+  const handleVolumeMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      openVolumeControl();
+      isVolumeDraggingRef.current = true;
+      calcVolumeFromMouse(e.clientX);
+
+      const onMove = (ev: MouseEvent) => calcVolumeFromMouse(ev.clientX);
+      const onUp = () => {
+        isVolumeDraggingRef.current = false;
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    },
+    [calcVolumeFromMouse, openVolumeControl],
+  );
+
+  useEffect(() => {
+    const el = volumeControlRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       e.stopPropagation();
       if (e.deltaY === 0) return;
-      setShowVolumeControl(true);
+      openVolumeControl();
       adjustVolume(e.deltaY < 0 ? VOLUME_STEP : -VOLUME_STEP);
-    },
-    [adjustVolume],
-  );
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [adjustVolume, openVolumeControl]);
+
+  useEffect(() => {
+    return () => {
+      if (hideVolumeTimerRef.current) clearTimeout(hideVolumeTimerRef.current);
+    };
+  }, []);
 
   const toggleMute = useCallback(() => {
     if (isMuted || volume === 0) {
@@ -906,7 +969,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
       {/* ─── Custom controls bar ─── */}
       <div
         className="
-          absolute bottom-0 left-0 right-0 z-20
+          absolute bottom-0 left-0 right-0 z-20 pointer-events-auto
           bg-gradient-to-t from-black/80 via-black/40 to-transparent
           pt-10 pb-2 px-3
           opacity-0 group-hover:opacity-100
@@ -916,6 +979,8 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
           e.preventDefault();
           e.stopPropagation();
         }}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
       >
         {/* Seek bar */}
         <div
@@ -1019,67 +1084,75 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
 
             {/* Volume: mute + slider + increase/decrease */}
             <div
-              className="relative flex items-center ml-1 touch-none"
-              onMouseEnter={() => setShowVolumeControl(true)}
-              onMouseLeave={() => setShowVolumeControl(false)}
-              onWheel={handleVolumeWheel}
+              ref={volumeControlRef}
+              className="relative flex items-center ml-1"
+              onMouseEnter={openVolumeControl}
+              onMouseLeave={scheduleHideVolumeControl}
             >
               {showVolumeControl && (
                 <div
-                  className="absolute bottom-full left-0 mb-2 flex items-center gap-1.5 bg-black/95 border border-white/10 rounded-md px-2 py-2 z-30 touch-none"
+                  className="absolute bottom-full left-0 pb-2 z-30"
+                  onMouseEnter={openVolumeControl}
+                  onMouseLeave={scheduleHideVolumeControl}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
                   }}
-                  onWheel={handleVolumeWheel}
                   onClick={(e) => e.stopPropagation()}
                   onMouseDown={(e) => e.stopPropagation()}
                 >
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      adjustVolume(-VOLUME_STEP);
-                    }}
-                    className="flex items-center justify-center w-6 h-6 text-white/80 hover:text-white transition-colors"
-                    title="Decrease volume"
-                    aria-label="Decrease volume"
-                  >
-                    <Minus size={14} />
-                  </button>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={Math.round((isMuted ? 0 : volume) * 100)}
-                    onChange={(e) => {
-                      e.stopPropagation();
-                      applyVolume(Number(e.target.value) / 100);
-                    }}
-                    onInput={(e) => {
-                      e.stopPropagation();
-                      applyVolume(Number(e.currentTarget.value) / 100);
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onWheel={handleVolumeWheel}
-                    className="w-24 h-2 accent-cyan-400 cursor-pointer appearance-auto"
-                    aria-label="Volume"
-                    title={`Volume ${Math.round((isMuted ? 0 : volume) * 100)}% — scroll or drag`}
-                  />
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      adjustVolume(VOLUME_STEP);
-                    }}
-                    className="flex items-center justify-center w-6 h-6 text-white/80 hover:text-white transition-colors"
-                    title="Increase volume"
-                    aria-label="Increase volume"
-                  >
-                    <Plus size={14} />
-                  </button>
+                  <div className="flex items-center gap-1.5 bg-black/95 border border-white/10 rounded-md px-2 py-2">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        adjustVolume(-VOLUME_STEP);
+                      }}
+                      className="flex items-center justify-center w-6 h-6 text-white/80 hover:text-white transition-colors"
+                      title="Decrease volume"
+                      aria-label="Decrease volume"
+                    >
+                      <Minus size={14} />
+                    </button>
+                    <div
+                      ref={volumeBarRef}
+                      className="
+                        w-24 h-2 bg-white/20 rounded-full cursor-pointer
+                        relative group/vol shrink-0
+                      "
+                      onMouseDown={handleVolumeMouseDown}
+                      role="slider"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.round((isMuted ? 0 : volume) * 100)}
+                      aria-label="Volume"
+                      title={`Volume ${Math.round((isMuted ? 0 : volume) * 100)}% — drag or scroll`}
+                    >
+                      <div
+                        className="h-full bg-cyan-400 rounded-full relative pointer-events-none"
+                        style={{ width: `${(isMuted ? 0 : volume) * 100}%` }}
+                      >
+                        <div
+                          className="
+                            absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2
+                            w-3 h-3 bg-cyan-400 rounded-full shadow-md
+                          "
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        adjustVolume(VOLUME_STEP);
+                      }}
+                      className="flex items-center justify-center w-6 h-6 text-white/80 hover:text-white transition-colors"
+                      title="Increase volume"
+                      aria-label="Increase volume"
+                    >
+                      <Plus size={14} />
+                    </button>
+                  </div>
                 </div>
               )}
               <button
@@ -1092,7 +1165,6 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
                   e.preventDefault();
                   e.stopPropagation();
                 }}
-                onWheel={handleVolumeWheel}
                 className="
                   flex items-center justify-center w-7 h-7
                   text-white/80 hover:text-white

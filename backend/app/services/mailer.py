@@ -58,11 +58,24 @@ def send_html_email(
     msg.add_alternative(html, subtype="html")
 
     logger.debug("Sending email to=%s subject=%r via %s:%s", to_email, subject, settings.smtp_host, settings.smtp_port)
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=_SMTP_TIMEOUT) as smtp:
-        smtp.ehlo()
-        smtp.starttls()
-        smtp.ehlo()
-        if settings.smtp_username:
-            smtp.login(settings.smtp_username, settings.smtp_password)
-        smtp.send_message(msg)
+    try:
+        port = int(settings.smtp_port or 587)
+        use_ssl = port == 465
+        if use_ssl:
+            smtp_ctx = smtplib.SMTP_SSL(settings.smtp_host, port, timeout=_SMTP_TIMEOUT)
+        else:
+            smtp_ctx = smtplib.SMTP(settings.smtp_host, port, timeout=_SMTP_TIMEOUT)
+        with smtp_ctx as smtp:
+            smtp.ehlo()
+            if not use_ssl:
+                smtp.starttls()
+                smtp.ehlo()
+            if settings.smtp_username:
+                smtp.login(settings.smtp_username, settings.smtp_password)
+            smtp.send_message(msg)
+    except smtplib.SMTPAuthenticationError as exc:
+        raise RuntimeError(
+            "SMTP login failed (535). Check SMTP_USERNAME and SMTP_PASSWORD in backend .env — "
+            "for SMTP2GO use Sending → SMTP Users credentials; for ZeptoMail use the Send Mail token."
+        ) from exc
     logger.info("Email sent successfully to=%s subject=%r", to_email, subject)

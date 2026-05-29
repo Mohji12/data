@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiClient } from '@/lib/apiClient';
 import { getApiBaseUrl } from '@/lib/apiBase';
@@ -61,6 +61,15 @@ function formatCategory(value: string | null | undefined): string {
   return value || '—';
 }
 
+function isPendingPayment(status: string | null | undefined): boolean {
+  const v = (status || '').trim().toLowerCase();
+  return v === 'pending' || v === '';
+}
+
+function isPaidPayment(status: string | null | undefined): boolean {
+  return (status || '').trim().toLowerCase() === 'credit';
+}
+
 function formatPaymentStatus(value: string | null | undefined): string {
   const v = (value || '').trim().toLowerCase();
   if (v === 'credit') return 'Paid (Credit)';
@@ -117,7 +126,53 @@ export default function AdminEventRegistrations() {
   const [page, setPage] = useState(1);
   const pageSize = 25;
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const queryClient = useQueryClient();
 
+  const approveMutation = useMutation({
+    mutationFn: (payload: { id: number; force_manual?: boolean; resend_email?: boolean }) =>
+      apiClient(`/admin/events/registrations/${payload.id}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({
+          force_manual: payload.force_manual ?? false,
+          resend_email: payload.resend_email ?? false,
+        }),
+      }) as Promise<{ message?: string; email_sent?: boolean; payment_status?: string }>,
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ['adminEventRegistrations'] });
+      void queryClient.invalidateQueries({ queryKey: ['adminEventRegistrationDetail'] });
+      toast.success(
+        result.email_sent
+          ? result.message || 'Approved and confirmation email sent'
+          : result.message || 'Approved (email could not be sent — check SMTP)',
+      );
+    },
+    onError: (err: unknown) => {
+      toast.error(err instanceof Error ? err.message : 'Approval failed');
+    },
+  });
+
+  const handleApprove = async (id: number, forceManual = false) => {
+    if (
+      forceManual &&
+      !window.confirm(
+        'Razorpay could not verify this payment. Mark as paid manually and send the confirmation email?',
+      )
+    ) {
+      return;
+    }
+    try {
+      await approveMutation.mutateAsync({ id, force_manual: forceManual });
+    } catch {
+      if (!forceManual) {
+        const retry = window.confirm(
+          'Could not verify payment on Razorpay. Approve manually anyway and send confirmation email?',
+        );
+        if (retry) {
+          await handleApprove(id, true);
+        }
+      }
+    }
+  };
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['adminEventRegistrations', q, paymentStatus, category, page],
     queryFn: () => {
@@ -142,12 +197,12 @@ export default function AdminEventRegistrations() {
   const total: number = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  const exportCsv = async () => {
+  const exportExcel = async () => {
     try {
       const token =
         sessionStorage.getItem('admin_access_token') || localStorage.getItem('access_token');
       const params = paymentStatus ? `?payment_status=${encodeURIComponent(paymentStatus)}` : '';
-      const url = `${getApiBaseUrl()}/admin/events/registrations/export.csv${params}`;
+      const url = `${getApiBaseUrl()}/admin/events/registrations/export.xlsx${params}`;
       const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -156,9 +211,10 @@ export default function AdminEventRegistrations() {
       const dl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = dl;
-      a.download = 'event-registrations.csv';
+      a.download = `event-registrations-${new Date().toISOString().slice(0, 10)}.xlsx`;
       a.click();
       URL.revokeObjectURL(dl);
+      toast.success('Excel file downloaded');
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Export failed');
     }
@@ -175,10 +231,10 @@ export default function AdminEventRegistrations() {
         </div>
         <button
           type="button"
-          onClick={() => void exportCsv()}
+          onClick={() => void exportExcel()}
           className="magnetic bg-slate text-chalk rounded-sm px-5 py-2.5 font-sans text-xs font-semibold hover:bg-slate-light"
         >
-          Export CSV
+          Download Excel
         </button>
       </div>
 
@@ -279,13 +335,25 @@ export default function AdminEventRegistrations() {
                     </span>
                   </td>
                   <td className="p-3">
-                    <button
-                      type="button"
-                      className="text-mint text-xs hover:underline"
-                      onClick={() => setSelectedId(row.id)}
-                    >
-                      View
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="text-mint text-xs hover:underline"
+                        onClick={() => setSelectedId(row.id)}
+                      >
+                        View
+                      </button>
+                      {isPendingPayment(row.payment_status) && (
+                        <button
+                          type="button"
+                          className="text-slate text-xs font-semibold hover:underline disabled:opacity-50"
+                          disabled={approveMutation.isPending}
+                          onClick={() => void handleApprove(row.id)}
+                        >
+                          Approve
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))
@@ -377,6 +445,30 @@ export default function AdminEventRegistrations() {
                 <DetailRow label="Razorpay order ID" value={detail.payment_txn.gateway_order_id || '—'} />
                 <DetailRow label="Razorpay payment ID" value={detail.payment_txn.gateway_payment_id || '—'} />
               </DetailSection>
+            )}
+
+            {isPendingPayment(detail.payment_status) && (
+              <button
+                type="button"
+                className="mt-2 w-full bg-slate text-chalk py-2.5 rounded-sm font-sans text-sm font-semibold hover:bg-slate-light disabled:opacity-50"
+                disabled={approveMutation.isPending}
+                onClick={() => void handleApprove(detail.id)}
+              >
+                {approveMutation.isPending ? 'Approving…' : 'Approve payment & send email'}
+              </button>
+            )}
+
+            {isPaidPayment(detail.payment_status) && (
+              <button
+                type="button"
+                className="mt-2 w-full border border-border-soft py-2 rounded-sm font-sans text-sm disabled:opacity-50"
+                disabled={approveMutation.isPending}
+                onClick={() =>
+                  void approveMutation.mutateAsync({ id: detail.id, force_manual: false, resend_email: true })
+                }
+              >
+                Resend confirmation email
+              </button>
             )}
 
             <button

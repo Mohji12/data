@@ -19,6 +19,17 @@ type EmailTemplateRow = {
   status: string;
 };
 
+type SubscriptionAccess = {
+  plan_type?: string | null;
+  plan_type_label?: string | null;
+  package_name?: string | null;
+  duration_months?: number | null;
+  course_start_at?: string | null;
+  course_end_at?: string | null;
+  access_status?: string | null;
+  days_remaining?: number | null;
+};
+
 type AdminUserRow = {
   id: number;
   registration_type?: string | null;
@@ -51,6 +62,7 @@ type AdminUserRow = {
   password_encrypted?: string | null;
   plaintext_password?: string | null;
   created_at?: string | null;
+  subscription_access?: SubscriptionAccess | null;
 };
 
 function resolveDocUrl(u: AdminUserRow, which: 1 | 2): string | null {
@@ -108,6 +120,31 @@ function paymentBadgeLabel(status?: string | null): string {
   if (s === 'failed') return 'Failed';
   if (s === 'refund') return 'Refund';
   return status;
+}
+
+function accessStatusLabel(status?: string | null): string {
+  const s = (status || '').toLowerCase();
+  if (s === 'active') return 'Active';
+  if (s === 'expired') return 'Expired';
+  if (s === 'pending') return 'Pending';
+  if (s === 'no_payment') return 'Unpaid';
+  return status || '—';
+}
+
+function accessStatusClasses(status?: string | null): string {
+  const s = (status || '').toLowerCase();
+  if (s === 'active') return 'bg-mint-pale border-mint/25 text-mint';
+  if (s === 'expired') return 'bg-blush/15 border-blush/35 text-blush';
+  if (s === 'no_payment') return 'bg-chalk-cool border-border-soft text-ink-faint';
+  return 'bg-amber-50 border-amber-200 text-amber-800';
+}
+
+function formatCourseDate(iso?: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`;
 }
 
 export default function AdminUsers() {
@@ -403,7 +440,7 @@ export default function AdminUsers() {
     return <span className="ml-1 text-mint">{order === 'asc' ? '↑' : '↓'}</span>;
   };
 
-  const COL_COUNT = 22;
+  const COL_COUNT = 26;
 
   return (
     <div className="p-6 lg:p-8 min-w-0 max-w-full">
@@ -703,13 +740,17 @@ export default function AdminUsers() {
 
       <div className="bg-chalk border border-border-soft rounded-sm shadow-sm w-full min-w-0">
         <div className="overflow-x-auto overscroll-x-auto [-webkit-overflow-scrolling:touch]">
-          <table className="w-full border-collapse min-w-[2480px] text-left">
+          <table className="w-full border-collapse min-w-[2920px] text-left">
             <thead>
               <tr className="bg-chalk-cool border-b border-border-soft">
                 {[
                   { id: 'id', label: 'ID' },
                   { id: 'registration_type', label: 'Type' },
                   { id: 'subscription', label: 'Batch' },
+                  { label: 'Plan type' },
+                  { label: 'Course start' },
+                  { label: 'Course end' },
+                  { label: 'Access' },
                   { id: 'name', label: 'Name' },
                   { id: 'email', label: 'Email' },
                   { label: 'Password' },
@@ -776,6 +817,7 @@ export default function AdminUsers() {
                 const canSendMail = isCredit && approved && u.has_password;
                 const showRefundDeactive = isCredit && approved;
                 const showPaymentActions = !isCredit;
+                const access = u.subscription_access;
 
                 return (
                   <tr key={u.id} className="border-b border-border-soft hover:bg-ink-ghost transition-colors align-top">
@@ -785,6 +827,31 @@ export default function AdminUsers() {
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-ink-muted max-w-[100px] truncate" title={u.subscription || ''}>
                       {u.subscription || '—'}
+                    </td>
+                    <td
+                      className="px-3 py-2 font-sans text-xs text-ink-muted max-w-[120px] truncate"
+                      title={[access?.plan_type_label, access?.package_name].filter(Boolean).join(' · ') || ''}
+                    >
+                      <div className="leading-snug">{access?.plan_type_label || '—'}</div>
+                      {access?.package_name ? (
+                        <div className="font-mono text-[10px] text-ink-faint truncate">{access.package_name}</div>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs whitespace-nowrap text-ink-muted">
+                      {formatCourseDate(access?.course_start_at)}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs whitespace-nowrap text-ink-muted">
+                      <div>{formatCourseDate(access?.course_end_at)}</div>
+                      {typeof access?.days_remaining === 'number' && access.access_status === 'active' ? (
+                        <div className="text-[10px] text-ink-faint">{access.days_remaining}d left</div>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <span
+                        className={`inline-block font-mono text-[10px] font-bold px-2 py-0.5 rounded-sm border uppercase tracking-wide ${accessStatusClasses(access?.access_status)}`}
+                      >
+                        {accessStatusLabel(access?.access_status)}
+                      </span>
                     </td>
                     <td className="px-3 py-2 min-w-[120px]">
                       <Link to={`/admin/users/${u.id}`} className="font-sans text-xs font-semibold text-ink hover:text-mint leading-snug">

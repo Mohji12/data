@@ -6,13 +6,15 @@ from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel
+from openpyxl import Workbook
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.admin_security import get_current_admin
 from app.db import get_db
 from app.models import EventPaymentTxn, EventRegistration
+from app.services.event_payments import admin_approve_event_registration
 from app.services.event_registration import event_registration_slugs, icu_d_conclave_slug
 
 router = APIRouter(
@@ -27,6 +29,62 @@ _EVENT_SLUG = icu_d_conclave_slug()
 class PagedEventRegistrationsResponse(BaseModel):
     total: int
     items: list[dict[str, Any]]
+
+
+class AdminApproveEventRegistrationRequest(BaseModel):
+    force_manual: bool = False
+    resend_email: bool = False
+    payment_id: Optional[str] = Field(default=None, max_length=255)
+    admin_note: Optional[str] = Field(default=None, max_length=500)
+
+
+_EVENT_EXPORT_COLUMNS = [
+    "id",
+    "registration_number",
+    "full_name",
+    "designation",
+    "category",
+    "specialty",
+    "email",
+    "phone",
+    "country_name",
+    "hospital",
+    "city",
+    "state",
+    "council_state",
+    "council_registration_number",
+    "payment_status",
+    "amount_inr",
+    "payment_id",
+    "payment_type",
+    "payment_date",
+    "created_at",
+]
+
+
+def _export_row_values(r: EventRegistration) -> list[Any]:
+    return [
+        r.id,
+        r.registration_number,
+        r.full_name,
+        r.designation,
+        r.category,
+        r.specialty,
+        r.email,
+        r.phone,
+        r.country_name,
+        r.hospital,
+        r.city,
+        r.state,
+        r.council_state,
+        r.council_registration_number,
+        r.payment_status,
+        r.amount_inr,
+        r.payment_id,
+        r.payment_type,
+        r.payment_date.isoformat() if r.payment_date else "",
+        r.created_at.isoformat() if r.created_at else "",
+    ]
 
 
 def _serialize_registration(row: EventRegistration) -> dict[str, Any]:
@@ -136,71 +194,73 @@ def get_event_registration(
     return data
 
 
-@router.get("/registrations/export.csv")
-def export_event_registrations_csv(
-    payment_status: Optional[str] = Query(None),
+@router.post("/registrations/{registration_id}/approve")
+def approve_event_registration(
+    registration_id: int,
+    body: AdminApproveEventRegistrationRequest,
     db: Session = Depends(get_db),
-) -> Response:
+) -> dict[str, Any]:
+    """Verify Razorpay payment (or manually approve) and send confirmation email."""
+    return admin_approve_event_registration(
+        db,
+        registration_id,
+        force_manual=body.force_manual,
+        resend_email=body.resend_email,
+        payment_id=body.payment_id,
+        admin_note=body.admin_note,
+    )
+
+
+def _filtered_export_rows(db: Session, payment_status: Optional[str]) -> list[EventRegistration]:
     query = _base_query(db)
     if payment_status:
         query = query.filter(
             func.lower(func.trim(EventRegistration.payment_status))
             == payment_status.strip().lower()
         )
-    rows = query.order_by(EventRegistration.id.desc()).all()
+    return query.order_by(EventRegistration.id.desc()).all()
+
+
+@router.get("/registrations/export.csv")
+def export_event_registrations_csv(
+    payment_status: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    rows = _filtered_export_rows(db, payment_status)
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(
-        [
-            "id",
-            "registration_number",
-            "full_name",
-            "designation",
-            "category",
-            "specialty",
-            "email",
-            "phone",
-            "country_name",
-            "hospital",
-            "city",
-            "state",
-            "council_state",
-            "council_registration_number",
-            "payment_status",
-            "amount_inr",
-            "payment_id",
-            "payment_date",
-            "created_at",
-        ]
-    )
+    writer.writerow(_EVENT_EXPORT_COLUMNS)
     for r in rows:
-        writer.writerow(
-            [
-                r.id,
-                r.registration_number,
-                r.full_name,
-                r.designation,
-                r.category,
-                r.specialty,
-                r.email,
-                r.phone,
-                r.country_name,
-                r.hospital,
-                r.city,
-                r.state,
-                r.council_state,
-                r.council_registration_number,
-                r.payment_status,
-                r.amount_inr,
-                r.payment_id,
-                r.payment_date.isoformat() if r.payment_date else "",
-                r.created_at.isoformat() if r.created_at else "",
-            ]
-        )
+        writer.writerow(_export_row_values(r))
     filename = f"event-registrations-{_EVENT_SLUG}-{datetime.utcnow().strftime('%Y%m%d')}.csv"
     return Response(
         content=buf.getvalue(),
         media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/registrations/export.xlsx")
+def export_event_registrations_xlsx(
+    payment_status: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    rows = _filtered_export_rows(db, payment_status)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Registrations"
+    ws.append(_EVENT_EXPORT_COLUMNS)
+    for r in rows:
+        ws.append(_export_row_values(r))
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"event-registrations-{_EVENT_SLUG}-{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

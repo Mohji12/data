@@ -54,6 +54,8 @@ _SUBSCRIPTION_TO_SLUG: dict[str, str] = {
     "Batch EDIC 9": "batch_edic_9/thank_you",
     "CCM Batch 2": "ccm_batch_2/thank_you",
     "Batch 15": "batch_15/thank_you",
+    "BATCH 15": "batch_15/thank_you",
+    "BATCH 15- MASTER CLASSES IN CRITICAL CARE MEDICINE": "batch_15/thank_you",
     "BATCH 16-MCCM": "batch_15/thank_you",
     "Batch 16": "batch_15/thank_you",
     "CP 9": "cp_8/thank_you",
@@ -62,6 +64,19 @@ _SUBSCRIPTION_TO_SLUG: dict[str, str] = {
     "CCM Batch 3": "ccm_batch_2/thank_you",
     "CCM FOR MEDICINE": "ccm_batch_2/thank_you",
     "EDIC2026": "batch_edic_9/thank_you",
+}
+
+# Normalize legacy / display variants to keys in _SUBSCRIPTION_TO_SLUG.
+_SUBSCRIPTION_ALIASES: dict[str, str] = {
+    "edic 10": "Batch EDIC 10",
+    "batch 10 edic 1": "Batch EDIC 10",
+    "batch 10-edic 1": "Batch EDIC 10",
+    "batch 10-edic-1": "Batch EDIC 10",
+    "batch 15": "Batch 15",
+    "batch 15- master classes in critical care medicine": "Batch 15",
+    "mccm-batch 15": "Batch 15",
+    "batch 16": "Batch 16",
+    "batch 16-mccm": "BATCH 16-MCCM",
 }
 
 _LEGACY_EMAIL_LOGO_PATH = "assets/img/logo.png"
@@ -149,9 +164,24 @@ def _legacy_php_layout(content: str) -> str:
     """.strip()
 
 
+def normalize_subscription_for_email(subscription: str | None) -> str:
+    """Map display / legacy subscription labels to canonical thank-you template keys."""
+    sub = (subscription or "").strip()
+    if not sub:
+        return ""
+    if sub in _SUBSCRIPTION_TO_SLUG:
+        return sub
+    alias = _SUBSCRIPTION_ALIASES.get(sub.casefold())
+    if alias:
+        return alias
+    if re.fullmatch(r"edic\s*10", sub, flags=re.IGNORECASE):
+        return "Batch EDIC 10"
+    return sub
+
+
 def resolve_registration_thank_you_slug(subscription: str | None, package_name: str | None) -> str:
     """Relative path under email_template/ without .php (e.g. batch_15/thank_you, thank_you)."""
-    sub = (subscription or "").strip()
+    sub = normalize_subscription_for_email(subscription)
     pkg = (package_name or "").strip()
     if sub == "Batch 3":
         if pkg == "Option 1":
@@ -273,8 +303,18 @@ def render_registration_thank_you_html(user: User, package: Package | None) -> s
     Loads legacy .php view when EMAIL_TEMPLATE_PHP_ROOT points at application/views/email_template.
     """
     pkg_name = (package.name if package else None) or None
-    # Package.subscription matches PHP thank-you templates (CP 7, Batch 15, etc.).
-    sub_for_slug = (package.subscription if package else None) or user.subscription
+    # User's registered batch is authoritative; package.subscription can be wrong on legacy rows.
+    user_sub = normalize_subscription_for_email(user.subscription)
+    pkg_sub = normalize_subscription_for_email(package.subscription if package else None)
+    if pkg_sub and user_sub and pkg_sub.casefold() != user_sub.casefold():
+        logger.warning(
+            "thank-you template: package subscription %r != user subscription %r (user_id=%s) — using user batch",
+            package.subscription if package else None,
+            user.subscription,
+            user.id,
+        )
+        pkg_sub = ""
+    sub_for_slug = user_sub or pkg_sub
     slug = resolve_registration_thank_you_slug(sub_for_slug, pkg_name)
     raw = _load_php_thank_you(slug)
     if raw is None:
@@ -413,17 +453,37 @@ def _plain_text_to_email_html(text: str) -> str:
 
 
 def _batch_for_subscription(db: Session, subscription: str, package: Package | None = None) -> BatchMaster | None:
-    sub = (subscription or "").strip()
+    sub = normalize_subscription_for_email(subscription)
     if not sub and package and (package.subscription or "").strip():
-        sub = (package.subscription or "").strip()
+        sub = normalize_subscription_for_email(package.subscription)
     if not sub:
         return None
-    return (
+    row = (
         db.query(BatchMaster)
         .filter(BatchMaster.name.ilike(sub))
         .order_by(BatchMaster.id.desc())
         .first()
     )
+    if row:
+        return row
+    # package.subscription column on batch_master (when name differs from package rows).
+    if hasattr(BatchMaster, "package_subscription"):
+        row = (
+            db.query(BatchMaster)
+            .filter(BatchMaster.package_subscription.ilike(sub))
+            .order_by(BatchMaster.id.desc())
+            .first()
+        )
+        if row:
+            return row
+    if re.fullmatch(r"edic\s*10", sub, flags=re.IGNORECASE):
+        return (
+            db.query(BatchMaster)
+            .filter(BatchMaster.name.ilike("%edic%10%"))
+            .order_by(BatchMaster.id.desc())
+            .first()
+        )
+    return None
 
 
 def resolve_batch_template_email(

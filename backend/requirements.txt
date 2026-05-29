@@ -7,3 +7,4 @@ cryptography
 mangum
 fpdf2
 boto3
+openpyxl

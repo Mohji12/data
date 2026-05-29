@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 import re
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -358,3 +359,151 @@ def get_extension_offer(db: Session, user: User) -> dict:
     result["estimated_amount"] = amount
     result["currency_name"] = currency
     return result
+
+
+def _iso_optional(dt: datetime | date | None) -> str | None:
+    return dt.isoformat() if dt else None
+
+
+def _coerce_date(value: datetime | date | None) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return None
+
+
+def _subscriptions_for_user_batch(user: User, subs: list[UserSubscription]) -> list[UserSubscription]:
+    keys = subscription_batch_keys(user.subscription)
+    if not keys:
+        return subs
+    matched = [s for s in subs if (s.batch_slug or "").strip().lower() in keys]
+    return matched if matched else subs
+
+
+def _pick_user_subscription_row(
+    subs: list[UserSubscription], *, now: datetime
+) -> tuple[UserSubscription | None, str]:
+    if not subs:
+        return None, "pending"
+    active = [
+        s
+        for s in subs
+        if (s.status or "").strip().lower() == "active" and s.start_at <= now <= s.end_at
+    ]
+    if active:
+        return max(active, key=lambda s: s.end_at), "active"
+    latest = max(subs, key=lambda s: s.end_at)
+    if latest.end_at and latest.end_at < now:
+        return latest, "expired"
+    if latest.start_at and latest.start_at > now:
+        return latest, "pending"
+    return latest, "expired"
+
+
+def admin_subscription_summary(
+    user: User,
+    *,
+    pkg: Package | None = None,
+    subs: list[UserSubscription] | None = None,
+) -> dict[str, Any]:
+    """Course access window for admin user list (subscription + one-time plans)."""
+    now = datetime.utcnow()
+    pay_ok = (user.payment_status or "").strip().lower() == "credit"
+    plan_type = (pkg.plan_type or "one_time").strip().lower() if pkg else "one_time"
+    package_name = (pkg.name or "").strip() if pkg else None
+    duration = int(pkg.duration_months or 0) if pkg and pkg.duration_months else None
+
+    if not pay_ok:
+        return {
+            "plan_type": plan_type,
+            "plan_type_label": "Subscription" if plan_type == "subscription" else "One-time",
+            "package_name": package_name,
+            "duration_months": duration,
+            "course_start_at": None,
+            "course_end_at": None,
+            "access_status": "no_payment",
+            "days_remaining": None,
+        }
+
+    if plan_type == "subscription":
+        user_subs = _subscriptions_for_user_batch(user, subs or [])
+        row, access_status = _pick_user_subscription_row(user_subs, now=now)
+        if row:
+            days_remaining = (row.end_at.date() - now.date()).days if row.end_at else None
+            dur = int(row.duration_months or 0) or duration
+            label = f"Subscription ({dur}M)" if dur else "Subscription"
+            return {
+                "plan_type": "subscription",
+                "plan_type_label": label,
+                "package_name": package_name,
+                "duration_months": dur,
+                "course_start_at": _iso_optional(row.start_at),
+                "course_end_at": _iso_optional(row.end_at),
+                "access_status": access_status,
+                "days_remaining": days_remaining,
+            }
+        label = f"Subscription ({duration}M)" if duration else "Subscription"
+        return {
+            "plan_type": "subscription",
+            "plan_type_label": label,
+            "package_name": package_name,
+            "duration_months": duration,
+            "course_start_at": None,
+            "course_end_at": None,
+            "access_status": "pending",
+            "days_remaining": None,
+        }
+
+    start = None
+    if pkg and pkg.batch_start_date:
+        start = pkg.batch_start_date
+    elif user.payment_date:
+        start = user.payment_date
+    elif user.created_at:
+        start = user.created_at
+    end = _coerce_date(pkg.end_date if pkg else None)
+    access_status = "active"
+    today = now.date()
+    if end and end < today:
+        access_status = "expired"
+    days_remaining = (end - today).days if end else None
+    return {
+        "plan_type": "one_time",
+        "plan_type_label": "One-time access",
+        "package_name": package_name,
+        "duration_months": duration,
+        "course_start_at": _iso_optional(start),
+        "course_end_at": _iso_optional(end),
+        "access_status": access_status,
+        "days_remaining": days_remaining,
+    }
+
+
+def batch_admin_subscription_summaries(db: Session, users: list[User]) -> dict[int, dict[str, Any]]:
+    if not users:
+        return {}
+    user_ids = [u.id for u in users]
+    package_ids = {u.package_id for u in users if u.package_id}
+    packages: dict[int, Package] = {}
+    if package_ids:
+        packages = {p.id: p for p in db.query(Package).filter(Package.id.in_(package_ids)).all()}
+    all_subs = (
+        db.query(UserSubscription)
+        .filter(UserSubscription.user_id.in_(user_ids))
+        .order_by(UserSubscription.end_at.desc())
+        .all()
+    )
+    subs_by_user: dict[int, list[UserSubscription]] = {}
+    for sub in all_subs:
+        subs_by_user.setdefault(sub.user_id, []).append(sub)
+    return {
+        u.id: admin_subscription_summary(
+            u,
+            pkg=packages.get(u.package_id) if u.package_id else None,
+            subs=subs_by_user.get(u.id, []),
+        )
+        for u in users
+    }

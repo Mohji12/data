@@ -33,7 +33,7 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex">
+    <div className="min-h-[100dvh] flex flex-col lg:flex-row">
       {/* Left panel */}
       <div className="hidden lg:flex lg:w-[42%] bg-monitor-bg scanline flex-col justify-between p-12 relative overflow-hidden">
         <Link to="/" className="flex items-center gap-2">
@@ -65,9 +65,9 @@ export default function Login() {
         </div>
       </div>
 
-      {/* Right panel */}
-      <div className="flex-1 bg-chalk-warm flex items-center justify-center px-6">
-        <div className="w-full max-w-[380px]">
+      {/* Right panel — scrollable on small screens (iOS keyboard / short viewports) */}
+      <div className="flex-1 bg-chalk-warm flex items-start lg:items-center justify-center px-6 py-10 overflow-y-auto overscroll-contain pb-[max(2rem,env(safe-area-inset-bottom))]">
+        <div className="w-full max-w-[380px] my-auto">
           <div className="font-mono text-xs text-ink-faint tracking-[0.2em] uppercase mb-8">SIGN IN</div>
           <h2 className="font-display font-extrabold text-4xl text-slate mb-1">Sign In</h2>
           <p className="font-sans text-sm text-ink-muted mb-10">Enter credentials to continue.</p>
@@ -103,7 +103,7 @@ export default function Login() {
             <button
               type="submit"
               disabled={loading}
-              className="magnetic w-full bg-slate text-chalk rounded-sm py-4 font-sans font-semibold mt-4 hover:bg-slate-light transition-all disabled:opacity-50"
+              className="magnetic w-full bg-slate text-chalk rounded-sm py-4 font-sans font-semibold mt-4 hover:bg-slate-light transition-all disabled:opacity-50 min-h-[48px]"
             >
               {loading ? 'Signing in...' : 'Sign In'}
             </button>

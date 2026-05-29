@@ -324,6 +324,109 @@ def sync_event_payment_from_razorpay(db: Session, registration_id: int) -> dict:
     )
 
 
+def admin_approve_event_registration(
+    db: Session,
+    registration_id: int,
+    *,
+    force_manual: bool = False,
+    resend_email: bool = False,
+    payment_id: str | None = None,
+    admin_note: str | None = None,
+) -> dict:
+    """
+    Admin action when user paid but dashboard still shows Pending.
+    Tries Razorpay sync first; optional manual approve when sync cannot verify payment.
+    """
+    reg = (
+        db.query(EventRegistration)
+        .filter(
+            EventRegistration.id == registration_id,
+            EventRegistration.event_slug.in_(event_registration_slugs()),
+        )
+        .first()
+    )
+    if not reg:
+        raise HTTPException(status_code=404, detail="Registration not found")
+
+    if resend_email:
+        if (reg.payment_status or "").strip().lower() != "credit":
+            raise HTTPException(status_code=400, detail="Cannot resend email until registration is approved.")
+        email_sent = try_send_event_confirmation_email(db, reg, force=True)
+        return {
+            "status": "ok",
+            "payment_status": "Credit",
+            "registration_id": reg.id,
+            "registration_number": reg.registration_number,
+            "email_sent": email_sent,
+            "message": "Confirmation email sent" if email_sent else "Confirmation email could not be sent",
+        }
+
+    if not force_manual:
+        try:
+            return sync_event_payment_from_razorpay(db, registration_id)
+        except HTTPException as exc:
+            detail = str(exc.detail or "Could not verify payment on Razorpay.")
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=f"{detail} Confirm manual approval if payment was received.",
+            ) from exc
+
+    if (reg.payment_status or "").strip().lower() == "credit":
+        email_sent = try_send_event_confirmation_email(db, reg)
+        return {
+            "status": "ok",
+            "payment_status": "Credit",
+            "registration_id": reg.id,
+            "registration_number": reg.registration_number,
+            "email_sent": email_sent,
+            "message": "Already approved; confirmation email sent if not sent earlier",
+        }
+
+    now = datetime.utcnow()
+    ref = (payment_id or "").strip() or f"admin-{registration_id}-{int(now.timestamp())}"
+    reg.payment_status = "Credit"
+    reg.payment_type = "Admin"
+    reg.payment_id = ref
+    reg.payment_date = now
+    reg.payment_details = json.dumps(
+        {
+            "source": "admin_manual_approve",
+            "admin_note": (admin_note or "").strip(),
+            "approved_at": now.isoformat(),
+        }
+    )
+    reg.updated_at = now
+
+    txn = (
+        db.query(EventPaymentTxn)
+        .filter(EventPaymentTxn.event_registration_id == reg.id)
+        .order_by(EventPaymentTxn.id.desc())
+        .first()
+    )
+    if txn:
+        txn.gateway_status = "admin_approved"
+        txn.is_finalized = "1"
+        if not (txn.gateway_payment_id or "").strip():
+            txn.gateway_payment_id = ref
+        txn.updated_at = now
+        db.add(txn)
+
+    db.add(reg)
+    db.commit()
+    db.refresh(reg)
+
+    email_sent = try_send_event_confirmation_email(db, reg)
+    return {
+        "status": "ok",
+        "payment_status": "Credit",
+        "registration_id": reg.id,
+        "registration_number": reg.registration_number,
+        "email_sent": email_sent,
+        "message": "Registration approved manually"
+        + ("; confirmation email sent" if email_sent else "; confirmation email could not be sent"),
+    }
+
+
 def confirm_event_registration_after_payment(db: Session, registration_id: int) -> dict:
     """
     Thank-you page hook: sync Razorpay payment if needed and send confirmation email once.

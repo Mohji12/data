@@ -230,10 +230,25 @@ export default function Navbar() {
             )}
           </div>
 
-          {/* Mobile toggle */}
-          <button className="lg:hidden text-ink" onClick={() => setMobileOpen(true)}>
-            <AlignJustify size={22} />
-          </button>
+          {/* Mobile: Login + menu */}
+          <div className="flex lg:hidden items-center gap-2 shrink-0">
+            {!isAuthenticated && (
+              <Link
+                to="/login"
+                className="font-sans text-[12px] font-semibold text-ink border border-border-strong rounded-full px-4 py-1.5 hover:border-ink transition-colors whitespace-nowrap"
+              >
+                Login
+              </Link>
+            )}
+            <button
+              type="button"
+              className="text-ink p-1"
+              aria-label="Open menu"
+              onClick={() => setMobileOpen(true)}
+            >
+              <AlignJustify size={22} />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -248,11 +263,47 @@ export default function Navbar() {
             animate={{ clipPath: 'inset(0 0 0% 0)' }}
             exit={{ clipPath: 'inset(0 0 100% 0)' }}
             transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-            className="fixed inset-0 z-[60] bg-slate flex flex-col items-center justify-center gap-6"
+            className="fixed inset-0 z-[60] bg-slate flex flex-col overflow-hidden"
           >
-            <button className="absolute top-5 right-6 text-white" onClick={() => setMobileOpen(false)}>
-              <X size={24} />
-            </button>
+            <div
+              className="flex items-center justify-between gap-3 px-5 shrink-0 border-b border-white/10"
+              style={{ paddingTop: 'max(1rem, env(safe-area-inset-top))', paddingBottom: '0.75rem' }}
+            >
+              {!isAuthenticated ? (
+                <div className="flex items-center gap-2">
+                  <Link
+                    to="/login"
+                    onClick={() => setMobileOpen(false)}
+                    className="font-sans text-sm font-semibold text-white border border-white/25 rounded-full px-5 py-2 hover:border-white/50 transition-colors"
+                  >
+                    Login
+                  </Link>
+                  <Link
+                    to="/register"
+                    onClick={() => setMobileOpen(false)}
+                    className="bg-mint text-slate rounded-full px-5 py-2 font-sans font-semibold text-sm"
+                  >
+                    Register
+                  </Link>
+                </div>
+              ) : (
+                <span className="font-mono text-xs text-white/50 uppercase tracking-wider">Menu</span>
+              )}
+              <button
+                type="button"
+                className="text-white p-1 shrink-0"
+                aria-label="Close menu"
+                onClick={() => setMobileOpen(false)}
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            <div
+              className="flex-1 overflow-y-auto overscroll-contain px-6 py-8"
+              style={{ paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))' }}
+            >
+              <div className="flex flex-col items-center gap-6">
             {navLinks.map((link) =>
               link.hasDropdown ? (
                 <div key={link.to} className="flex flex-col items-center gap-3 w-full max-w-md px-4">
@@ -297,13 +348,7 @@ export default function Navbar() {
                 </Link>
               )
             )}
-            <div className="mt-8 flex gap-4">
-              <Link to="/login" className="font-sans text-sm text-white/60 border border-white/20 rounded-full px-6 py-2 hover:text-white hover:border-white/40 transition-colors">
-                Login
-              </Link>
-              <Link to="/register" className="bg-mint text-slate rounded-full px-6 py-2 font-sans font-semibold text-sm">
-                Register Now
-              </Link>
+              </div>
             </div>
           </motion.div>
         )}

@@ -39,8 +39,8 @@ export default function AdminLoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-monitor-bg scanline flex flex-col">
-      <div className="flex-1 flex items-center justify-center px-6 py-16">
+    <div className="min-h-[100dvh] bg-monitor-bg scanline flex flex-col overflow-y-auto overscroll-contain">
+      <div className="flex-1 flex items-start sm:items-center justify-center px-6 py-10 pb-[max(2rem,env(safe-area-inset-bottom))]">
         <div className="w-full max-w-[400px] bg-chalk border border-border-soft rounded-sm shadow-xl p-8">
           <div className="font-mono text-[10px] text-mint tracking-[0.2em] uppercase mb-4">Staff access</div>
           <h1 className="font-display font-black text-3xl text-slate mb-2">Admin sign in</h1>
@@ -75,7 +75,7 @@ export default function AdminLoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full magnetic bg-slate text-chalk rounded-sm py-3.5 font-sans font-semibold text-sm hover:bg-slate-light disabled:opacity-50 transition-all"
+              className="w-full magnetic bg-slate text-chalk rounded-sm py-3.5 font-sans font-semibold text-sm hover:bg-slate-light disabled:opacity-50 transition-all min-h-[48px]"
             >
               {loading ? 'Signing in…' : 'Sign in'}
             </button>
