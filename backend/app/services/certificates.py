@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import io
 import re
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from fpdf import FPDF
 from PIL import Image, ImageDraw, ImageFont
 
 _ASSETS_ROOT = Path(__file__).resolve().parent.parent / "assets" / "certificate"
@@ -347,23 +346,11 @@ def render_certificate_image(
 
 
 def _image_to_pdf_bytes(image: Image.Image) -> bytes:
-    pdf = FPDF(orientation="L", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=False)
-    pdf.add_page()
-    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-        tmp_path = tmp.name
-        image.save(tmp_path, format="JPEG", quality=96, optimize=True)
-    try:
-        pdf.image(tmp_path, x=0, y=0, w=297, h=210)
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
-
-    data = pdf.output(dest="S")
-    if isinstance(data, bytearray):
-        return bytes(data)
-    if isinstance(data, str):
-        return data.encode("latin-1", errors="ignore")
-    return bytes(data)
+    """Wrap the certificate image in a PDF (Pillow PDF 1.4 — opens reliably in Chrome)."""
+    rgb = image.convert("RGB")
+    buf = io.BytesIO()
+    rgb.save(buf, format="PDF")
+    return buf.getvalue()
 
 
 def build_certificate_pdf(

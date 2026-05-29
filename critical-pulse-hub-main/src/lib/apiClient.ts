@@ -64,7 +64,27 @@ export async function apiDownload(
     throw new Error(typeof errorMessage === 'string' ? errorMessage : JSON.stringify(errorMessage));
   }
 
-  const blob = await response.blob();
+  const buffer = await response.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  const isPdf =
+    bytes.length >= 4 &&
+    bytes[0] === 0x25 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x44 &&
+    bytes[3] === 0x46;
+  if (!isPdf) {
+    let detail = 'Server did not return a valid PDF file.';
+    try {
+      const text = new TextDecoder().decode(bytes.slice(0, 500));
+      const parsed = JSON.parse(text) as { detail?: string; message?: string };
+      detail = parsed.detail || parsed.message || detail;
+    } catch {
+      // keep generic message
+    }
+    throw new Error(detail);
+  }
+
+  const blob = new Blob([buffer], { type: 'application/pdf' });
   const url = window.URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
