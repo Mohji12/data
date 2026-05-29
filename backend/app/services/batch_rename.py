@@ -38,7 +38,7 @@ GLOBAL_ACCESS_OPTIONS = (
     "access_download_certificate",
 )
 
-CERTIFICATE_OPTION_KINDS = ("enabled", "batch_label", "fixed_date")
+CERTIFICATE_OPTION_KINDS = ("enabled", "batch_label", "fixed_date", "course_line", "program_line", "show_date", "name_size")
 EXTENSION_OPTION_KINDS = (
     "enabled",
     "gross_amount",

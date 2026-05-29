@@ -76,6 +76,19 @@ class CertificateBatchSettingPayload(BaseModel):
     enabled: bool = False
     certificate_batch_label: Optional[str] = None
     certificate_fixed_date: Optional[str] = None
+    certificate_course_line: Optional[str] = None
+    certificate_program_line: Optional[str] = None
+    certificate_show_date: bool = False
+    certificate_name_size: Optional[int] = None
+
+    @model_validator(mode="after")
+    def validate_name_size(self) -> "CertificateBatchSettingPayload":
+        if self.certificate_name_size is not None:
+            size = int(self.certificate_name_size)
+            if size < 12 or size > 48:
+                raise ValueError("certificate_name_size must be between 12 and 48")
+            self.certificate_name_size = size
+        return self
 
     @model_validator(mode="after")
     def validate_date(self) -> "CertificateBatchSettingPayload":
@@ -107,6 +120,10 @@ def list_certificate_batch_settings(db: Session = Depends(get_db)) -> list[dict]
                 "enabled": (settings.get("enabled") or "").strip() == "1",
                 "certificate_batch_label": settings.get("batch_label") or "",
                 "certificate_fixed_date": settings.get("fixed_date") or "",
+                "certificate_course_line": settings.get("course_line") or "",
+                "certificate_program_line": settings.get("program_line") or "",
+                "certificate_show_date": (settings.get("show_date") or "").strip() == "1",
+                "certificate_name_size": (settings.get("name_size") or "").strip(),
             }
         )
     return out
@@ -139,11 +156,23 @@ def upsert_certificate_batch_settings(
         enabled_key = certificate_option_key("enabled", batch_name)
         label_key = certificate_option_key("batch_label", batch_name)
         date_key = certificate_option_key("fixed_date", batch_name)
-        
+        course_key = certificate_option_key("course_line", batch_name)
+        program_key = certificate_option_key("program_line", batch_name)
+        show_date_key = certificate_option_key("show_date", batch_name)
+        name_size_key = certificate_option_key("name_size", batch_name)
+
         if enabled_key and label_key and date_key:
             _upsert_option(db, enabled_key, "1" if payload.enabled else "0")
             _upsert_option(db, label_key, (payload.certificate_batch_label or "").strip())
             _upsert_option(db, date_key, (payload.certificate_fixed_date or "").strip())
+            if course_key:
+                _upsert_option(db, course_key, (payload.certificate_course_line or "").strip())
+            if program_key:
+                _upsert_option(db, program_key, (payload.certificate_program_line or "").strip())
+            if show_date_key:
+                _upsert_option(db, show_date_key, "1" if payload.certificate_show_date else "0")
+            if name_size_key and payload.certificate_name_size is not None:
+                _upsert_option(db, name_size_key, str(payload.certificate_name_size))
 
     db.commit()
     return {"status": "ok"}

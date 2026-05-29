@@ -1,5 +1,5 @@
-import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, PlayCircle, ClipboardCheck, User, CreditCard, LogOut, Home, BookOpen, FileQuestion } from 'lucide-react';
+import { Outlet, Link, useLocation, useNavigate, Navigate } from 'react-router-dom';
+import { LayoutDashboard, PlayCircle, ClipboardCheck, User, CreditCard, LogOut, Home, BookOpen, FileQuestion, Award } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
@@ -27,19 +27,36 @@ export default function StudentLayout() {
   });
   const isActive = (to: string) => location.pathname === to || (to !== '/dashboard' && location.pathname.startsWith(to));
   const canExtend = !!summary?.extension?.enabled;
-  const learnItems = [
-    { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
-    { label: 'Video Library', to: '/dashboard/videos', icon: PlayCircle },
-    { label: 'Mock Tests', to: '/dashboard/quiz', icon: ClipboardCheck },
-    ...(canExtend ? [{ label: 'Extend Subscription', to: '/dashboard/extend-subscription', icon: BookOpen }] : []),
-  ];
-  const mobileNav = [
-    { label: 'Home', to: '/dashboard', icon: Home },
-    { label: 'Videos', to: '/dashboard/videos', icon: PlayCircle },
-    { label: 'Tests', to: '/dashboard/quiz', icon: FileQuestion },
-    ...(canExtend ? [{ label: 'Extend', to: '/dashboard/extend-subscription', icon: BookOpen }] : []),
-    { label: 'Profile', to: '/dashboard/profile', icon: User },
-  ];
+  const canCertificate = !!summary?.certificate?.enabled;
+  const certificateOnly = !!summary?.certificate_only;
+
+  const restrictedPaths = ['/dashboard/videos', '/dashboard/quiz', '/dashboard/profile', '/dashboard/payments', '/dashboard/extend-subscription'];
+  if (certificateOnly && restrictedPaths.some((p) => location.pathname === p || location.pathname.startsWith(`${p}/`))) {
+    return <Navigate to="/dashboard/certificate" replace />;
+  }
+  if (certificateOnly && location.pathname === '/dashboard') {
+    return <Navigate to="/dashboard/certificate" replace />;
+  }
+
+  const learnItems = certificateOnly
+    ? [{ label: 'Certificate', to: '/dashboard/certificate', icon: Award }]
+    : [
+        { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
+        { label: 'Video Library', to: '/dashboard/videos', icon: PlayCircle },
+        { label: 'Mock Tests', to: '/dashboard/quiz', icon: ClipboardCheck },
+        ...(canExtend ? [{ label: 'Extend Subscription', to: '/dashboard/extend-subscription', icon: BookOpen }] : []),
+        ...(canCertificate ? [{ label: 'Certificate', to: '/dashboard/certificate', icon: Award }] : []),
+      ];
+  const mobileNav = certificateOnly
+    ? [{ label: 'Certificate', to: '/dashboard/certificate', icon: Award }]
+    : [
+        { label: 'Home', to: '/dashboard', icon: Home },
+        { label: 'Videos', to: '/dashboard/videos', icon: PlayCircle },
+        { label: 'Tests', to: '/dashboard/quiz', icon: FileQuestion },
+        ...(canExtend ? [{ label: 'Extend', to: '/dashboard/extend-subscription', icon: BookOpen }] : []),
+        ...(canCertificate ? [{ label: 'Cert', to: '/dashboard/certificate', icon: Award }] : []),
+        { label: 'Profile', to: '/dashboard/profile', icon: User },
+      ];
 
   return (
     <div className="flex min-h-screen bg-chalk-warm">
@@ -58,7 +75,16 @@ export default function StudentLayout() {
         <div className="w-full h-px bg-border-soft my-4" />
 
         <nav className="flex-1 overflow-y-auto">
-          {navItems.map((section) => (
+          {(certificateOnly
+            ? [{ label: 'CERTIFICATE', items: learnItems }]
+            : navItems.map((section) =>
+                section.label === 'LEARN'
+                  ? { ...section, items: learnItems }
+                  : certificateOnly
+                    ? { ...section, items: [] }
+                    : section,
+              ).filter((section) => section.items.length > 0)
+          ).map((section) => (
             <div key={section.label}>
               <div className="font-mono text-[10px] text-ink-faint tracking-[0.14em] uppercase px-5 mb-2 mt-6">
                 {section.label}

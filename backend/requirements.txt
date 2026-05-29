@@ -5,6 +5,7 @@ pymysql
 python-dotenv
 cryptography
 mangum
+Pillow
 fpdf2
 boto3
 openpyxl

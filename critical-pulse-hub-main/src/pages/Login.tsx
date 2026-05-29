@@ -18,7 +18,6 @@ export default function Login() {
     setLoading(true);
     try {
       await login(email, password);
-      // Redirection logic based on the role set in useAuthStore
       const user = useAuthStore.getState().user;
       if (user?.role === 'admin') {
         navigate('/admin');

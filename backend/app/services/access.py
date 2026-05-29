@@ -90,10 +90,18 @@ def get_certificate_batch_settings(db: Session, batch_name: str | None) -> dict[
     enabled_key = certificate_option_key("enabled", batch_name)
     label_key = certificate_option_key("batch_label", batch_name)
     date_key = certificate_option_key("fixed_date", batch_name)
+    course_key = certificate_option_key("course_line", batch_name)
+    program_key = certificate_option_key("program_line", batch_name)
+    show_date_key = certificate_option_key("show_date", batch_name)
+    name_size_key = certificate_option_key("name_size", batch_name)
     return {
         "enabled": get_option_value(db, enabled_key) if enabled_key else "",
         "batch_label": get_option_value(db, label_key) if label_key else "",
         "fixed_date": get_option_value(db, date_key) if date_key else "",
+        "course_line": get_option_value(db, course_key) if course_key else "",
+        "program_line": get_option_value(db, program_key) if program_key else "",
+        "show_date": get_option_value(db, show_date_key) if show_date_key else "",
+        "name_size": get_option_value(db, name_size_key) if name_size_key else "",
     }
 
 
@@ -165,7 +173,38 @@ def ensure_subscription_entitlement(db: Session, user: User, batch_name: str | N
     return True, None
 
 
+def is_certificate_only_user(db: Session, user: User) -> bool:
+    """Users who may log in only to download their completion certificate."""
+    return subscription_allowed(
+        get_option_value(db, "certificate_only_access"),
+        user.subscription,
+    )
+
+
+def can_access_certificate(db: Session, user: User) -> tuple[bool, str | None]:
+    if not bool_option(get_option_value(db, "display_download_certificate")):
+        return False, "Certificate download is disabled by admin."
+    allowed = get_option_value(db, "access_download_certificate")
+    if allowed and not subscription_allowed(allowed, user.subscription):
+        return False, "Your subscription does not include certificate download."
+    batch_settings = get_certificate_batch_settings(db, user.subscription)
+    if (batch_settings.get("enabled") or "").strip() != "1":
+        return False, "Certificate download is disabled for your batch."
+    if (user.payment_status or "").strip().lower() != "credit":
+        return False, "Payment not completed."
+    if (user.approve or "").strip() != "1":
+        return False, "Account not approved."
+    if is_certificate_only_user(db, user):
+        return True, None
+    ent_ok, ent_reason = ensure_subscription_entitlement(db, user)
+    if not ent_ok:
+        return False, ent_reason
+    return True, None
+
+
 def can_access_video_library(db: Session, user: User) -> tuple[bool, str | None]:
+    if is_certificate_only_user(db, user):
+        return False, "Your account is limited to certificate download only."
     if (user.payment_status or "").strip().lower() != "credit":
         return False, "Payment not completed."
     approve = (user.approve or "").strip()
@@ -190,6 +229,8 @@ def can_access_video_library(db: Session, user: User) -> tuple[bool, str | None]
 
 
 def can_access_mock_test(db: Session, user: User) -> tuple[bool, str | None]:
+    if is_certificate_only_user(db, user):
+        return False, "Your account is limited to certificate download only."
     if (user.payment_status or "").strip().lower() != "credit":
         return False, "Payment not completed."
     if (user.approve or "").strip() != "1":

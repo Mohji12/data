@@ -76,6 +76,9 @@ export default function Dashboard() {
                   to: '/dashboard/extend-subscription',
                 }]
               : []),
+            ...(summary?.certificate?.enabled
+              ? [{ title: 'Download Certificate', sub: 'Get your course completion certificate', to: '/dashboard/certificate' }]
+              : []),
             { title: 'Update Profile', sub: 'Manage your professional details', to: '/dashboard/profile' },
           ].map((item) => (
             <Link key={item.title} to={item.to} className="bg-chalk border border-border-soft rounded-sm p-8 hover:border-mint/30 hover:shadow-mint transition-all group cursor-pointer">

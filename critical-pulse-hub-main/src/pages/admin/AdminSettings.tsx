@@ -12,7 +12,17 @@ type CertificateBatchSettingRow = {
   enabled: boolean;
   certificate_batch_label: string;
   certificate_fixed_date: string;
+  certificate_course_line: string;
+  certificate_program_line: string;
+  certificate_show_date: boolean;
+  certificate_name_size: string;
 };
+
+const DEFAULT_CERT_NAME_SIZE = '20';
+
+const DEFAULT_CERT_COURSE = 'has completed MASTER CLASSES IN CRITICAL CARE MEDICINE';
+const DEFAULT_CERT_PROGRAM =
+  'An online education & training program offered by Dr. Harish Mallapura Maheshwarappa';
 
 function splitBatches(raw: string | undefined): string[] {
   return (raw || '')
@@ -43,6 +53,10 @@ export default function AdminSettings() {
   const [certBatchEnabled, setCertBatchEnabled] = useState(false);
   const [certBatchLabel, setCertBatchLabel] = useState('');
   const [certBatchDate, setCertBatchDate] = useState('');
+  const [certCourseLine, setCertCourseLine] = useState(DEFAULT_CERT_COURSE);
+  const [certProgramLine, setCertProgramLine] = useState(DEFAULT_CERT_PROGRAM);
+  const [certShowDate, setCertShowDate] = useState(false);
+  const [certNameSize, setCertNameSize] = useState(DEFAULT_CERT_NAME_SIZE);
   const [displayTopupExt, setDisplayTopupExt] = useState(false);
   const [accessTopupExt, setAccessTopupExt] = useState<string[]>([]);
   const [displayTopupExtVideo, setDisplayTopupExtVideo] = useState(false);
@@ -70,6 +84,7 @@ export default function AdminSettings() {
     queryFn: () => apiClient('/admin/commerce/certificate-batch-settings') as Promise<CertificateBatchSettingRow[]>,
   });
   const activeBatches = (batches || []).filter((b) => String(b.status ?? '1') === '1');
+  const certificateBatches = batches || [];
 
   useEffect(() => {
     if (!options?.length) return;
@@ -104,6 +119,10 @@ export default function AdminSettings() {
       setCertBatchEnabled(false);
       setCertBatchLabel('');
       setCertBatchDate('');
+      setCertCourseLine(DEFAULT_CERT_COURSE);
+      setCertProgramLine(DEFAULT_CERT_PROGRAM);
+      setCertShowDate(false);
+      setCertNameSize(DEFAULT_CERT_NAME_SIZE);
       return;
     }
     if (!certBatchSettings) return;
@@ -112,6 +131,10 @@ export default function AdminSettings() {
     setCertBatchEnabled(!!row?.enabled);
     setCertBatchLabel(row?.certificate_batch_label || firstBatch);
     setCertBatchDate(row?.certificate_fixed_date || '');
+    setCertCourseLine(row?.certificate_course_line || DEFAULT_CERT_COURSE);
+    setCertProgramLine(row?.certificate_program_line || DEFAULT_CERT_PROGRAM);
+    setCertShowDate(!!row?.certificate_show_date);
+    setCertNameSize(row?.certificate_name_size || DEFAULT_CERT_NAME_SIZE);
   }, [selectedCertBatches, certBatchSettings]);
 
   const upsertMut = useMutation({
@@ -135,6 +158,10 @@ export default function AdminSettings() {
           enabled: certBatchEnabled,
           certificate_batch_label: certBatchLabel,
           certificate_fixed_date: certBatchDate || null,
+          certificate_course_line: certCourseLine,
+          certificate_program_line: certProgramLine,
+          certificate_show_date: certShowDate,
+          certificate_name_size: Number(certNameSize) || 20,
         }),
       }),
   });
@@ -180,39 +207,44 @@ export default function AdminSettings() {
     }
   };
 
-  const batchSelect = (value: string[], setValue: (v: string[]) => void) => {
+  const batchSelect = (
+    value: string[],
+    setValue: (v: string[]) => void,
+    options: BatchRow[] = activeBatches,
+  ) => {
     const toggleAll = () => {
-      if (activeBatches.length === 0) return;
-      if (value.length === activeBatches.length) {
+      if (options.length === 0) return;
+      if (value.length === options.length) {
         setValue([]);
       } else {
-        setValue(activeBatches.map((b) => b.name));
+        setValue(options.map((b) => b.name));
       }
     };
 
     return (
       <div className="w-full max-w-xl border border-border-soft rounded-sm bg-chalk-warm overflow-hidden shadow-sm">
-        {isTech && activeBatches.length > 0 && (
+        {isTech && options.length > 0 && (
           <div className="px-3 py-2 border-b border-border-soft bg-chalk/50 flex justify-between items-center">
             <span className="text-[10px] font-mono text-ink-faint uppercase tracking-tight">
-              {value.length} of {activeBatches.length} selected
+              {value.length} of {options.length} selected
             </span>
             <button
               type="button"
               onClick={toggleAll}
               className="text-[10px] font-mono text-slate hover:text-slate-light font-bold uppercase transition-colors"
             >
-              {value.length === activeBatches.length ? 'Clear All' : 'Select All'}
+              {value.length === options.length ? 'Clear All' : 'Select All'}
             </button>
           </div>
         )}
         <div className="p-3 max-h-[180px] overflow-y-auto">
-          {activeBatches.length === 0 ? (
-            <div className="text-xs text-ink-faint italic py-2">No active batches found</div>
+          {options.length === 0 ? (
+            <div className="text-xs text-ink-faint italic py-2">No batches found</div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
-              {activeBatches.map((b) => {
+              {options.map((b) => {
                 const isSelected = value.includes(b.name);
+                const inactive = String(b.status ?? '1') !== '1';
                 return (
                   <label
                     key={b.id}
@@ -247,7 +279,10 @@ export default function AdminSettings() {
                         <polyline points="20 6 9 17 4 12" />
                       </svg>
                     </div>
-                    <span className="truncate flex-1">{b.name}</span>
+                    <span className="truncate flex-1">
+                      {b.name}
+                      {inactive && <span className="text-[10px] text-ink-faint ml-1">(inactive)</span>}
+                    </span>
                   </label>
                 );
               })}
@@ -344,9 +379,9 @@ export default function AdminSettings() {
             <div className="grid gap-4 max-w-xl">
               <div>
                 <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Batches</label>
-                {batchSelect(selectedCertBatches, setSelectedCertBatches)}
+                {batchSelect(selectedCertBatches, setSelectedCertBatches, certificateBatches)}
                 <p className="font-sans text-[10px] text-ink-faint mt-1 italic">
-                  Tip: Use {"{batch_name}"} in label for dynamic batch naming.
+                  Inactive batches (e.g. Batch 14 certificate-only) are included here so you can edit their certificate text.
                 </p>
               </div>
               <label className="flex items-center gap-3 font-sans text-sm text-ink">
@@ -359,17 +394,62 @@ export default function AdminSettings() {
                 Enable certificate download for selected batch
               </label>
               <div>
-                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Certificate batch name</label>
+                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Recipient name font size</label>
+                <input
+                  type="number"
+                  min={12}
+                  max={48}
+                  value={certNameSize}
+                  disabled={!isTech}
+                  onChange={(e) => setCertNameSize(e.target.value)}
+                  className="w-full max-w-[140px] bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
+                />
+                <p className="font-sans text-[10px] text-ink-faint mt-1">Default 20. Range 12–48.</p>
+              </div>
+              <div>
+                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Certificate batch line</label>
                 <input
                   type="text"
                   value={certBatchLabel}
                   disabled={!isTech}
                   onChange={(e) => setCertBatchLabel(e.target.value)}
+                  placeholder="e.g. Batch 14 - July to December 2025"
                   className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
                 />
               </div>
               <div>
-                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Certificate date</label>
+                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Course completion line</label>
+                <input
+                  type="text"
+                  value={certCourseLine}
+                  disabled={!isTech}
+                  onChange={(e) => setCertCourseLine(e.target.value)}
+                  placeholder={DEFAULT_CERT_COURSE}
+                  className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
+                />
+              </div>
+              <div>
+                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Program / offered-by line</label>
+                <textarea
+                  value={certProgramLine}
+                  disabled={!isTech}
+                  onChange={(e) => setCertProgramLine(e.target.value)}
+                  rows={2}
+                  placeholder={DEFAULT_CERT_PROGRAM}
+                  className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
+                />
+              </div>
+              <label className="flex items-center gap-3 font-sans text-sm text-ink">
+                <input
+                  type="checkbox"
+                  checked={certShowDate}
+                  disabled={!isTech}
+                  onChange={(e) => setCertShowDate(e.target.checked)}
+                />
+                Show issue date on certificate
+              </label>
+              <div>
+                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Certificate date (optional)</label>
                 <input
                   type="date"
                   value={certBatchDate}
@@ -377,6 +457,9 @@ export default function AdminSettings() {
                   onChange={(e) => setCertBatchDate(e.target.value)}
                   className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
                 />
+                <p className="font-sans text-[10px] text-ink-faint mt-1">
+                  Leave empty to use today&apos;s date when &quot;Show issue date&quot; is enabled.
+                </p>
               </div>
               {isTech && (
                 <button

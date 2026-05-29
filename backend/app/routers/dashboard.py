@@ -14,15 +14,12 @@ from app.schemas import (
 )
 from app.security import get_current_user
 from app.services.access import (
-    bool_option,
+    can_access_certificate,
     can_access_mock_test,
     can_access_video_library,
-    ensure_subscription_entitlement,
     get_extension_offer,
-    get_certificate_batch_settings,
-    get_option_value,
     get_subscription_period_for_profile,
-    subscription_allowed,
+    is_certificate_only_user,
 )
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -62,28 +59,8 @@ def dashboard_summary(
 
     mock_enabled, mock_reason = can_access_mock_test(db, current_user)
 
-    certificate_enabled = False
-    certificate_reason = None
-    if not bool_option(get_option_value(db, "display_download_certificate")):
-        certificate_reason = "Certificate download is disabled by admin."
-    else:
-        cert_allowed_subscriptions = get_option_value(db, "access_download_certificate")
-        if cert_allowed_subscriptions and not subscription_allowed(
-            cert_allowed_subscriptions, current_user.subscription
-        ):
-            certificate_reason = "Your subscription does not include certificate download."
-        elif (get_certificate_batch_settings(db, current_user.subscription).get("enabled") or "").strip() != "1":
-            certificate_reason = "Certificate download is disabled for your batch."
-        elif (current_user.payment_status or "").strip().lower() != "credit":
-            certificate_reason = "Payment not completed."
-        elif (current_user.approve or "").strip() != "1":
-            certificate_reason = "Account not approved."
-        else:
-            ent_ok, ent_reason = ensure_subscription_entitlement(db, current_user)
-            if not ent_ok:
-                certificate_reason = ent_reason
-            else:
-                certificate_enabled = True
+    certificate_enabled, certificate_reason = can_access_certificate(db, current_user)
+    certificate_only = is_certificate_only_user(db, current_user) and certificate_enabled
 
     return DashboardSummary(
         user_id=current_user.id,
@@ -93,6 +70,7 @@ def dashboard_summary(
         video=FeatureAccess(enabled=can_video, reason=video_reason),
         mock_test=FeatureAccess(enabled=mock_enabled, reason=mock_reason),
         certificate=FeatureAccess(enabled=certificate_enabled, reason=certificate_reason),
+        certificate_only=certificate_only,
         extension=get_extension_offer(db, current_user),
     )
 

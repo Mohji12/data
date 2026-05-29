@@ -41,6 +41,7 @@ const QuizResult = lazy(() => import('@/pages/dashboard/QuizResult'));
 const Profile = lazy(() => import('@/pages/dashboard/Profile'));
 const Payments = lazy(() => import('@/pages/dashboard/Payments'));
 const ExtendSubscription = lazy(() => import('@/pages/dashboard/ExtendSubscription'));
+const Certificate = lazy(() => import('@/pages/dashboard/Certificate'));
 
 // Admin Pages (Lazy)
 const AdminDashboard = lazy(() => import('@/pages/admin/AdminDashboard'));
@@ -142,6 +143,7 @@ const App = () => {
             <Route path="profile" element={<Profile />} />
             <Route path="payments" element={<Payments />} />
             <Route path="extend-subscription" element={<ExtendSubscription />} />
+            <Route path="certificate" element={<Certificate />} />
           </Route>
           <Route path="/admin" element={<AdminRoute><AdminLayout /></AdminRoute>}>
             <Route index element={<AdminDashboard />} />

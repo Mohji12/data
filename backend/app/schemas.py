@@ -135,6 +135,7 @@ class DashboardSummary(BaseModel):
     video: FeatureAccess
     mock_test: FeatureAccess
     certificate: FeatureAccess
+    certificate_only: bool = False
     extension: ExtensionAccess
 
 

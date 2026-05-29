@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import BatchMaster, User
+from app.services.access import can_access_certificate, is_certificate_only_user
 
 
 def _batch_status_is_active(status: object) -> bool:
@@ -32,6 +33,10 @@ def user_subscription_batch_active(db: Session, user: User) -> tuple[bool, str |
         return True, None
     if _batch_status_is_active(row.status):
         return True, None
+    if is_certificate_only_user(db, user):
+        ok, _ = can_access_certificate(db, user)
+        if ok:
+            return True, None
     return (
         False,
         f"The batch “{sub}” has been deactivated by the administrator. Login and dashboard access are not available.",
