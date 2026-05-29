@@ -566,6 +566,8 @@ def password_reset_otp_template(name: str, otp: str, ttl_minutes: int) -> str:
 
 def event_registration_confirmation_template(*, registration_number: str) -> str:
     safe_reg = escape((registration_number or "").strip())
+    venue_url = "https://maps.google.com/?q=Icon+Grand+Hotel+by+Bhagini+Bengaluru"
+    venue_label = escape("Icon Grand Hotel by Bhagini, Bengaluru")
     content = f"""
         <p style="font-family: 'Quicksand', sans-serif; font-size: 15px;">Dear Delegate,</p>
         <p style="font-family: 'Quicksand', sans-serif; font-size: 15px;">
@@ -577,6 +579,12 @@ def event_registration_confirmation_template(*, registration_number: str) -> str
         </p>
         <p style="font-family: 'Quicksand', sans-serif; font-size: 15px; margin: 24px 0;">
             Your registration number — <strong style="font-size: 18px; color: #1f6798;">{safe_reg}</strong>
+        </p>
+        <p style="font-family: 'Quicksand', sans-serif; font-size: 15px;">
+            <strong>Venue:</strong>{' '}
+            <a href="{venue_url}" style="color: #1f6798; text-decoration: underline;" target="_blank" rel="noopener noreferrer">
+                {venue_label}
+            </a>
         </p>
         <p style="font-family: 'Quicksand', sans-serif; font-size: 15px; margin-top: 28px;">
             Warm regards,<br/><br/>
