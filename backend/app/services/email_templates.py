@@ -199,18 +199,30 @@ def _decrypt_password_for_email(user: User) -> str:
     try:
         return my_simple_crypt(raw, "decrypt")
     except Exception:
-        logger.warning("could not decrypt password for thank-you email user_id=%s", user.id)
+        logger.warning("could not decrypt password for email user_id=%s", user.id)
         return ""
 
 
 def stored_password_for_email(user: User) -> str:
-    """users.password column value (legacy encrypted ciphertext) for login emails."""
+    """users.password column value (legacy encrypted ciphertext)."""
     return (user.password or "").strip()
+
+
+def login_password_for_email(user: User) -> str:
+    """Plaintext password for login emails — matches PHP my_simple_crypt(..., 'decrypt')."""
+    raw = stored_password_for_email(user)
+    if not raw:
+        return ""
+    decrypted = _decrypt_password_for_email(user)
+    if decrypted:
+        return decrypted
+    # Legacy rows may already store plaintext.
+    return raw
 
 
 def plaintext_password_for_password_mail(user: User) -> str:
     """Decrypted password — admin UI only when ADMIN_EXPOSE_PLAINTEXT_PASSWORD is enabled."""
-    return _decrypt_password_for_email(user)
+    return login_password_for_email(user)
 
 
 _PASSWORD_DECRYPT_PHP = re.compile(
@@ -222,8 +234,8 @@ _PASSWORD_PHP_ORPHAN = re.compile(r"password\s*,\s*['\"]decrypt['\"]\s*\)\s*\?>"
 
 
 def _substitute_password_in_template(html: str, user: User) -> str:
-    """Replace PHP password echoes with the stored encrypted password (not decrypted plaintext)."""
-    pwd_esc = escape(stored_password_for_email(user))
+    """Replace PHP password echoes with decrypted plaintext (same as legacy PHP emails)."""
+    pwd_esc = escape(login_password_for_email(user))
     html = _PASSWORD_DECRYPT_PHP.sub(pwd_esc, html)
     html = _PASSWORD_FIELD_PHP.sub(pwd_esc, html)
     html = _PASSWORD_PHP_ORPHAN.sub(pwd_esc, html)
@@ -366,7 +378,7 @@ PASSWORD_MAIL_SUBJECT = "Login Details - harishcriticalcareclasses.com"
 
 
 def password_template_for_user(user: User) -> str:
-    """Login-details email — password line shows users.password (encrypted), matching legacy PHP storage."""
+    """Login-details email — password line shows decrypted plaintext for login."""
     for slug in ["send_user_password", "send_password"]:
         raw = _load_php_thank_you(slug)
         if raw:
@@ -374,7 +386,7 @@ def password_template_for_user(user: User) -> str:
 
     name = escape(f"{(user.title or '').strip()} {(user.name or '').strip()}".strip() or "Learner")
     email_esc = escape((user.email or "").strip())
-    pwd_esc = escape(stored_password_for_email(user))
+    pwd_esc = escape(login_password_for_email(user))
     return _legacy_php_layout(f"""
       <h2 style="color: #1f6798;">Your Login Details</h2>
       <p>Dear {name},</p>
@@ -527,6 +539,7 @@ def resolve_batch_template_email(
     safe_values = {
         "name": escape(full_name),
         "email": escape((user.email or "").strip()),
+        "password": escape(login_password_for_email(user)),
         "subscription": escape((user.subscription or "").strip()),
         "batch_name": escape((batch.name or "").strip()),
         "dashboard_url": escape(f"{settings.email_asset_base_url}/dashboard"),
