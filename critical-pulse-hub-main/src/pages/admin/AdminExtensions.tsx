@@ -16,6 +16,7 @@ interface ExtensionSetting {
   months: number;
   start_date: string;
   end_date: string;
+  base_date: string;
 }
 
 export default function AdminExtensions() {
@@ -203,7 +204,18 @@ export default function AdminExtensions() {
             
             <form className="p-6 space-y-5" onSubmit={(e) => {
               e.preventDefault();
-              updateMut.mutate(editing);
+              updateMut.mutate({
+                batch_name: editing.batch_name,
+                enabled: editing.enabled,
+                gross_amount: editing.gross_amount,
+                gst_percentage: editing.gst_percentage,
+                gst_amount: editing.gst_amount,
+                total_amount: editing.total_amount,
+                months: editing.months,
+                start_date: editing.start_date,
+                end_date: editing.end_date,
+                base_date: editing.base_date,
+              });
             }}>
               <div className="flex items-center justify-between p-3 bg-chalk-cool rounded-sm border border-border-soft">
                 <div className="flex flex-col">
@@ -281,8 +293,24 @@ export default function AdminExtensions() {
                 </select>
               </div>
 
+              <div className="space-y-1.5">
+                <label className="block font-mono text-[10px] text-ink-faint uppercase tracking-wider">Official batch end / extension starts</label>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint" size={14} />
+                  <input
+                    type="date"
+                    className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 pl-9 pr-3 text-sm focus:ring-1 focus:ring-slate/20 outline-none"
+                    value={editing.base_date}
+                    onChange={(e) => setEditing({ ...editing, base_date: e.target.value })}
+                  />
+                </div>
+                <p className="text-[10px] text-ink-muted italic">
+                  Students can pay before this date; extended access begins from this date (e.g. 15 Jul 2026 → until 15 Sep 2026 for 2 months).
+                </p>
+              </div>
+
               <div className="space-y-1.5 pt-2">
-                <label className="block font-mono text-[10px] text-ink-faint uppercase tracking-wider">Visibility Window (Start & End Date)</label>
+                <label className="block font-mono text-[10px] text-ink-faint uppercase tracking-wider">Payment window (when link is shown)</label>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="relative">
                     <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint" size={14} />

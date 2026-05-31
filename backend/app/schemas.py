@@ -125,6 +125,13 @@ class ExtensionAccess(BaseModel):
     extension_months: int = 2
     estimated_amount: Optional[float] = None
     currency_name: Optional[str] = None
+    gross_amount: Optional[float] = None
+    gst_percentage: Optional[float] = None
+    gst_amount: Optional[float] = None
+    payment_amount_inr: Optional[float] = None
+    batch_end_date: Optional[str] = None
+    extended_end_date: Optional[str] = None
+    headline: Optional[str] = None
 
 
 class DashboardSummary(BaseModel):

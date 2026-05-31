@@ -189,10 +189,11 @@ class ExtensionBatchSettingPayload(BaseModel):
     months: int = 2
     start_date: Optional[str] = None
     end_date: Optional[str] = None
+    base_date: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_dates(self) -> "ExtensionBatchSettingPayload":
-        for field in ["start_date", "end_date"]:
+        for field in ["start_date", "end_date", "base_date"]:
             val = getattr(self, field)
             if val and val.strip():
                 try:
@@ -226,6 +227,7 @@ def list_extension_batch_settings(db: Session = Depends(get_db)) -> list[dict]:
                 "months": int(settings.get("months") or 2),
                 "start_date": settings.get("start_date") or "",
                 "end_date": settings.get("end_date") or "",
+                "base_date": settings.get("base_date") or "",
             }
         )
     return out
@@ -253,6 +255,7 @@ def upsert_extension_batch_settings(
         months_key = extension_option_key("months", batch_name)
         start_key = extension_option_key("start_date", batch_name)
         end_key = extension_option_key("end_date", batch_name)
+        base_key = extension_option_key("base_date", batch_name)
         
         _upsert_option(db, enabled_key, "1" if payload.enabled else "0")
         _upsert_option(db, gross_key, str(payload.gross_amount))
@@ -262,6 +265,7 @@ def upsert_extension_batch_settings(
         _upsert_option(db, months_key, str(payload.months))
         _upsert_option(db, start_key, (payload.start_date or "").strip())
         _upsert_option(db, end_key, (payload.end_date or "").strip())
+        _upsert_option(db, base_key, (payload.base_date or "").strip())
 
     db.commit()
     return {"status": "ok"}

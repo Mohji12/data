@@ -16,6 +16,16 @@ interface ExtensionOffer {
   gross_amount?: number;
   gst_percentage?: number;
   gst_amount?: number;
+  batch_end_date?: string;
+  extended_end_date?: string;
+  headline?: string;
+}
+
+function formatDisplayDate(iso: string | undefined): string {
+  if (!iso) return '';
+  const d = new Date(`${iso}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
 export default function ExtendSubscription() {
@@ -127,9 +137,30 @@ export default function ExtendSubscription() {
   return (
     <div className="p-6 lg:p-8 max-w-2xl">
       <h1 className="font-display font-bold text-3xl text-slate mb-3">Extend Subscription</h1>
-      <p className="font-sans text-sm text-ink-muted mb-6">
-        Extend your current subscription by <strong>{offer.extension_months} months</strong>.
-      </p>
+      {offer.headline ? (
+        <p className="font-sans text-sm text-ink-secondary mb-3 leading-relaxed">{offer.headline}</p>
+      ) : (
+        <p className="font-sans text-sm text-ink-muted mb-3">
+          Extend your current subscription by <strong>{offer.extension_months} months</strong>.
+        </p>
+      )}
+      {(offer.batch_end_date || offer.extended_end_date) && (
+        <p className="font-sans text-sm text-ink-muted mb-6">
+          You can pay now. Extended access runs from{' '}
+          <strong>{formatDisplayDate(offer.batch_end_date)}</strong>
+          {offer.extended_end_date ? (
+            <>
+              {' '}until <strong>{formatDisplayDate(offer.extended_end_date)}</strong>
+            </>
+          ) : null}
+          .
+        </p>
+      )}
+      {!offer.batch_end_date && !offer.extended_end_date && (
+        <p className="font-sans text-sm text-ink-muted mb-6">
+          Payment is available now. Your access will be extended by {offer.extension_months} months from the official batch end date.
+        </p>
+      )}
 
       {/* Pricing Card */}
       <div className="bg-chalk border border-border-soft rounded-sm p-5 mb-6 space-y-3 shadow-sm">

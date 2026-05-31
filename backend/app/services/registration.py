@@ -578,6 +578,8 @@ def extend_active_subscription(
     batch_slug: str,
     extend_months: int,
     activated_at: datetime,
+    extension_base_date: datetime | None = None,
+    package_id: int | None = None,
 ) -> UserSubscription:
     active = (
         db.query(UserSubscription)
@@ -589,12 +591,34 @@ def extend_active_subscription(
         .order_by(UserSubscription.end_at.desc())
         .first()
     )
+    months = int(extend_months or 0)
+    if extension_base_date:
+        new_end = _add_months(extension_base_date, months)
+    elif active and active.end_at:
+        base = active.end_at if active.end_at > activated_at else activated_at
+        new_end = _add_months(base, months)
+    else:
+        new_end = _add_months(activated_at, months)
+
     if not active:
-        raise HTTPException(status_code=400, detail="No active subscription to extend")
-    base = active.end_at if active.end_at and active.end_at > activated_at else activated_at
-    active.end_at = _add_months(base, int(extend_months or 0))
+        sub = UserSubscription(
+            user_id=user_id,
+            batch_slug=(batch_slug or ""),
+            package_id=package_id,
+            duration_months=months or None,
+            start_at=activated_at,
+            end_at=new_end,
+            status="active",
+            auto_renew="0",
+        )
+        db.add(sub)
+        return sub
+
+    active.end_at = new_end
     if active.duration_months:
-        active.duration_months = int(active.duration_months) + int(extend_months or 0)
+        active.duration_months = int(active.duration_months) + months
+    else:
+        active.duration_months = months
     db.add(active)
     return active
 

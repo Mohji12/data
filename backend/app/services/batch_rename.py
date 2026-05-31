@@ -48,6 +48,7 @@ EXTENSION_OPTION_KINDS = (
     "months",
     "start_date",
     "end_date",
+    "base_date",
 )
 
 BATCH_SLUG_ALIAS_PREFIX = "batch_slug_alias::"

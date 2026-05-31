@@ -4,7 +4,6 @@ import { useOdometer } from '@/hooks/useOdometer';
 import { PlayCircle, ClipboardCheck, BookOpen, ArrowUpRight, AlertTriangle } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
-import { useEffect } from 'react';
 
 export default function Dashboard() {
   const { user } = useAuthStore();
@@ -32,6 +31,25 @@ export default function Dashboard() {
           <h1 className="font-display font-bold text-3xl text-slate">Good morning, {summary?.name || user?.name || 'Doctor'}.</h1>
         </div>
         
+        {summary?.extension?.enabled && (
+          <div className="bg-mint-pale border border-mint/30 rounded-sm px-5 py-4 mt-4 flex flex-col sm:flex-row sm:items-center gap-3">
+            <p className="font-sans text-sm text-slate flex-1">
+              {summary.extension.headline || (
+                <>
+                  Extend your access by {summary.extension.extension_months} months —{' '}
+                  ₹{summary.extension.payment_amount_inr?.toLocaleString() ?? summary.extension.estimated_amount}
+                </>
+              )}
+            </p>
+            <Link
+              to="/dashboard/extend-subscription"
+              className="shrink-0 inline-flex items-center justify-center bg-slate text-chalk rounded-sm px-4 py-2 font-sans text-sm font-semibold hover:bg-slate-light"
+            >
+              Pay & extend access →
+            </Link>
+          </div>
+        )}
+
         {(!summary?.video?.enabled || !summary?.mock_test?.enabled || !summary?.certificate?.enabled) && (
           <div className="bg-amber-pale border border-amber/30 rounded-sm px-5 py-3 mt-3 flex items-center gap-3">
             <AlertTriangle size={15} className="text-amber shrink-0" />
@@ -72,7 +90,9 @@ export default function Dashboard() {
             ...(summary?.extension?.enabled
               ? [{
                   title: 'Extend Subscription',
-                  sub: `${summary?.extension?.days_to_expiry ?? 0} days left · ${summary?.extension?.currency_name || 'INR'} ${summary?.extension?.estimated_amount ?? 0}`,
+                  sub: summary?.extension?.headline
+                    ? 'Continue access after the official batch end date'
+                    : `${summary?.extension?.days_to_expiry ?? 0} days left · ₹${summary?.extension?.payment_amount_inr ?? summary?.extension?.estimated_amount ?? 0}`,
                   to: '/dashboard/extend-subscription',
                 }]
               : []),

@@ -23,7 +23,13 @@ from app.services.email_templates import (
     resolve_batch_template_email,
 )
 from app.services.mailer import send_html_email
-from app.services.access import find_active_user_subscription, get_extension_offer
+from app.services.access import (
+    batch_slug,
+    find_active_user_subscription,
+    get_extension_batch_settings,
+    get_extension_offer,
+    parse_iso_date,
+)
 from app.services.registration import activate_user_subscription, extend_active_subscription
 from app.schemas import PaymentFinalizeResponse, PaymentOrderResponse
 
@@ -99,12 +105,14 @@ def init_extension_payment(db: Session, user: User) -> dict:
     offer = get_extension_offer(db, user)
     if not offer.get("enabled"):
         raise HTTPException(status_code=400, detail=offer.get("reason") or "Extension is not available")
+
     active_sub = find_active_user_subscription(db, user)
-    if not active_sub:
-        raise HTTPException(status_code=400, detail="No active subscription found")
+    batch_slug_val = (active_sub.batch_slug or "").strip() if active_sub else ""
+    package_id = (active_sub.package_id if active_sub else None) or user.package_id
+    if not batch_slug_val:
+        batch_slug_val = batch_slug(user.subscription)
 
     # Payment is ALWAYS in INR for Razorpay
-    # For foreign students, the display amount is in USD but payment goes through in INR
     payment_amount_inr = float(offer.get("payment_amount_inr") or offer.get("estimated_amount") or 0.0)
     display_amount = float(offer.get("estimated_amount") or 0.0)
     display_currency = str(offer.get("currency_name") or "INR").upper()
@@ -116,10 +124,10 @@ def init_extension_payment(db: Session, user: User) -> dict:
     txn = RegistrationPaymentTxn(
         request_id=request_id,
         user_id=user.id,
-        batch_slug=(active_sub.batch_slug or ""),
-        package_id=active_sub.package_id,
-        amount=payment_amount_inr,       # Always INR for Razorpay
-        currency="INR",                   # Always INR for Razorpay
+        batch_slug=batch_slug_val,
+        package_id=package_id,
+        amount=payment_amount_inr,
+        currency="INR",
         gateway="extension",
         gateway_status="created",
         is_finalized="0",
@@ -128,9 +136,9 @@ def init_extension_payment(db: Session, user: User) -> dict:
     db.commit()
     return {
         "request_id": request_id,
-        "amount": payment_amount_inr,      # INR amount for Razorpay
-        "currency": "INR",                 # Always INR
-        "display_amount": display_amount,  # USD or INR for UI
+        "amount": payment_amount_inr,
+        "currency": "INR",
+        "display_amount": display_amount,
         "display_currency": display_currency,
         "extension_months": int(offer.get("extension_months") or 2),
     }
@@ -411,12 +419,20 @@ def _apply_registration_payment_success(
 
     pkg = db.query(Package).filter(Package.id == txn.package_id).first()
     if is_extension:
+        manual = get_extension_batch_settings(db, user.subscription)
+        extend_months = int(manual.get("months") or 2)
+        base_day = parse_iso_date(manual.get("base_date"))
+        extension_base = (
+            datetime.combine(base_day, datetime.max.time()).replace(microsecond=0) if base_day else None
+        )
         extend_active_subscription(
             db,
             user_id=user.id,
-            batch_slug=(txn.batch_slug or ""),
-            extend_months=2,
+            batch_slug=(txn.batch_slug or batch_slug(user.subscription)),
+            extend_months=extend_months,
             activated_at=now,
+            extension_base_date=extension_base,
+            package_id=txn.package_id or user.package_id,
         )
     elif pkg:
         plan_type = (pkg.plan_type or "one_time").strip().lower()
