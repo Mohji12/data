@@ -9,7 +9,11 @@ import { useOdometer } from '@/hooks/useOdometer';
 import { useInView } from '@/hooks/useInView';
 import { fadeUp, scaleIn, stagger, wordReveal } from '@/lib/motion';
 import { courses, testimonials, features, buildPublicBatchPills } from '@/lib/mockData';
-import { filterPublicBatches, getPublicBatchDisplayName } from '@/lib/publicBatches';
+import {
+  filterPublicBatches,
+  filterRegistrationCatalogBatches,
+  getPublicBatchDisplayName,
+} from '@/lib/publicBatches';
 import { useEffect, useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
@@ -561,7 +565,7 @@ export default function Home() {
 
   const catalog = useMemo(() => {
     if (!catalogRaw) return [];
-    return filterPublicBatches(catalogRaw as any[]);
+    return filterRegistrationCatalogBatches(catalogRaw as any[]);
   }, [catalogRaw]);
 
   const heroPills = buildPublicBatchPills(regBatches);

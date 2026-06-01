@@ -12,6 +12,13 @@ export const courses = [
  * Public batches (hero pills + navbar buttons).
  * `slugCandidates`: API `/registration/batches` slugs — first match wins per row.
  */
+import {
+  isRegistrationExcludedBatch,
+  registrationExcludedSlugs,
+} from '@/lib/publicBatches';
+
+export { registrationExcludedSlugs };
+
 export const marketingBatches = [
   {
     label: 'CCM Batch 2',
@@ -58,7 +65,9 @@ export type RegistrationBatchPick<T> = T & { displayTitle: string };
 /** Subset of API batches for registration UI, fixed order, marketing labels. */
 export function pickRegistrationBatches<T extends { slug: string; title?: string }>(
   batches: T[] | undefined,
+  options?: { forRegistrationPage?: boolean },
 ): RegistrationBatchPick<T>[] {
+  const hideExcluded = options?.forRegistrationPage !== false;
   if (!batches?.length) return [];
   const bySlug = new Map(batches.map((b) => [b.slug, b]));
   const out: RegistrationBatchPick<T>[] = [];
@@ -69,6 +78,10 @@ export function pickRegistrationBatches<T extends { slug: string; title?: string
     for (const slug of m.slugCandidates) {
       const b = bySlug.get(slug);
       if (b) {
+        if (hideExcluded && isRegistrationExcludedBatch({ slug: b.slug, title: b.title })) {
+          usedSlugs.add(b.slug);
+          break;
+        }
         out.push({ ...b, displayTitle: m.label });
         usedSlugs.add(b.slug);
         break;
@@ -79,6 +92,10 @@ export function pickRegistrationBatches<T extends { slug: string; title?: string
   // 2. Append any remaining batches from API that weren't in marketing candidates
   for (const b of batches) {
     if (!usedSlugs.has(b.slug)) {
+      if (hideExcluded && isRegistrationExcludedBatch({ slug: b.slug, title: b.title })) {
+        usedSlugs.add(b.slug);
+        continue;
+      }
       // Exclude legacy slugs from being auto-appended (e.g., CP 1-10, old EDIC)
       // These will only show up if explicitly mapped in marketingBatches above.
       const s = b.slug.toLowerCase();
@@ -101,7 +118,7 @@ export function pickRegistrationBatches<T extends { slug: string; title?: string
 export function buildPublicBatchPills<T extends { slug: string }>(
   batches: T[] | undefined,
 ): Array<{ label: string; to: string }> {
-  const matched = pickRegistrationBatches(batches);
+  const matched = pickRegistrationBatches(batches, { forRegistrationPage: true });
 
   return matched.map((b) => ({
     label: b.displayTitle,

@@ -5,6 +5,7 @@ import { ArrowUpRight, FileText } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
+import { filterRegistrationCatalogBatches } from '@/lib/publicBatches';
 
 type CatalogRow = {
   batch_slug: string;
@@ -21,7 +22,9 @@ export default function Membership() {
     queryFn: () => apiClient('/registration/catalog?include_inactive=true') as Promise<CatalogRow[]>,
   });
 
-  const rows = [...(catalog || [])].sort((a, b) => a.batch_name.localeCompare(b.batch_name));
+  const rows = [...filterRegistrationCatalogBatches(catalog || [])].sort((a, b) =>
+    a.batch_name.localeCompare(b.batch_name),
+  );
 
   return (
     <div className="min-h-screen">

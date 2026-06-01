@@ -1,6 +1,6 @@
 from __future__ import annotations
 import csv
-from datetime import date
+from datetime import date, datetime
 import io
 import secrets
 import string
@@ -289,6 +289,7 @@ class PackagePayload(BaseModel):
     discounted_amount: float = 0.0
     discount_start_date: Optional[str] = None
     discount_end_date: Optional[str] = None
+    sync_promo_discount: bool = True
     status: str = "1"
 
 
@@ -401,9 +402,18 @@ def create_package(payload: PackagePayload, db: Session = Depends(get_db)) -> di
 
 @router.put("/packages/{package_id}", dependencies=[Depends(require_admin_type("techadmin"))])
 def update_package(package_id: int, payload: PackagePayload, db: Session = Depends(get_db)) -> dict:
+    from app.services.registration import (
+        shift_following_package_windows_after_extension,
+        _recompute_package_stored_amounts,
+        _sync_timed_promo_discount_across_subscription_packages,
+        _sync_tier_dates_across_delegate_categories,
+        _package_promo_discount_active,
+    )
+
     p = db.query(Package).filter(Package.id == package_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Package not found")
+    old_end = p.end_date.date() if isinstance(p.end_date, datetime) else p.end_date
     plan_type = _normalize_plan_type(payload.plan_type)
     duration_months = _normalize_duration_months(plan_type, payload.duration_months)
     p.name = payload.name
@@ -424,9 +434,46 @@ def update_package(package_id: int, payload: PackagePayload, db: Session = Depen
     p.discount_start_date = _parse_iso_date(payload.discount_start_date)
     p.discount_end_date = _parse_iso_date(payload.discount_end_date)
     p.status = payload.status
+    _recompute_package_stored_amounts(p)
+    new_end = p.end_date.date() if isinstance(p.end_date, datetime) else p.end_date
+    new_start = p.start_date.date() if isinstance(p.start_date, datetime) else p.start_date
     db.add(p)
+    promo_synced = 0
+    if payload.sync_promo_discount:
+        promo_synced = _sync_timed_promo_discount_across_subscription_packages(db, p)
+    synced = _sync_tier_dates_across_delegate_categories(
+        db, p, end_date=new_end, start_date=new_start
+    )
+    shifted = 0
+    if old_end and new_end and new_end > old_end:
+        shifted += shift_following_package_windows_after_extension(db, p, old_end, new_end)
+        # Shift later tiers for the paired delegate category (Indian / Foreign).
+        tier_name = (p.name or "").strip()
+        sub = (p.subscription or "").strip()
+        if tier_name and sub:
+            twin = (
+                db.query(Package)
+                .filter(
+                    Package.subscription == sub,
+                    Package.name == tier_name,
+                    Package.status == "1",
+                    Package.id != p.id,
+                )
+                .first()
+            )
+            if twin:
+                shifted += shift_following_package_windows_after_extension(
+                    db, twin, old_end, new_end
+                )
     db.commit()
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "delegate_rows_synced": synced,
+        "promo_discount_rows_synced": promo_synced,
+        "promo_discount_active_today": _package_promo_discount_active(p),
+        "following_tiers_shifted": shifted,
+        "gap_days_after_tier_end": 15,
+    }
 
 
 @router.delete("/packages/{package_id}", dependencies=[Depends(require_admin_type("techadmin"))])

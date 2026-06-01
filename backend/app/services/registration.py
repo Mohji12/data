@@ -81,6 +81,78 @@ BATCH_SLUG_TO_PACKAGE_SUBSCRIPTION: dict[str, str] = {
     "batch-10-edic-1": "Batch EDIC 10",
 }
 
+# Legacy + current user.subscription values for the same CCM Batch 3 enrolment.
+CCM_BATCH_3_USER_SUBSCRIPTIONS = ("CCM Batch 3", "PRACTICAL SERIES BATCH 3")
+
+
+def expand_batch_user_subscription_filter(
+    db: Session,
+    filter_value: str,
+) -> tuple[list[str], list[int]]:
+    """
+    Resolve admin batch filter to all user.subscription strings and package ids for that batch.
+    Includes package_subscription from batch_master and CCM Batch 3 aliases.
+    """
+    raw = (filter_value or "").strip()
+    if not raw:
+        return [], []
+
+    names: set[str] = {raw}
+    row = (
+        db.query(BatchMaster)
+        .filter(
+            or_(
+                func.lower(func.trim(BatchMaster.name)) == raw.casefold(),
+                func.lower(func.trim(BatchMaster.package_subscription)) == raw.casefold(),
+            )
+        )
+        .first()
+    )
+    if row:
+        if (row.name or "").strip():
+            names.add((row.name or "").strip())
+        pkg_sub = _row_package_subscription(row)
+        if pkg_sub:
+            names.add(pkg_sub)
+
+    lowered = {n.casefold() for n in names}
+    if lowered & {s.casefold() for s in CCM_BATCH_3_USER_SUBSCRIPTIONS}:
+        names.update(CCM_BATCH_3_USER_SUBSCRIPTIONS)
+
+    pkg_ids: set[int] = set()
+    for sub_name in names:
+        rows = (
+            db.query(Package.id)
+            .filter(_subscription_name_eq(Package.subscription, sub_name), Package.status == "1")
+            .all()
+        )
+        pkg_ids.update(int(r[0]) for r in rows)
+
+    return sorted(names), sorted(pkg_ids)
+
+
+def apply_batch_subscription_filter_to_users(query, db: Session, filter_values: list[str]):
+    """Narrow a User query to everyone enrolled under the given batch filter(s)."""
+    all_names: set[str] = set()
+    all_pkg_ids: set[int] = set()
+    for fv in filter_values:
+        if not (fv or "").strip():
+            continue
+        names, pkg_ids = expand_batch_user_subscription_filter(db, fv.strip())
+        all_names.update(n.casefold() for n in names)
+        all_pkg_ids.update(pkg_ids)
+
+    if not all_names and not all_pkg_ids:
+        return query
+
+    clauses = []
+    if all_names:
+        clauses.append(func.lower(func.coalesce(User.subscription, "")).in_(list(all_names)))
+    if all_pkg_ids:
+        clauses.append(User.package_id.in_(list(all_pkg_ids)))
+    return query.filter(or_(*clauses))
+
+
 # Public fee/registration URL slug → exact `batch_master.name` (case-insensitive) when DB uses different labels.
 REGISTRATION_FEE_SLUG_TO_BATCH_NAME: dict[str, str] = {}
 
@@ -226,20 +298,289 @@ def _package_end_open_on_or_after(day: date):
     )
 
 
+# Days after a tier ends before the next tier may start (admin extends early bird → following tiers shift).
+PRICING_TIER_GAP_DAYS = 15
+# Show upcoming tiers on fee/register UI when their start_date is within this many days ahead.
+PRICING_TIER_UPCOMING_DAYS = 15
+_DURATION_IN_NAME_RE = re.compile(r"\b\d+\s*months?\b", re.I)
+
+
+def _as_date(val: object) -> date | None:
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    return None
+
+
+def _package_promo_discount_active(pkg: Package, today: Optional[date] = None) -> bool:
+    """True when package.discount_* should reduce payable amount today (inclusive start/end dates)."""
+    day = today or date.today()
+    pct = float(pkg.discount_percentage or 0)
+    disc_amt = float(pkg.discounted_amount or 0)
+    if pct <= 0 and disc_amt < 0.5:
+        return False
+    start = _as_date(pkg.discount_start_date)
+    end = _as_date(pkg.discount_end_date)
+    if start and day < start:
+        return False
+    if end and day > end:
+        return False
+    return True
+
+
+def _resolve_package_line_amounts(
+    pkg: Package,
+    *,
+    today: Optional[date] = None,
+) -> tuple[float, float, float, float]:
+    """(gross, gst_percent, gst_amount, total) for registration, fee table, and payment."""
+    gross = float(pkg.gross_amount or 0)
+    gst_pct = float(pkg.gst_percentage or 18)
+
+    if _package_promo_discount_active(pkg, today):
+        pct_disc = float(pkg.discount_percentage or 0)
+        disc_amt = float(pkg.discounted_amount or 0)
+        if pct_disc > 0 and disc_amt < 0.5:
+            disc_amt = round(gross * pct_disc / 100.0, 2)
+        taxable = max(0.0, round(gross - disc_amt, 2))
+        gst_amt = float(pkg.gst_amount or 0)
+        if gst_amt < 0.5:
+            gst_amt = round(taxable * gst_pct / 100.0, 2)
+        total = float(pkg.total_amount or 0)
+        if total < 0.5:
+            total = round(taxable + gst_amt, 2)
+        return gross, gst_pct, gst_amt, total
+
+    gst_amt = round(gross * gst_pct / 100.0, 2)
+    total = round(gross + gst_amt, 2)
+    return gross, gst_pct, gst_amt, total
+
+
+def _recompute_package_stored_amounts(pkg: Package) -> None:
+    """Persist discounted_amount / gst_amount / total_amount from gross + discount_percentage."""
+    gross = float(pkg.gross_amount or 0)
+    gst_pct = float(pkg.gst_percentage or 18)
+    pct = float(pkg.discount_percentage or 0)
+    if pct > 0:
+        disc_amt = round(gross * pct / 100.0, 2)
+        taxable = max(0.0, round(gross - disc_amt, 2))
+        gst_amt = round(taxable * gst_pct / 100.0, 2)
+        total = round(taxable + gst_amt, 2)
+        pkg.discounted_amount = disc_amt
+        pkg.gst_amount = gst_amt
+        pkg.total_amount = total
+    else:
+        gst_amt = round(gross * gst_pct / 100.0, 2)
+        pkg.discounted_amount = 0.0
+        pkg.gst_amount = gst_amt
+        pkg.total_amount = round(gross + gst_amt, 2)
+
+
+def _sync_timed_promo_discount_across_subscription_packages(db: Session, pkg: Package) -> int:
+    """
+    Mirror timed promo (%, start, end) to every subscription row for the same batch subscription
+    (e.g. all BATCH 16-MCCM 6/9/12 × Indian/Foreign) so admin sets discount once.
+    """
+    if (pkg.plan_type or "").strip().lower() != "subscription":
+        return 0
+    sub = (pkg.subscription or "").strip()
+    if not sub:
+        return 0
+    siblings = (
+        db.query(Package)
+        .filter(
+            _subscription_name_eq(Package.subscription, sub),
+            Package.status == "1",
+            Package.id != pkg.id,
+            func.lower(func.trim(Package.plan_type)) == "subscription",
+        )
+        .all()
+    )
+    touched = 0
+    for row in siblings:
+        row.discount_percentage = pkg.discount_percentage
+        row.discount_start_date = pkg.discount_start_date
+        row.discount_end_date = pkg.discount_end_date
+        _recompute_package_stored_amounts(row)
+        db.add(row)
+        touched += 1
+    return touched
+
+
+def _tier_label_from_package(p: Package) -> str:
+    name = (p.name or "").strip()
+    stripped = _DURATION_IN_NAME_RE.sub("", name).strip(" -–—")
+    if stripped:
+        return stripped
+    start = _as_date(p.start_date)
+    end = _as_date(p.end_date)
+    if start and end:
+        return f"{start.strftime('%d %b %Y')} – {end.strftime('%d %b %Y')}"
+    return name or "Offer"
+
+
+def _pricing_window_key(p: Package) -> tuple:
+    label = _tier_label_from_package(p).casefold()
+    plan = (p.plan_type or "one_time").strip().lower()
+    # Subscription 6/9/12 rows share one tier name but may have mixed null/start dates — group by label.
+    if plan == "subscription":
+        return (label,)
+    return (_as_date(p.start_date), _as_date(p.end_date), label)
+
+
+def _package_visible_for_registration(
+    p: Package,
+    today: date,
+    *,
+    include_upcoming: bool = True,
+) -> bool:
+    """True if this package row should appear on register/fee UI today."""
+    if (p.status or "") != "1":
+        return False
+    start = _as_date(p.start_date)
+    end = _as_date(p.end_date)
+    if start and start > today:
+        if not include_upcoming:
+            return False
+        horizon = today.toordinal() + PRICING_TIER_UPCOMING_DAYS
+        if start.toordinal() > horizon:
+            return False
+    plan = (p.plan_type or "one_time").strip().lower()
+    if plan == "subscription":
+        return True
+    if end is None:
+        return True
+    return end >= today
+
+
+def _group_packages_by_pricing_window(packages: list[Package]) -> list[dict[str, object]]:
+    """Group subscription (or one_time) rows that share the same sale window."""
+    buckets: dict[tuple[date | None, date | None, str], list[Package]] = {}
+    for p in packages:
+        buckets.setdefault(_pricing_window_key(p), []).append(p)
+    groups: list[dict[str, object]] = []
+    for _key, rows in buckets.items():
+        rows_sorted = sorted(rows, key=lambda x: (int(x.duration_months or 0), x.id))
+        lead = rows_sorted[0]
+        starts = [s for s in (_as_date(p.start_date) for p in rows_sorted) if s]
+        ends = [e for e in (_as_date(p.end_date) for p in rows_sorted) if e]
+        window_end = None if any(_as_date(p.end_date) is None for p in rows_sorted) else (max(ends) if ends else None)
+        groups.append(
+            {
+                "label": _tier_label_from_package(lead),
+                "start": min(starts) if starts else None,
+                "end": window_end,
+                "packages": rows_sorted,
+            }
+        )
+    groups.sort(
+        key=lambda g: (
+            (g["start"] or date.min).toordinal(),
+            (g["end"] or date.max).toordinal(),
+        )
+    )
+    return groups
+
+
+def _sync_tier_dates_across_delegate_categories(
+    db: Session,
+    pkg: Package,
+    *,
+    end_date: date | None = None,
+    start_date: date | None = None,
+) -> int:
+    """Mirror start/end on the other delegate row for the same tier name (Indian ↔ Foreign)."""
+    tier_name = (pkg.name or "").strip()
+    sub = (pkg.subscription or "").strip()
+    if not tier_name or not sub:
+        return 0
+    siblings = (
+        db.query(Package)
+        .filter(
+            Package.subscription == sub,
+            Package.name == tier_name,
+            Package.status == "1",
+            Package.id != pkg.id,
+        )
+        .all()
+    )
+    touched = 0
+    for row in siblings:
+        if end_date is not None:
+            row.end_date = end_date
+        if start_date is not None:
+            row.start_date = start_date
+        db.add(row)
+        touched += 1
+    return touched
+
+
+def shift_following_package_windows_after_extension(
+    db: Session,
+    pkg: Package,
+    old_end: date | None,
+    new_end: date | None,
+) -> int:
+    """
+    When admin extends a tier's end_date (e.g. Early Bird 15 Jun → 30 Jun), reposition later tiers
+    for the same subscription + delegate category:
+    - Next tier starts on new_end + PRICING_TIER_GAP_DAYS (e.g. 30 Jun + 15 → 15 Jul)
+    - Window length (end − start) is preserved; prices on package rows are unchanged.
+    """
+    if old_end is None or new_end is None or new_end <= old_end:
+        return 0
+    from datetime import timedelta
+
+    sub = (pkg.subscription or "").strip()
+    cat = (pkg.category_name or "").strip()
+    if not sub or not cat:
+        return 0
+    followers = (
+        db.query(Package)
+        .filter(
+            Package.subscription == sub,
+            Package.category_name == cat,
+            Package.status == "1",
+            Package.id != pkg.id,
+            Package.start_date.isnot(None),
+            cast(Package.start_date, Date) > old_end,
+        )
+        .order_by(Package.start_date.asc(), Package.id.asc())
+        .all()
+    )
+    moved = 0
+    cursor = new_end
+    for row in followers:
+        old_start = _as_date(row.start_date)
+        old_end_row = _as_date(row.end_date)
+        if old_start and old_end_row and old_end_row >= old_start:
+            span_days = (old_end_row - old_start).days
+        else:
+            span_days = 14
+        cursor = cursor + timedelta(days=PRICING_TIER_GAP_DAYS)
+        row.start_date = cursor
+        row.end_date = cursor + timedelta(days=span_days)
+        cursor = _as_date(row.end_date) or cursor
+        db.add(row)
+        moved += 1
+    return moved
+
+
 def _has_registerable_package_today(db: Session, subscription_title: str) -> bool:
-    """At least one package row in date window (any delegate category)."""
+    """At least one package row open now or starting within PRICING_TIER_UPCOMING_DAYS (any category)."""
     today = date.today()
-    found = (
-        db.query(Package.id)
+    rows = (
+        db.query(Package)
         .filter(
             _subscription_name_eq(Package.subscription, subscription_title),
             Package.status == "1",
-            or_(Package.start_date.is_(None), cast(Package.start_date, Date) <= today),
-            _package_end_open_on_or_after(today),
         )
-        .first()
+        .all()
     )
-    return found is not None
+    return any(_package_visible_for_registration(p, today) for p in rows)
 
 
 def list_batches(db: Session) -> list[BatchDefinition]:
@@ -439,6 +780,55 @@ def _is_india_country(db: Session, country_id: int) -> bool:
 def _registration_category_name(db: Session, country_id: int) -> str:
     """PHP register forms use category_name Indian Delegates / Foreign Delegates."""
     return "Indian Delegates" if _is_india_country(db, country_id) else "Foreign Delegates"
+
+
+def _registration_category_for_packages(
+    db: Session,
+    country_id: int,
+    registration_type: Optional[str] = None,
+) -> str:
+    """Delegate category for package list — prefer explicit registration_type over country row."""
+    rt = (registration_type or "").strip().lower()
+    if "indian" in rt:
+        return "Indian Delegates"
+    if "foreign" in rt:
+        return "Foreign Delegates"
+    return _registration_category_name(db, country_id)
+
+
+def _attach_subscription_duration_siblings(
+    db: Session,
+    visible: list[Package],
+    pkg_sub: str,
+    category: str,
+) -> list[Package]:
+    """
+    Batch 16-style subscription sales: when 6-month is on sale, also list 9- and 12-month
+    rows for the same tier (same pricing window label), even if their start_date differs.
+    """
+    visible_sub = [p for p in visible if (p.plan_type or "").strip().lower() == "subscription"]
+    if not visible_sub:
+        return visible
+    tier_keys = {_pricing_window_key(p) for p in visible_sub}
+    by_id = {p.id: p for p in visible}
+    siblings = (
+        db.query(Package)
+        .filter(
+            _subscription_name_eq(Package.subscription, pkg_sub),
+            Package.status == "1",
+            Package.category_name == category,
+        )
+        .all()
+    )
+    for p in siblings:
+        if (p.plan_type or "").strip().lower() != "subscription":
+            continue
+        if not int(p.duration_months or 0):
+            continue
+        if _pricing_window_key(p) not in tier_keys:
+            continue
+        by_id[p.id] = p
+    return list(by_id.values())
 
 
 def _resolve_package_or_400(db: Session, package_id: int) -> Package:
@@ -646,10 +1036,12 @@ def query_active_packages_for_registration(
     db: Session,
     batch: BatchDefinition,
     country_id: int,
+    *,
+    registration_type: Optional[str] = None,
 ) -> list[Package]:
-    """Same filters as PHP get_payable_amount / save() package lookup (date + subscription + category)."""
+    """Packages in active (or soon-starting) pricing windows — all tiers, not only 6/9/12 subscription rows."""
     today = date.today()
-    category = _registration_category_name(db, country_id)
+    category = _registration_category_for_packages(db, country_id, registration_type)
     pkg_sub = package_subscription_for_batch(batch)
     q = (
         db.query(Package)
@@ -657,17 +1049,24 @@ def query_active_packages_for_registration(
             _subscription_name_eq(Package.subscription, pkg_sub),
             Package.status == "1",
             Package.category_name == category,
-            or_(Package.start_date.is_(None), cast(Package.start_date, Date) <= today),
-            _package_end_open_on_or_after(today),
         )
-        .order_by(Package.id.asc())
+        .order_by(Package.start_date.asc(), Package.id.asc())
     )
-    pkgs = q.all()
+    pkgs = [p for p in q.all() if _package_visible_for_registration(p, today)]
+    pkgs = _attach_subscription_duration_siblings(db, pkgs, pkg_sub, category)
     if not pkgs:
         return []
-    if any((p.plan_type or "").strip().lower() == "subscription" for p in pkgs):
-        sub_rows = [p for p in pkgs if (p.plan_type or "").strip().lower() == "subscription"]
-        return sorted(sub_rows, key=lambda p: (int(p.duration_months or 0), p.id))
+
+    sub_rows = [p for p in pkgs if (p.plan_type or "").strip().lower() == "subscription"]
+    tier_rows = sub_rows if sub_rows else pkgs
+    windows = _group_packages_by_pricing_window(tier_rows)
+    out: list[Package] = []
+    for group in windows:
+        out.extend(group["packages"])  # type: ignore[arg-type]
+    if out:
+        return out
+    if sub_rows:
+        return sorted(sub_rows, key=lambda x: (int(x.duration_months or 0), x.id))
     return _narrow_packages_to_single_pricing_tier(pkgs)
 
 
@@ -748,10 +1147,7 @@ def compute_registration_amount(
     reserve_coupon: bool = False,
 ) -> PayableAmountResponse:
     sub = (subscription or "").strip() or (package.subscription or batch.title or "").strip()
-    gross = float(package.gross_amount or 0.0)
-    gst_percent = float(package.gst_percentage or 0.0)
-    gst_amount = float(package.gst_amount or 0.0)
-    total = float(package.total_amount or (gross + gst_amount))
+    gross, gst_percent, gst_amount, total = _resolve_package_line_amounts(package)
     is_india = _is_india_country(db, country_id)
 
     is_old_student = False
@@ -768,8 +1164,9 @@ def compute_registration_amount(
         if old:
             is_old_student = True
 
-    early_bird_applied = False
-    early_bird_percent = 0.0
+    promo_active = _package_promo_discount_active(package)
+    early_bird_applied = promo_active and float(package.discount_percentage or 0) > 0
+    early_bird_percent = float(package.discount_percentage or 0) if early_bird_applied else 0.0
     discount_percent_used = 0.0
     coupon_applied = False
     coupon_row: Optional[CouponMaster] = None
@@ -1001,9 +1398,7 @@ def initialize_registration(
 
 
 def _scale_pkg_for_fee_display(pkg: Package, usd_rate: float, is_inr: bool) -> Tuple[float, float, float]:
-    gross = float(pkg.gross_amount or 0)
-    gst_amt = float(pkg.gst_amount or 0)
-    total = float(pkg.total_amount or (gross + gst_amt))
+    gross, _gst_pct, gst_amt, total = _resolve_package_line_amounts(pkg)
     if not is_inr:
         gross = _to_display_usd(gross, usd_rate)
         gst_amt = _to_display_usd(gst_amt, usd_rate)
@@ -1011,9 +1406,163 @@ def _scale_pkg_for_fee_display(pkg: Package, usd_rate: float, is_inr: bool) -> T
     return gross, gst_amt, total
 
 
+def _fee_table_tier_rank(p: Package) -> int:
+    """Consistent column order: Early Bird → Early Bird Extended → Regular."""
+    n = (p.name or "").strip().lower()
+    if "early bird extended" in n or ("early" in n and "extended" in n):
+        return 2
+    if "early bird" in n:
+        return 0
+    if "regular" in n:
+        return 3
+    return 1
+
+
+def _sort_fee_table_columns(columns: list[Package]) -> list[Package]:
+    def sort_key(p: Package) -> tuple[int, int, int]:
+        start = _as_date(p.start_date) or date.min
+        return (_fee_table_tier_rank(p), start.toordinal(), p.id)
+
+    return sorted(columns, key=sort_key)
+
+
+BATCH_COURSE_MONTHS_DEFAULT = 6
+
+
+def course_end_from_batch_start(batch_start: date, months: int = BATCH_COURSE_MONTHS_DEFAULT) -> date:
+    """Last calendar day of batch access (batch_start + N months, same day-of-month rules as subscriptions)."""
+    dt = datetime.combine(batch_start, datetime.min.time())
+    return _add_months(dt, months).date()
+
+
+def apply_batch_course_window(
+    db: Session,
+    subscription: str,
+    batch_start: date,
+    course_months: int = BATCH_COURSE_MONTHS_DEFAULT,
+) -> dict:
+    """
+    Set batch_start_date on all active packages for a batch subscription and extend the Regular tier
+    registration window through batch_start + course_months (CCM one-time batches).
+    """
+    from datetime import timedelta
+
+    sub = (subscription or "").strip()
+    if not sub:
+        raise HTTPException(status_code=422, detail="subscription is required")
+    rows = (
+        db.query(Package)
+        .filter(_subscription_name_eq(Package.subscription, sub), Package.status == "1")
+        .all()
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No active packages for subscription {sub!r}")
+
+    batch_end = course_end_from_batch_start(batch_start, course_months)
+    tier_ends: list[date] = []
+    for p in rows:
+        p.batch_start_date = datetime.combine(batch_start, datetime.min.time())
+        db.add(p)
+        name = (p.name or "").strip().lower()
+        if "regular" not in name:
+            end = _as_date(p.end_date)
+            if end:
+                tier_ends.append(end)
+
+    latest_non_regular = max(tier_ends) if tier_ends else batch_start
+    regular_start = latest_non_regular + timedelta(days=PRICING_TIER_GAP_DAYS)
+    if regular_start < batch_start:
+        regular_start = batch_start
+
+    regular_rows = [p for p in rows if "regular" in (p.name or "").strip().lower()]
+    for p in regular_rows:
+        p.start_date = regular_start
+        p.end_date = datetime.combine(batch_end, datetime.min.time())
+        db.add(p)
+        _sync_tier_dates_across_delegate_categories(
+            db, p, start_date=regular_start, end_date=batch_end
+        )
+
+    db.commit()
+    return {
+        "subscription": sub,
+        "batch_start": batch_start.isoformat(),
+        "batch_end": batch_end.isoformat(),
+        "regular_tier_start": regular_start.isoformat(),
+        "packages_updated": len(rows),
+        "regular_tiers_updated": len(regular_rows),
+        "course_months": course_months,
+    }
+
+
+def sync_package_tiers_from_reference(
+    db: Session,
+    *,
+    reference_subscription: str,
+    target_subscription: str,
+    tier_names: tuple[str, ...] = ("Early Bird", "Early Bird Extended", "Regular"),
+) -> int:
+    """
+    Copy gross/GST/discount/date fields from reference batch packages to target (same tier + category).
+    Used to keep CCM Batch 3 aligned with CCM Batch 2.
+    """
+    updated = 0
+    ref_sub = reference_subscription.strip()
+    tgt_sub = target_subscription.strip()
+    for tier in tier_names:
+        for category in ("Indian Delegates", "Foreign Delegates"):
+            ref_pkg = (
+                db.query(Package)
+                .filter(
+                    _subscription_name_eq(Package.subscription, ref_sub),
+                    Package.status == "1",
+                    Package.category_name == category,
+                    Package.name == tier,
+                )
+                .first()
+            )
+            if not ref_pkg:
+                continue
+            tgt_pkg = (
+                db.query(Package)
+                .filter(
+                    _subscription_name_eq(Package.subscription, tgt_sub),
+                    Package.status == "1",
+                    Package.category_name == category,
+                    Package.name == tier,
+                )
+                .first()
+            )
+            if not tgt_pkg:
+                continue
+            for field in (
+                "gross_amount",
+                "gst_percentage",
+                "gst_amount",
+                "total_amount",
+                "discount_percentage",
+                "discounted_amount",
+                "start_date",
+                "end_date",
+                "discount_start_date",
+                "discount_end_date",
+                "plan_type",
+                "duration_months",
+            ):
+                setattr(tgt_pkg, field, getattr(ref_pkg, field))
+            db.add(tgt_pkg)
+            updated += 1
+    return updated
+
+
 def _query_packages_for_fee_table(db: Session, subscription: str, *, indian: bool) -> List[Package]:
+    """
+    Fee table columns: one_time → one column per pricing tier (Early Bird, Regular, …).
+    subscription → one column per duration (6 / 9 / 12 months) so Batch 16 shows all plans.
+    """
     needle = "Indian" if indian else "Foreign"
-    return (
+    today = date.today()
+    rows = (
         db.query(Package)
         .filter(
             _subscription_name_eq(Package.subscription, subscription.strip()),
@@ -1023,6 +1572,38 @@ def _query_packages_for_fee_table(db: Session, subscription: str, *, indian: boo
         .order_by(Package.start_date.asc(), Package.id.asc())
         .all()
     )
+    visible = [p for p in rows if _package_visible_for_registration(p, today)]
+    category = "Indian Delegates" if indian else "Foreign Delegates"
+    visible = _attach_subscription_duration_siblings(db, visible, subscription.strip(), category)
+    if not visible:
+        return []
+
+    sub_rows = [p for p in visible if (p.plan_type or "").strip().lower() == "subscription"]
+    if sub_rows:
+        return sorted(sub_rows, key=lambda p: (int(p.duration_months or 0), p.id))
+
+    columns = _narrow_packages_to_single_pricing_tier(visible)
+    if len(columns) > 1:
+        return _sort_fee_table_columns(columns)
+    return columns
+
+
+def _fee_column_header(p: Package) -> str:
+    """Column title on public fee page."""
+    plan = (p.plan_type or "one_time").strip().lower()
+    if plan == "subscription":
+        months = int(p.duration_months or 0)
+        if months == 12:
+            title = "12 Months (1 Year)"
+        elif months > 0:
+            title = f"{months} Months"
+        else:
+            title = "Subscription"
+        tier = _tier_label_from_package(p)
+        if tier and tier.casefold() != title.casefold():
+            return f"{title}\n{tier}"
+        return title
+    return _tier_header_from_package(p)
 
 
 def _format_money_fee_cell(amount: float, is_inr: bool) -> str:
@@ -1036,7 +1617,7 @@ def _format_money_fee_cell(amount: float, is_inr: bool) -> str:
 
 def _tier_header_from_package(p: Package) -> str:
     name = (p.name or "").strip()
-    discount_pct = float(p.discount_percentage or 0)
+    discount_pct = float(p.discount_percentage or 0) if _package_promo_discount_active(p) else 0.0
     pct_str = (
         f"{int(discount_pct)}"
         if discount_pct == int(discount_pct)
@@ -1104,7 +1685,7 @@ def build_fee_structure_response(db: Session, batch_slug: str) -> FeeStructureRe
     headers: List[str] = []
     for i in range(n_cols):
         p = ind_pkgs[i] if i < len(ind_pkgs) else (for_pkgs[i] if i < len(for_pkgs) else None)
-        headers.append(_tier_header_from_package(p) if p else "—")
+        headers.append(_fee_column_header(p) if p else "—")
 
     def build_block(pkgs: List[Package], is_inr: bool, group_label: str) -> FeeStructureBlock:
         if not pkgs:
@@ -1130,14 +1711,17 @@ def build_fee_structure_response(db: Session, batch_slug: str) -> FeeStructureRe
         plan_badges: List[str] = []
         col_headers: List[str] = []
         for p, g, _gst_amt, total in scaled:
-            # Per-tier values from `package` (matches admin: gross → discount % → GST on net).
             base = float(g)
-            pct_disc = float(p.discount_percentage or 0)
-            disc_amt = float(p.discounted_amount or 0)
-            if pct_disc > 0 and disc_amt < 0.5:
-                disc_amt = round(base * pct_disc / 100.0, 2)
-            taxable = max(0.0, round(base - disc_amt, 2))
             gst_pct = int(float(p.gst_percentage or 18))
+            if _package_promo_discount_active(p):
+                pct_disc = float(p.discount_percentage or 0)
+                disc_amt = float(p.discounted_amount or 0)
+                if pct_disc > 0 and disc_amt < 0.5:
+                    disc_amt = round(base * pct_disc / 100.0, 2)
+                taxable = max(0.0, round(base - disc_amt, 2))
+            else:
+                disc_amt = 0.0
+                taxable = base
 
             reg.append(_format_money_fee_cell(base, is_inr))
             disc.append("0" if disc_amt < 0.5 else _format_money_fee_cell(disc_amt, is_inr))
@@ -1145,7 +1729,7 @@ def build_fee_structure_response(db: Session, batch_slug: str) -> FeeStructureRe
             pay.append(_format_money_fee_cell(total, is_inr))
             package_ids.append(int(p.id))
             plan_badges.append(_plan_badge_from_package(p))
-            col_headers.append(_tier_header_from_package(p))
+            col_headers.append(_fee_column_header(p))
         while len(reg) < n_cols:
             reg.append("—")
             disc.append("—")

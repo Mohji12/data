@@ -17,6 +17,7 @@ from app.admin_security import get_current_admin
 from app.core.config import get_settings
 from app.db import SessionLocal, get_db
 from app.models import Country, CouponMaster, Package, User, UserPackagePayment
+from app.services.registration import apply_batch_subscription_filter_to_users
 from app.services.access import admin_subscription_summary, batch_admin_subscription_summaries
 from app.services.mailer import send_html_email
 from app.services.payments import apply_offline_registration_credit, sync_registration_payment_from_razorpay, try_send_registration_thank_you_email, _package_for_thank_you_email
@@ -161,6 +162,10 @@ def _country_name_for_user(db: Session, country_id: Optional[int]) -> Optional[s
 def list_users(
     q: Optional[str] = Query(None, description="Search name/email/contact"),
     subscription: Optional[list[str]] = Query(None),
+    batch_filter: Optional[str] = Query(
+        None,
+        description="batch_master.name or package_subscription; expands to all subscription aliases",
+    ),
     payment_status: Optional[str] = Query(None),
     approve: Optional[str] = Query(None),
     document_status: Optional[str] = Query(
@@ -183,10 +188,11 @@ def list_users(
             | func.lower(func.coalesce(User.email, "")).like(s)
             | func.lower(func.coalesce(User.contact_number, "")).like(s)
         )
+    batch_filters = [f.strip() for f in ([batch_filter] if batch_filter else []) if f.strip()]
     if subscription:
-        subs_lower = [s.strip().lower() for s in subscription if s.strip()]
-        if subs_lower:
-            query = query.filter(func.lower(func.coalesce(User.subscription, "")).in_(subs_lower))
+        batch_filters.extend(s.strip() for s in subscription if s.strip())
+    if batch_filters:
+        query = apply_batch_subscription_filter_to_users(query, db, batch_filters)
     if payment_status:
         query = query.filter(func.lower(func.coalesce(User.payment_status, "")) == payment_status.strip().lower())
     if approve is not None and approve != "":
@@ -548,13 +554,17 @@ def send_custom_mail(payload: CustomMailPayload, db: Session = Depends(get_db)) 
 @router.get("/export.csv")
 def export_users_csv(
     subscription: Optional[str] = Query(None),
+    batch_filter: Optional[str] = Query(None),
     payment_status: Optional[str] = Query(None),
     approve: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ) -> Response:
     query = db.query(User)
+    batch_filters = [f.strip() for f in ([batch_filter] if batch_filter else []) if f.strip()]
     if subscription:
-        query = query.filter(func.lower(func.coalesce(User.subscription, "")) == subscription.strip().lower())
+        batch_filters.append(subscription.strip())
+    if batch_filters:
+        query = apply_batch_subscription_filter_to_users(query, db, batch_filters)
     if payment_status:
         query = query.filter(func.lower(func.coalesce(User.payment_status, "")) == payment_status.strip().lower())
     if approve is not None and approve != "":

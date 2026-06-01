@@ -5,6 +5,7 @@ import { Check, ChevronRight } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import { pickRegistrationBatches } from '@/lib/mockData';
+import { isRegistrationExcludedBatch } from '@/lib/publicBatches';
 import { PasswordEightHint } from '@/components/PasswordEightHint';
 
 const steps = ['Personal', 'Professional', 'Course & Payment'];
@@ -24,7 +25,7 @@ export default function Register() {
   const [form, setForm] = useState<Record<string, any>>({ 
     batch_slug: '', 
     package_id: '',
-    country_id: 101, // Default to India/101
+    country_id: '',
     registration_type: 'Indian Delegates',
     title: '',
     name: '',
@@ -92,11 +93,52 @@ export default function Register() {
     }
   }, [searchParams, countries]);
 
+  useEffect(() => {
+    if (!countries?.length || form.country_id) return;
+    const india = countries.find((c: { name?: string }) => (c.name || '').trim().toLowerCase() === 'india');
+    if (india && form.registration_type === 'Indian Delegates') {
+      setForm((f) => ({ ...f, country_id: india.id }));
+    }
+  }, [countries, form.country_id, form.registration_type]);
+
+  const syncDelegateType = (registrationType: string) => {
+    if (!countries?.length) {
+      update('registration_type', registrationType);
+      return;
+    }
+    const india = countries.find((c: { name?: string }) => (c.name || '').trim().toLowerCase() === 'india');
+    const foreign = countries.find((c: { name?: string }) => (c.name || '').trim().toLowerCase() !== 'india');
+    if (registrationType === 'Indian Delegates' && india) {
+      setForm((prev) => ({
+        ...prev,
+        registration_type: registrationType,
+        country_id: india.id,
+        package_id: '',
+      }));
+      return;
+    }
+    if (registrationType === 'Foreign Delegates' && foreign) {
+      setForm((prev) => ({
+        ...prev,
+        registration_type: registrationType,
+        country_id: foreign.id,
+        package_id: '',
+      }));
+      return;
+    }
+    update('registration_type', registrationType);
+  };
+
   const chooseCourseBatches = useMemo(() => {
-    const picked = pickRegistrationBatches(batches);
+    const picked = pickRegistrationBatches(batches, { forRegistrationPage: true });
     const slugs = new Set(picked.map((b) => b.slug));
     const extraSlug = form.batch_slug?.trim();
-    if (extraSlug && batches && !slugs.has(extraSlug)) {
+    if (
+      extraSlug &&
+      batches &&
+      !slugs.has(extraSlug) &&
+      !isRegistrationExcludedBatch({ slug: extraSlug })
+    ) {
       const row = (batches as any[]).find((b) => b.slug === extraSlug);
       if (row) {
         return [...picked, { ...row, displayTitle: row.title }];
@@ -114,12 +156,15 @@ export default function Register() {
     : '';
 
   const { data: packages, isLoading: pkgsLoading } = useQuery({
-    queryKey: ['regPackages', form.batch_slug, form.country_id, form.package_id],
-    enabled: !!form.batch_slug,
+    queryKey: ['regPackages', form.batch_slug, form.country_id, form.registration_type, form.package_id],
+    enabled: !!form.batch_slug && !!form.country_id,
     queryFn: () => {
       const p = new URLSearchParams();
       p.set('batch_slug', String(form.batch_slug || ''));
       p.set('country_id', String(form.country_id || ''));
+      if (form.registration_type) {
+        p.set('registration_type', String(form.registration_type));
+      }
       if (String(form.package_id || '').trim()) {
         p.set('selected_package_id', String(form.package_id).trim());
       }
@@ -127,14 +172,24 @@ export default function Register() {
     }
   });
 
-  const packageList = useMemo(() => (Array.isArray(packages) ? packages : []) as Array<{
+  type RegPackage = {
     id: number;
     name: string;
     plan_type?: string;
     duration_months?: number | null;
     total_amount: number;
     currency_name?: string;
-  }>, [packages]);
+    pricing_window_label?: string;
+    sale_start?: string | null;
+    sale_end?: string | null;
+    is_current_window?: boolean;
+    is_upcoming_window?: boolean;
+  };
+
+  const packageList = useMemo(
+    () => (Array.isArray(packages) ? packages : []) as RegPackage[],
+    [packages],
+  );
 
   const subscriptionPackages = useMemo(
     () =>
@@ -144,7 +199,40 @@ export default function Register() {
     [packageList],
   );
 
+  const pricingWindowGroups = useMemo(() => {
+    if (!subscriptionPackages.length) return [];
+    const map = new Map<
+      string,
+      { label: string; saleEnd?: string; isCurrent: boolean; isUpcoming: boolean; packages: RegPackage[] }
+    >();
+    for (const p of subscriptionPackages) {
+      const tierLabel = p.pricing_window_label || p.name;
+      const key = tierLabel;
+      const existing = map.get(key);
+      if (existing) {
+        existing.packages.push(p);
+        existing.isCurrent = existing.isCurrent || !!p.is_current_window;
+        existing.isUpcoming = existing.isUpcoming && !!p.is_upcoming_window;
+      } else {
+        map.set(key, {
+          label: tierLabel,
+          saleEnd: p.sale_end || undefined,
+          isCurrent: !!p.is_current_window,
+          isUpcoming: !!p.is_upcoming_window,
+          packages: [p],
+        });
+      }
+    }
+    return [...map.values()].map((window) => ({
+      ...window,
+      packages: [...window.packages].sort(
+        (a, b) => (a.duration_months || 0) - (b.duration_months || 0),
+      ),
+    }));
+  }, [subscriptionPackages]);
+
   const isSubscriptionBatch = subscriptionPackages.length > 0;
+  const hasMultiplePricingWindows = pricingWindowGroups.length > 1;
 
   const selectedPackage = useMemo(
     () => packageList.find((p) => String(p.id) === String(form.package_id)),
@@ -227,40 +315,70 @@ export default function Register() {
         )}
 
         {!pkgsLoading && packageList.length > 0 && isSubscriptionBatch && (
-          <div className="space-y-3">
+          <div className="space-y-4">
             <label className="font-mono text-[10px] text-ink-faint uppercase tracking-[0.12em] block">
-              Choose subscription plan
+              {hasMultiplePricingWindows ? 'Choose pricing period & plan' : 'Choose subscription plan'}
             </label>
-            <div className="grid grid-cols-1 gap-2">
-              {subscriptionPackages.map((p) => (
-                <label
-                  key={p.id}
-                  className={`flex items-center justify-between px-4 py-3 border rounded-sm cursor-pointer transition-all ${
-                    form.package_id === String(p.id)
-                      ? 'border-mint bg-mint-pale'
-                      : 'border-border-soft hover:bg-chalk'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="radio"
-                      name="subscription_package"
-                      value={p.id}
-                      checked={form.package_id === String(p.id)}
-                      onChange={() => update('package_id', String(p.id))}
-                      className="accent-mint w-4 h-4"
-                    />
-                    <span className="font-sans text-sm font-bold text-slate">
-                      {formatDurationLabel(p.duration_months)}
+            {pricingWindowGroups.map((window) => (
+              <div
+                key={`${window.label}-${window.saleEnd || ''}`}
+                className={`rounded-sm border p-3 space-y-2 ${
+                  window.isCurrent
+                    ? 'border-mint/40 bg-mint-pale/30'
+                    : window.isUpcoming
+                      ? 'border-amber-200 bg-amber-50/50'
+                      : 'border-border-soft'
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-sans text-sm font-bold text-slate">{window.label}</span>
+                  {window.isCurrent && (
+                    <span className="font-mono text-[9px] uppercase tracking-wider text-mint">Open now</span>
+                  )}
+                  {window.isUpcoming && (
+                    <span className="font-mono text-[9px] uppercase tracking-wider text-amber-700">Starts soon</span>
+                  )}
+                  {window.saleEnd && (
+                    <span className="font-sans text-[11px] text-ink-muted">
+                      Through {new Date(window.saleEnd).toLocaleDateString()}
                     </span>
-                  </div>
-                  <span className="font-display font-bold text-slate">
-                    {p.currency_name === 'USD' ? '$' : '₹'}
-                    {p.total_amount.toLocaleString()}
-                  </span>
-                </label>
-              ))}
-            </div>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 gap-2">
+                  {[...window.packages]
+                    .sort((a, b) => (a.duration_months || 0) - (b.duration_months || 0))
+                    .map((p) => (
+                      <label
+                        key={p.id}
+                        className={`flex items-center justify-between px-4 py-3 border rounded-sm cursor-pointer transition-all ${
+                          form.package_id === String(p.id)
+                            ? 'border-mint bg-mint-pale'
+                            : 'border-border-soft hover:bg-chalk bg-chalk'
+                        } ${!window.isCurrent && window.isUpcoming ? 'opacity-90' : ''}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="radio"
+                            name="subscription_package"
+                            value={p.id}
+                            checked={form.package_id === String(p.id)}
+                            onChange={() => update('package_id', String(p.id))}
+                            className="accent-mint w-4 h-4"
+                            disabled={!p.is_current_window && !!p.is_upcoming_window}
+                          />
+                          <span className="font-sans text-sm font-bold text-slate">
+                            {formatDurationLabel(p.duration_months)}
+                          </span>
+                        </div>
+                        <span className="font-display font-bold text-slate">
+                          {p.currency_name === 'USD' ? '$' : '₹'}
+                          {p.total_amount.toLocaleString()}
+                        </span>
+                      </label>
+                    ))}
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -535,11 +653,11 @@ export default function Register() {
                    <label className="font-mono text-xs text-ink-faint uppercase tracking-[0.12em] mb-3 block">Registration Type</label>
                    <div className="flex gap-6">
                       <label className="flex items-center gap-2 cursor-pointer group">
-                        <input type="radio" name="registration_type" value="Indian Delegates" checked={form.registration_type === 'Indian Delegates'} onChange={(e) => update('registration_type', e.target.value)} className="w-4 h-4 text-mint border-border-strong focus:ring-mint/20" />
+                        <input type="radio" name="registration_type" value="Indian Delegates" checked={form.registration_type === 'Indian Delegates'} onChange={(e) => syncDelegateType(e.target.value)} className="w-4 h-4 text-mint border-border-strong focus:ring-mint/20" />
                         <span className="font-sans text-sm text-slate group-hover:text-ink transition-colors">Indian Delegates</span>
                       </label>
                       <label className="flex items-center gap-2 cursor-pointer group">
-                        <input type="radio" name="registration_type" value="Foreign Delegates" checked={form.registration_type === 'Foreign Delegates'} onChange={(e) => update('registration_type', e.target.value)} className="w-4 h-4 text-mint border-border-strong focus:ring-mint/20" />
+                        <input type="radio" name="registration_type" value="Foreign Delegates" checked={form.registration_type === 'Foreign Delegates'} onChange={(e) => syncDelegateType(e.target.value)} className="w-4 h-4 text-mint border-border-strong focus:ring-mint/20" />
                         <span className="font-sans text-sm text-slate group-hover:text-ink transition-colors">Foreign Delegates</span>
                       </label>
                    </div>
@@ -572,7 +690,17 @@ export default function Register() {
                     <label className="font-mono text-[10px] text-ink-faint uppercase tracking-[0.12em] mb-1.5 block">Country</label>
                     <select
                       value={form.country_id || ''}
-                      onChange={(e) => update('country_id', e.target.value)}
+                      onChange={(e) => {
+                        const id = Number(e.target.value);
+                        const picked = countries?.find((c: { id: number }) => c.id === id);
+                        const isIndia = (picked?.name || '').trim().toLowerCase() === 'india';
+                        setForm((prev) => ({
+                          ...prev,
+                          country_id: id,
+                          registration_type: isIndia ? 'Indian Delegates' : 'Foreign Delegates',
+                          package_id: '',
+                        }));
+                      }}
                       disabled={countriesLoading}
                       className="w-full bg-chalk border border-border-soft rounded-sm py-3 px-4 font-sans text-sm text-ink outline-none disabled:opacity-60"
                     >

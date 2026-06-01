@@ -7,7 +7,12 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models import Country, Option, Package, User, UserPackagePayment, UserSubscription
-from app.services.registration import _add_months, _to_display_usd
+from app.services.registration import (
+    BATCH_COURSE_MONTHS_DEFAULT,
+    _add_months,
+    _to_display_usd,
+    course_end_from_batch_start,
+)
 
 
 def _csv_tokens(value: str | None) -> set[str]:
@@ -244,6 +249,30 @@ def has_active_subscription(db: Session, user: User, batch_name: str | None = No
     return active.start_at <= now <= active.end_at
 
 
+def _one_time_course_end_date(pkg: Package | None) -> date | None:
+    """CCM-style one-time batches: access until batch_start_date + 6 months when batch_start is set."""
+    if not pkg:
+        return None
+    if (pkg.plan_type or "one_time").strip().lower() == "subscription":
+        return None
+    start = _coerce_date(pkg.batch_start_date)
+    if start:
+        return course_end_from_batch_start(start, BATCH_COURSE_MONTHS_DEFAULT)
+    return _coerce_date(pkg.end_date)
+
+
+def ensure_one_time_batch_access(db: Session, user: User) -> tuple[bool, str | None]:
+    if not user.package_id:
+        return True, None
+    pkg = db.query(Package).filter(Package.id == user.package_id).first()
+    end = _one_time_course_end_date(pkg)
+    if not end:
+        return True, None
+    if date.today() > end:
+        return False, "Your batch access period has ended."
+    return True, None
+
+
 def ensure_subscription_entitlement(db: Session, user: User, batch_name: str | None = None) -> tuple[bool, str | None]:
     # Backward compatibility: only enforce when user has subscription rows for this batch.
     sub_name = (batch_name or user.subscription or "").strip()
@@ -315,6 +344,9 @@ def can_access_video_library(db: Session, user: User) -> tuple[bool, str | None]
     ent_ok, ent_reason = ensure_subscription_entitlement(db, user)
     if not ent_ok:
         return False, ent_reason
+    batch_ok, batch_reason = ensure_one_time_batch_access(db, user)
+    if not batch_ok:
+        return False, batch_reason
 
     return True, None
 
@@ -332,6 +364,9 @@ def can_access_mock_test(db: Session, user: User) -> tuple[bool, str | None]:
     ent_ok, ent_reason = ensure_subscription_entitlement(db, user)
     if not ent_ok:
         return False, ent_reason
+    batch_ok, batch_reason = ensure_one_time_batch_access(db, user)
+    if not batch_ok:
+        return False, batch_reason
     return True, None
 
 
@@ -630,7 +665,7 @@ def admin_subscription_summary(
         start = user.payment_date
     elif user.created_at:
         start = user.created_at
-    end = _coerce_date(pkg.end_date if pkg else None)
+    end = _one_time_course_end_date(pkg)
     access_status = "active"
     today = now.date()
     if end and end < today:

@@ -40,8 +40,11 @@ def _folders_for_batch(db: Session, batch_name: str) -> list[FolderMaster]:
     return [f for f in rows if _subscription_in_csv(batch_name, f.batch)]
 
 
-def _transform_folder_name(name: str, name_from: str, name_to: str) -> str:
+def _transform_folder_name(name: str, name_from: str, name_to: str, *, target_name_prefix: str = "") -> str:
     n = name or ""
+    prefix = (target_name_prefix or "").strip()
+    if prefix:
+        return f"{prefix}{n}"
     if not name_from:
         return n
     return n.replace(name_from, name_to)
@@ -123,6 +126,7 @@ def preview_bulk_copy_by_batch(
     target_batch: str,
     name_from: str = "B15_",
     name_to: str = "B16_",
+    target_name_prefix: str = "",
 ) -> dict[str, Any]:
     source_batch = (source_batch or "").strip()
     target_batch = (target_batch or "").strip()
@@ -144,7 +148,9 @@ def preview_bulk_copy_by_batch(
     skipped_same_folder: list[dict[str, Any]] = []
 
     for src in source_folders:
-        expected_name = _transform_folder_name(src.name or "", name_from, name_to).strip()
+        expected_name = _transform_folder_name(
+            src.name or "", name_from, name_to, target_name_prefix=target_name_prefix
+        ).strip()
         tgt = _resolve_target(expected_name)
         video_count = _video_count_in_folder(db, src.id)
         if tgt and tgt.id == src.id:
@@ -194,6 +200,7 @@ def preview_bulk_copy_by_batch(
         "target_batch": target_batch,
         "name_from": name_from,
         "name_to": name_to,
+        "target_name_prefix": target_name_prefix,
         "pairs": pairs,
         "unmatched_sources": unmatched_sources,
         "unmatched_targets": unmatched_targets,
@@ -209,6 +216,7 @@ def bulk_copy_videos_by_batch(
     target_batch: str,
     name_from: str = "B15_",
     name_to: str = "B16_",
+    target_name_prefix: str = "",
     add_target_batch_access: bool = True,
     dry_run: bool = False,
 ) -> dict[str, Any]:
@@ -218,6 +226,7 @@ def bulk_copy_videos_by_batch(
         target_batch=target_batch,
         name_from=name_from,
         name_to=name_to,
+        target_name_prefix=target_name_prefix,
     )
     tgt_folder = {f.id: f for f in _folders_for_batch(db, target_batch)}
 
@@ -286,6 +295,7 @@ def preview_clone_batch_folders(
     target_batch: str,
     name_from: str = "B15_",
     name_to: str = "B16_",
+    target_name_prefix: str = "",
 ) -> dict[str, Any]:
     """Preview creating missing target folders + linking videos from source batch."""
     base = preview_bulk_copy_by_batch(
@@ -294,6 +304,7 @@ def preview_clone_batch_folders(
         target_batch=target_batch,
         name_from=name_from,
         name_to=name_to,
+        target_name_prefix=target_name_prefix,
     )
     source_by_id = {f.id: f for f in _folders_for_batch(db, source_batch)}
     folders_to_create: list[dict[str, Any]] = []
@@ -307,9 +318,8 @@ def preview_clone_batch_folders(
         existing = _find_folder_by_name_ci(db, expected)
         if existing:
             if not _subscription_in_csv(target_batch, existing.batch):
-                if not dry_run:
-                    existing.batch, _ = _add_csv_token(existing.batch, target_batch)
-                    db.add(existing)
+                existing.batch, _ = _add_csv_token(existing.batch, target_batch)
+                db.add(existing)
                 name_collisions.append(
                     {
                         "folder_id": existing.id,
@@ -345,13 +355,14 @@ def clone_batch_folders_and_videos(
     target_batch: str,
     name_from: str = "B15_",
     name_to: str = "B16_",
+    target_name_prefix: str = "",
     create_missing_folders: bool = True,
     copy_videos: bool = True,
     add_target_batch_access: bool = True,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """
-    Clone Batch 15 → Batch 16 structure: create B16_* folders, then link all videos.
+    Clone source batch folders into target batch, then link all videos.
     """
     preview = preview_clone_batch_folders(
         db,
@@ -359,6 +370,7 @@ def clone_batch_folders_and_videos(
         target_batch=target_batch,
         name_from=name_from,
         name_to=name_to,
+        target_name_prefix=target_name_prefix,
     )
     created_folders: list[dict[str, Any]] = []
 
@@ -399,6 +411,7 @@ def clone_batch_folders_and_videos(
             target_batch=target_batch,
             name_from=name_from,
             name_to=name_to,
+            target_name_prefix=target_name_prefix,
             add_target_batch_access=add_target_batch_access,
             dry_run=dry_run,
         )
@@ -408,6 +421,7 @@ def clone_batch_folders_and_videos(
         "target_batch": target_batch,
         "name_from": name_from,
         "name_to": name_to,
+        "target_name_prefix": target_name_prefix,
         "dry_run": dry_run,
         "folders_created": len(created_folders),
         "created_folders": created_folders,

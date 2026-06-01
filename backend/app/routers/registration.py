@@ -47,6 +47,8 @@ from app.services.registration import (
     initialize_registration,
     list_batches,
     query_active_packages_for_registration,
+    _registration_category_for_packages,
+    _resolve_package_line_amounts,
 )
 from app.services.uploads import save_registration_document
 
@@ -107,24 +109,39 @@ class PackageOut(BaseModel):
     plan_type: str = "one_time"
     duration_months: Optional[int] = None
     currency_name: str = "INR"
+    pricing_window_label: Optional[str] = None
+    sale_start: Optional[str] = None
+    sale_end: Optional[str] = None
+    is_current_window: bool = False
+    is_upcoming_window: bool = False
 
 
 @router.get("/packages", response_model=list[PackageOut])
 def registration_packages(
     batch_slug: str,
     country_id: int = 101,
+    registration_type: str | None = Query(None, description="Indian Delegates | Foreign Delegates"),
     selected_package_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ) -> list[PackageOut]:
-    from app.services.registration import _get_usd_rate, _is_india_country
+    from app.services.registration import (
+        _as_date,
+        _group_packages_by_pricing_window,
+        _get_usd_rate,
+        _is_india_country,
+        _tier_label_from_package,
+    )
 
     batch = get_registration_batch(db, batch_slug)
 
-    pkgs = query_active_packages_for_registration(db, batch, country_id)
-    is_india = _is_india_country(db, country_id)
+    pkgs = query_active_packages_for_registration(
+        db, batch, country_id, registration_type=registration_type
+    )
+    today = date.today()
+    expected_category = _registration_category_for_packages(db, country_id, registration_type)
+    is_india = expected_category == "Indian Delegates"
     usd_rate = _get_usd_rate(db) if not is_india else 1.0
     currency = "INR" if is_india else "USD"
-    expected_category = "Indian Delegates" if is_india else "Foreign Delegates"
 
     # If user clicked "Apply for this plan", force-include that specific valid package
     # so Step 3 never collapses to a different overlapping tier.
@@ -145,16 +162,39 @@ def registration_packages(
         if picked:
             pkgs = [picked, *pkgs]
 
+    window_meta: dict[int, dict[str, object]] = {}
+    sub_rows = [p for p in pkgs if (p.plan_type or "").strip().lower() == "subscription"]
+    if sub_rows:
+        for group in _group_packages_by_pricing_window(sub_rows):
+            start = group["start"]
+            end = group["end"]
+            label = str(group["label"])
+            for pkg in group["packages"]:  # type: ignore[union-attr]
+                pkg_start = _as_date(pkg.start_date) or start
+                pkg_end = _as_date(pkg.end_date) if pkg.end_date is not None else end
+                is_current = (
+                    (pkg_start is None or pkg_start <= today)
+                    and (pkg_end is None or pkg_end >= today)
+                )
+                is_upcoming = pkg_start is not None and pkg_start > today
+                window_meta[pkg.id] = {
+                    "label": label,
+                    "start": pkg_start,
+                    "end": pkg_end,
+                    "is_current": is_current,
+                    "is_upcoming": is_upcoming,
+                }
+
     result: list[PackageOut] = []
     for p in pkgs:
-        gross = float(p.gross_amount or 0)
-        gst_pct = float(p.gst_percentage or 0)
-        gst_amt = float(p.gst_amount or 0)
-        total = float(p.total_amount or (gross + gst_amt))
+        gross, gst_pct, gst_amt, total = _resolve_package_line_amounts(p)
         if not is_india:
             gross = _to_display_usd(gross, usd_rate)
             gst_amt = _to_display_usd(gst_amt, usd_rate)
             total = _to_display_usd(total, usd_rate)
+        meta = window_meta.get(p.id, {})
+        start_d = meta.get("start")
+        end_d = meta.get("end")
         result.append(PackageOut(
             id=p.id,
             name=p.name or "",
@@ -167,6 +207,11 @@ def registration_packages(
             plan_type=(p.plan_type or "one_time"),
             duration_months=p.duration_months,
             currency_name=currency,
+            pricing_window_label=meta.get("label") or _tier_label_from_package(p),
+            sale_start=start_d.isoformat() if start_d else None,
+            sale_end=end_d.isoformat() if end_d else None,
+            is_current_window=bool(meta.get("is_current", True)),
+            is_upcoming_window=bool(meta.get("is_upcoming", False)),
         ))
     return result
 

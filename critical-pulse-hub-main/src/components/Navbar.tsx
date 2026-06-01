@@ -6,7 +6,12 @@ import { useAuthStore } from '@/store/authStore';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
-import { filterPublicBatches, getPublicBatchDisplayName, type RegistrationCatalogRow } from '@/lib/publicBatches';
+import {
+  filterPublicBatches,
+  filterRegistrationCatalogBatches,
+  getPublicBatchDisplayName,
+  type RegistrationCatalogRow,
+} from '@/lib/publicBatches';
 import { EVENT_DISPLAY_NAME, EVENT_REGISTER_PATH } from '@/lib/eventConclave';
 
 const navLinks = [
@@ -35,7 +40,8 @@ export default function Navbar() {
     queryFn: () => apiClient('/registration/catalog?include_inactive=true'),
   });
   const publicCatalog = filterPublicBatches(catalog || []);
-  const batchOptions = publicCatalog.map((b) => ({
+  const registrationCatalog = filterRegistrationCatalogBatches(catalog || []);
+  const batchOptions = registrationCatalog.map((b) => ({
     label: getPublicBatchDisplayName(b),
     to: `/register/${encodeURIComponent(b.batch_slug)}`,
     launch_ready: Boolean(b.launch_ready),

@@ -6,12 +6,46 @@ export type RegistrationCatalogRow = {
   brochure_url?: string | null;
 };
 
+/** Batches hidden from registration UI (register page, navbar batch selector, home course enroll). */
+export const registrationExcludedSlugs = new Set([
+  'batch-15',
+  'ccm-batch-2',
+  'ccm-2',
+  'ccm-practical',
+  'ccm-practical-series',
+]);
+
+const registrationExcludedNames = new Set(['batch 15', 'ccm batch 2']);
+
+export function isRegistrationExcludedBatch(row: {
+  batch_slug?: string;
+  slug?: string;
+  batch_name?: string;
+  title?: string;
+}): boolean {
+  const slug = String(row.batch_slug || row.slug || '').trim();
+  if (slug && registrationExcludedSlugs.has(slug)) {
+    return true;
+  }
+  const name = String(row.batch_name || row.title || '')
+    .trim()
+    .toLowerCase();
+  return registrationExcludedNames.has(name);
+}
+
 /**
  * Public-facing batch list used across homepage + navbar.
  * Rule: show only DB-active batches (status=1).
  */
 export function filterPublicBatches(rows: RegistrationCatalogRow[]): RegistrationCatalogRow[] {
   return (rows || []).filter((b) => String(b.status ?? '0') === '1');
+}
+
+/** Active catalog rows allowed on registration flows (excludes Batch 15, CCM Batch 2). */
+export function filterRegistrationCatalogBatches(
+  rows: RegistrationCatalogRow[],
+): RegistrationCatalogRow[] {
+  return filterPublicBatches(rows).filter((b) => !isRegistrationExcludedBatch(b));
 }
 
 export function getPublicBatchDisplayName(row: RegistrationCatalogRow): string {
