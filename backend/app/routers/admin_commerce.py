@@ -296,8 +296,12 @@ class PackagePayload(BaseModel):
 def _parse_iso_date(value: Optional[str]) -> Optional[date]:
     if not value:
         return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    # Accept YYYY-MM-DD and legacy MySQL/datetime strings (2026-05-31T00:00:00).
     try:
-        return date.fromisoformat(value)
+        return date.fromisoformat(raw[:10])
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Invalid date format: {value}. Use YYYY-MM-DD.") from exc
 
@@ -320,11 +324,14 @@ def _normalize_duration_months(plan_type: str, duration_months: Optional[int]) -
 def _date_to_iso(value: object) -> Optional[str]:
     if not value:
         return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, str):
-        return value
-    return str(value)
+        raw = value.strip()
+        return raw[:10] if raw else None
+    return None
 
 
 @router.get("/packages")

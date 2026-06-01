@@ -7,6 +7,43 @@ import { Copy, Trash2 } from 'lucide-react';
 const currencySymbol = (category?: string | null) =>
   category === 'Foreign Delegates' ? '$' : '₹';
 
+/** HTML date inputs require yyyy-MM-dd; API may return MySQL datetimes. */
+const toDateInputValue = (value?: string | null): string => {
+  if (!value) return '';
+  const raw = String(value).trim();
+  return raw.length >= 10 ? raw.slice(0, 10) : raw;
+};
+
+const normalizePackageRow = (p: PackageRow): PackageRow => ({
+  ...p,
+  start_date: toDateInputValue(p.start_date),
+  end_date: toDateInputValue(p.end_date),
+  batch_start_date: toDateInputValue(p.batch_start_date),
+  discount_start_date: toDateInputValue(p.discount_start_date),
+  discount_end_date: toDateInputValue(p.discount_end_date),
+});
+
+const packagePayloadFromRow = (p: PackageRow) => ({
+  ...p,
+  gross_amount: Number(p.gross_amount || 0),
+  gst_percentage: Number(p.gst_percentage || 0),
+  gst_amount: Number(p.gst_amount || 0),
+  total_amount: Number(p.total_amount || 0),
+  plan_type: p.plan_type || 'one_time',
+  duration_months:
+    (p.plan_type || 'one_time') === 'subscription' ? Number(p.duration_months || 0) : null,
+  start_date: toDateInputValue(p.start_date) || null,
+  end_date:
+    (p.plan_type || 'one_time') === 'subscription'
+      ? null
+      : toDateInputValue(p.end_date) || null,
+  batch_start_date: toDateInputValue(p.batch_start_date) || null,
+  discount_percentage: Number(p.discount_percentage || 0),
+  discounted_amount: Number(p.discounted_amount || 0),
+  discount_start_date: toDateInputValue(p.discount_start_date) || null,
+  discount_end_date: toDateInputValue(p.discount_end_date) || null,
+});
+
 type PackageRow = {
   id: number;
   name: string;
@@ -67,7 +104,8 @@ export default function AdminPackages() {
       if (q.trim()) p.set('q', q.trim());
       p.set('sort_by', sortBy);
       p.set('order', order);
-      return apiClient(`/admin/commerce/packages?${p.toString()}`) as Promise<PackageRow[]>;
+      const list = (await apiClient(`/admin/commerce/packages?${p.toString()}`)) as PackageRow[];
+      return list.map(normalizePackageRow);
     },
   });
 
@@ -94,13 +132,13 @@ export default function AdminPackages() {
           plan_type: form.plan_type,
           duration_months: form.plan_type === 'subscription' ? Number(form.duration_months || 0) : null,
           subscription: form.subscription.trim() || null,
-          start_date: form.start_date || null,
-          end_date: form.plan_type === 'subscription' ? null : (form.end_date || null),
-          batch_start_date: form.batch_start_date || null,
+          start_date: toDateInputValue(form.start_date) || null,
+          end_date: form.plan_type === 'subscription' ? null : toDateInputValue(form.end_date) || null,
+          batch_start_date: toDateInputValue(form.batch_start_date) || null,
           discount_percentage: Number(form.discount_percentage || 0),
           discounted_amount: Number(form.discounted_amount || 0),
-          discount_start_date: form.discount_start_date || null,
-          discount_end_date: form.discount_end_date || null,
+          discount_start_date: toDateInputValue(form.discount_start_date) || null,
+          discount_end_date: toDateInputValue(form.discount_end_date) || null,
         }),
       }),
     onSuccess: () => {
@@ -134,22 +172,7 @@ export default function AdminPackages() {
     mutationFn: (p: PackageRow) =>
       apiClient(`/admin/commerce/packages/${p.id}`, {
         method: 'PUT',
-        body: JSON.stringify({
-          ...p,
-          gross_amount: Number(p.gross_amount || 0),
-          gst_percentage: Number(p.gst_percentage || 0),
-          gst_amount: Number(p.gst_amount || 0),
-          total_amount: Number(p.total_amount || 0),
-          plan_type: p.plan_type || 'one_time',
-          duration_months: (p.plan_type || 'one_time') === 'subscription' ? Number(p.duration_months || 0) : null,
-          start_date: p.start_date || null,
-          end_date: (p.plan_type || 'one_time') === 'subscription' ? null : (p.end_date || null),
-          batch_start_date: p.batch_start_date || null,
-          discount_percentage: Number(p.discount_percentage || 0),
-          discounted_amount: Number(p.discounted_amount || 0),
-          discount_start_date: p.discount_start_date || null,
-          discount_end_date: p.discount_end_date || null,
-        }),
+        body: JSON.stringify(packagePayloadFromRow(p)),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['adminPackages'] });
@@ -513,7 +536,7 @@ export default function AdminPackages() {
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => setEditing(p)}
+                        onClick={() => setEditing(normalizePackageRow(p))}
                         className="inline-flex items-center gap-1.5 text-xs font-sans text-slate border border-border-soft rounded-sm px-2 py-1"
                       >
                         Edit
