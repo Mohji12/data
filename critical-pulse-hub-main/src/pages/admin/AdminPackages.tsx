@@ -109,7 +109,7 @@ export default function AdminPackages() {
 
   const { data: rows, isLoading, error } = useQuery({
     queryKey: ['adminPackages', q, sortBy, order],
-    queryFn: () => {
+    queryFn: async () => {
       const p = new URLSearchParams();
       if (q.trim()) p.set('q', q.trim());
       p.set('sort_by', sortBy);
