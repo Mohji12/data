@@ -23,26 +23,36 @@ const normalizePackageRow = (p: PackageRow): PackageRow => ({
   discount_end_date: toDateInputValue(p.discount_end_date),
 });
 
-const packagePayloadFromRow = (p: PackageRow) => ({
-  ...p,
-  gross_amount: Number(p.gross_amount || 0),
-  gst_percentage: Number(p.gst_percentage || 0),
-  gst_amount: Number(p.gst_amount || 0),
-  total_amount: Number(p.total_amount || 0),
-  plan_type: p.plan_type || 'one_time',
-  duration_months:
-    (p.plan_type || 'one_time') === 'subscription' ? Number(p.duration_months || 0) : null,
-  start_date: toDateInputValue(p.start_date) || null,
-  end_date:
-    (p.plan_type || 'one_time') === 'subscription'
-      ? null
-      : toDateInputValue(p.end_date) || null,
-  batch_start_date: toDateInputValue(p.batch_start_date) || null,
-  discount_percentage: Number(p.discount_percentage || 0),
-  discounted_amount: Number(p.discounted_amount || 0),
-  discount_start_date: toDateInputValue(p.discount_start_date) || null,
-  discount_end_date: toDateInputValue(p.discount_end_date) || null,
-});
+const packagePayloadFromRow = (p: PackageRow) => {
+  const planType = p.plan_type || 'one_time';
+  const discountPct = Number(p.discount_percentage || 0);
+  const rawDuration = Number(p.duration_months || 0);
+  const durationMonths =
+    planType === 'subscription' ? (rawDuration > 0 ? rawDuration : 6) : null;
+
+  return {
+    name: p.name || '',
+    subscription: p.subscription?.trim() || null,
+    category_name: p.category_name || null,
+    gross_amount: Number(p.gross_amount || 0),
+    gst_percentage: Number(p.gst_percentage || 0),
+    gst_amount: Number(p.gst_amount || 0),
+    total_amount: Number(p.total_amount || 0),
+    plan_type: planType,
+    duration_months: durationMonths,
+    start_date: toDateInputValue(p.start_date) || null,
+    end_date: planType === 'subscription' ? null : toDateInputValue(p.end_date) || null,
+    batch_start_date: toDateInputValue(p.batch_start_date) || null,
+    with_topup: p.with_topup || '0',
+    discount_percentage: discountPct,
+    discounted_amount: discountPct > 0 ? Number(p.discounted_amount || 0) : 0,
+    discount_start_date:
+      discountPct > 0 ? toDateInputValue(p.discount_start_date) || null : null,
+    discount_end_date: discountPct > 0 ? toDateInputValue(p.discount_end_date) || null : null,
+    sync_promo_discount: true,
+    status: p.status || '1',
+  };
+};
 
 type PackageRow = {
   id: number;
@@ -179,6 +189,9 @@ export default function AdminPackages() {
       qc.invalidateQueries({ queryKey: ['adminBatchLaunchReadiness'] });
       setEditing(null);
     },
+    onError: (err: Error) => {
+      window.alert(err.message || 'Failed to save package');
+    },
   });
   const deleteMut = useMutation({
     mutationFn: (id: number) =>
@@ -233,6 +246,9 @@ export default function AdminPackages() {
       discount_percentage: dist_pct,
       discounted_amount: Math.round(dist_amt),
       total_amount: Math.round(total),
+      ...(dist_pct <= 0
+        ? { discount_start_date: '', discount_end_date: '' }
+        : {}),
     });
   };
 

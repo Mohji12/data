@@ -321,6 +321,18 @@ def _normalize_duration_months(plan_type: str, duration_months: Optional[int]) -
     return None
 
 
+def _resolve_duration_months_for_update(
+    plan_type: str,
+    payload_months: Optional[int],
+    existing_months: Optional[int],
+) -> Optional[int]:
+    """Keep existing subscription duration when admin saves other fields (e.g. clearing discount)."""
+    if plan_type != "subscription":
+        return None
+    months = payload_months if payload_months is not None and int(payload_months) > 0 else existing_months
+    return _normalize_duration_months(plan_type, months)
+
+
 def _date_to_iso(value: object) -> Optional[str]:
     if not value:
         return None
@@ -422,7 +434,9 @@ def update_package(package_id: int, payload: PackagePayload, db: Session = Depen
         raise HTTPException(status_code=404, detail="Package not found")
     old_end = p.end_date.date() if isinstance(p.end_date, datetime) else p.end_date
     plan_type = _normalize_plan_type(payload.plan_type)
-    duration_months = _normalize_duration_months(plan_type, payload.duration_months)
+    duration_months = _resolve_duration_months_for_update(
+        plan_type, payload.duration_months, p.duration_months
+    )
     p.name = payload.name
     p.subscription = payload.subscription
     p.category_name = payload.category_name
@@ -436,10 +450,17 @@ def update_package(package_id: int, payload: PackagePayload, db: Session = Depen
     p.end_date = _parse_iso_date(payload.end_date)
     p.batch_start_date = _parse_iso_date(payload.batch_start_date)
     p.with_topup = payload.with_topup
-    p.discount_percentage = payload.discount_percentage
-    p.discounted_amount = payload.discounted_amount
-    p.discount_start_date = _parse_iso_date(payload.discount_start_date)
-    p.discount_end_date = _parse_iso_date(payload.discount_end_date)
+    discount_pct = float(payload.discount_percentage or 0)
+    if discount_pct <= 0:
+        p.discount_percentage = 0.0
+        p.discounted_amount = 0.0
+        p.discount_start_date = None
+        p.discount_end_date = None
+    else:
+        p.discount_percentage = discount_pct
+        p.discounted_amount = payload.discounted_amount
+        p.discount_start_date = _parse_iso_date(payload.discount_start_date)
+        p.discount_end_date = _parse_iso_date(payload.discount_end_date)
     p.status = payload.status
     _recompute_package_stored_amounts(p)
     new_end = p.end_date.date() if isinstance(p.end_date, datetime) else p.end_date
