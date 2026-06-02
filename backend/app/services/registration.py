@@ -339,6 +339,8 @@ def _resolve_package_line_amounts(
     """(gross, gst_percent, gst_amount, total) for registration, fee table, and payment."""
     gross = float(pkg.gross_amount or 0)
     gst_pct = float(pkg.gst_percentage or 18)
+    naive_gst = round(gross * gst_pct / 100.0, 2)
+    naive_total = round(gross + naive_gst, 2)
 
     if _package_promo_discount_active(pkg, today):
         pct_disc = float(pkg.discount_percentage or 0)
@@ -354,9 +356,19 @@ def _resolve_package_line_amounts(
             total = round(taxable + gst_amt, 2)
         return gross, gst_pct, gst_amt, total
 
-    gst_amt = round(gross * gst_pct / 100.0, 2)
-    total = round(gross + gst_amt, 2)
-    return gross, gst_pct, gst_amt, total
+    # One-time tier rows (e.g. Batch EDIC 10) store the tier price in total_amount while
+    # sharing the same gross; timed discount_* fields must not override that tier price.
+    plan = (pkg.plan_type or "one_time").strip().lower()
+    stored_total = float(pkg.total_amount or 0)
+    if plan == "one_time" and stored_total >= 0.5 and abs(stored_total - naive_total) > 0.01:
+        gst_amt = float(pkg.gst_amount or 0)
+        if gst_amt < 0.5:
+            disc_amt = float(pkg.discounted_amount or 0)
+            taxable = max(0.0, round(gross - disc_amt, 2))
+            gst_amt = round(taxable * gst_pct / 100.0, 2)
+        return gross, gst_pct, gst_amt, stored_total
+
+    return gross, gst_pct, naive_gst, naive_total
 
 
 def _recompute_package_stored_amounts(pkg: Package) -> None:

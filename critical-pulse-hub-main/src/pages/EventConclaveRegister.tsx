@@ -261,7 +261,8 @@ export default function EventConclaveRegister() {
         <header className="mb-10 border-b border-border-soft pb-8">
           <p className="font-mono text-[10px] text-mint tracking-[0.2em] uppercase mb-2">Registration form</p>
           <h1 className="font-display font-extrabold text-3xl lg:text-4xl text-slate leading-tight">
-            1st NATIONAL &ldquo;ICU-ID CONCLAVE&rdquo;
+            <span className="block">1st NATIONAL &ldquo;ICU-ID CONCLAVE&rdquo;</span>
+            <span className="block mt-2">KMC CREDIT HOURS AVAILABLE</span>
           </h1>
           <p className="font-sans text-lg text-ink-secondary mt-2">11th and 12th July 2026</p>
           {config.current_tier_label && (
