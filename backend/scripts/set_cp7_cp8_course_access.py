@@ -17,6 +17,7 @@ PRESETS: dict[str, date] = {
     "CP 8": date(2026, 3, 15),
     "CCM Batch 2": date(2026, 1, 1),
     "Batch 15": date(2026, 1, 15),
+    "Batch EDIC 10": date(2026, 4, 15),
 }
 
 
