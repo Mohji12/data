@@ -14,6 +14,16 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models import Country, EventPaymentTxn, EventRegistration, Option
 from app.services.email_templates import event_registration_confirmation_template
+from app.services.event_conclave_fees import (
+    TIER_LABELS,
+    amounts_for_current_tier,
+    build_fee_schedule_table,
+    compute_event_fee_breakdown,
+    event_promo_codes,
+    is_valid_event_promo,
+    registration_open_for_date,
+    resolve_event_fee_tier,
+)
 from app.services.mailer import send_html_email
 
 logger = logging.getLogger(__name__)
@@ -44,69 +54,69 @@ def event_registration_slugs() -> tuple[str, ...]:
     return (current, LEGACY_EVENT_SLUG)
 
 
-def _event_fee_breakdown() -> dict[str, float]:
-    settings = get_settings()
-    base = float(settings.event_icu_d_conclave_fee_inr or 0)
-    gst_percent = float(settings.event_icu_d_conclave_gst_percent or 18)
-    gst_amount = round(base * gst_percent / 100, 2)
-    total = round(base + gst_amount, 2)
-    return {
-        "base_fee_inr": base,
-        "gst_percent": gst_percent,
-        "gst_amount_inr": gst_amount,
-        "total_fee_inr": total,
-        "fee_inr": total,
-    }
-
-
 def _event_promo_codes() -> set[str]:
-    return set(get_settings().event_icu_d_conclave_promo_codes or [])
+    return event_promo_codes()
 
 
 def _is_valid_event_promo(promo_code: str | None) -> bool:
-    code = (promo_code or "").strip().upper()
-    if not code:
-        return False
-    return code in _event_promo_codes()
+    return is_valid_event_promo(promo_code)
 
 
-def _apply_promo_to_fees(fees: dict[str, float], promo_code: str | None) -> dict[str, Any]:
-    code = (promo_code or "").strip()
-    if not code:
-        return {**fees, "promo_applied": False, "promo_code": ""}
-    if not _is_valid_event_promo(code):
-        return {**fees, "promo_applied": False, "promo_code": code, "promo_invalid": True}
-    gst_percent = float(fees.get("gst_percent") or 18)
-    return {
-        "base_fee_inr": 0.0,
-        "gst_percent": gst_percent,
-        "gst_amount_inr": 0.0,
-        "total_fee_inr": 0.0,
-        "fee_inr": 0.0,
-        "promo_applied": True,
-        "promo_code": code.upper(),
-        "promo_invalid": False,
-    }
+def _fees_for_category(
+    category: str,
+    promo_code: str | None = None,
+) -> dict[str, Any]:
+    try:
+        return compute_event_fee_breakdown(category, promo_code=promo_code)
+    except ValueError as exc:
+        if str(exc) == "registration_closed":
+            raise HTTPException(
+                status_code=403,
+                detail="Event registration is closed. The registration period has ended.",
+            ) from exc
+        if str(exc) == "Invalid category":
+            raise HTTPException(status_code=400, detail="Select a valid category.") from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def get_event_payable_amount(promo_code: str | None = None) -> dict[str, Any]:
-    base = _event_fee_breakdown()
-    result = _apply_promo_to_fees(base, promo_code)
-    if result.get("promo_invalid"):
-        return {**base, "promo_applied": False, "promo_invalid": True, "promo_code": result.get("promo_code", "")}
-    return result
+def get_event_payable_amount(
+    category: str,
+    promo_code: str | None = None,
+) -> dict[str, Any]:
+    fees = _fees_for_category(category, promo_code)
+    if fees.get("promo_invalid"):
+        base = compute_event_fee_breakdown(category, promo_code=None)
+        return {
+            **base,
+            "promo_applied": False,
+            "promo_invalid": True,
+            "promo_code": fees.get("promo_code", ""),
+        }
+    return fees
 
 
 def get_event_public_config() -> dict[str, Any]:
     settings = get_settings()
     slug = icu_d_conclave_slug()
-    fees = _event_fee_breakdown()
+    tier = resolve_event_fee_tier()
+    reg_open = registration_open_for_date() and bool(settings.event_icu_d_conclave_active)
+    amounts = amounts_for_current_tier() if tier else {}
+    preview = amounts.get("clinician") or {}
     return {
         "event_slug": slug,
         "title": EVENT_TITLE,
         "dates": EVENT_DATES,
-        **fees,
-        "active": bool(settings.event_icu_d_conclave_active),
+        "fee_schedule": build_fee_schedule_table(),
+        "current_tier": tier,
+        "current_tier_label": TIER_LABELS[tier] if tier else None,
+        "registration_open": reg_open,
+        "amounts_for_tier": amounts,
+        "base_fee_inr": preview.get("base_fee_inr", 0),
+        "gst_percent": preview.get("gst_percent", 18),
+        "gst_amount_inr": preview.get("gst_amount_inr", 0),
+        "total_fee_inr": preview.get("total_fee_inr", 0),
+        "fee_inr": preview.get("total_fee_inr", 0),
+        "active": reg_open,
         "contact_phone": "+91 8095218493",
         "contact_name": "Dr. Harish Mallapura Maheshwarappa",
         "register_path": f"/events/{slug}/register",
@@ -152,18 +162,11 @@ def _validate_init_payload(data: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     if not settings.event_icu_d_conclave_active:
         raise HTTPException(status_code=403, detail="Event registration is currently closed.")
-
-    base_fees = _event_fee_breakdown()
-    if base_fees["total_fee_inr"] <= 0:
+    if not registration_open_for_date():
         raise HTTPException(
-            status_code=503,
-            detail="Event registration fee is not configured (EVENT_ICU_D_CONCLAVE_FEE_INR).",
+            status_code=403,
+            detail="Event registration is closed. The registration period has ended.",
         )
-
-    promo_code = str(data.get("promo_code") or "").strip()
-    fees = _apply_promo_to_fees(base_fees, promo_code)
-    if promo_code and fees.get("promo_invalid"):
-        raise HTTPException(status_code=400, detail="Invalid promo code.")
 
     email = _normalize_email(str(data.get("email") or ""))
     if not email or not _EMAIL_RE.match(email):
@@ -172,6 +175,11 @@ def _validate_init_payload(data: dict[str, Any]) -> dict[str, Any]:
     category = str(data.get("category") or "").strip().lower()
     if category not in _VALID_CATEGORIES:
         raise HTTPException(status_code=400, detail="Select a valid category.")
+
+    promo_code = str(data.get("promo_code") or "").strip()
+    fees = _fees_for_category(category, promo_code)
+    if promo_code and fees.get("promo_invalid"):
+        raise HTTPException(status_code=400, detail="Invalid promo code.")
 
     phone = str(data.get("phone") or "").strip()
     if len(phone) < 8:
@@ -269,25 +277,11 @@ def _init_response_from_registration(
         "payment_required": payment_required,
         "email_sent": email_sent,
         "promo_applied": bool(fees.get("promo_applied")),
-        **{k: fees[k] for k in ("base_fee_inr", "gst_percent", "gst_amount_inr", "total_fee_inr") if k in fees},
-    }
-
-
-def _fee_breakdown_from_total(total_inr: float) -> dict[str, float]:
-    """Reverse-calculate base + GST from a stored total (for confirmation emails)."""
-    settings = get_settings()
-    gst_percent = float(settings.event_icu_d_conclave_gst_percent or 18)
-    total = round(float(total_inr or 0), 2)
-    if total <= 0:
-        return _event_fee_breakdown()
-    base = round(total / (1 + gst_percent / 100), 2)
-    gst_amount = round(total - base, 2)
-    return {
-        "base_fee_inr": base,
-        "gst_percent": gst_percent,
-        "gst_amount_inr": gst_amount,
-        "total_fee_inr": total,
-        "fee_inr": total,
+        **{
+            k: fees[k]
+            for k in ("base_fee_inr", "gst_percent", "gst_amount_inr", "total_fee_inr", "tier", "tier_label")
+            if k in fees
+        },
     }
 
 
@@ -331,9 +325,14 @@ def initialize_event_registration(db: Session, payload: dict[str, Any]) -> dict[
             .first()
         )
         if txn:
-            fees = validated if validated.get("promo_applied") else _fee_breakdown_from_total(
-                float(pending.amount_inr or validated["fee_inr"])
-            )
+            cat = (validated.get("category") or pending.category or "clinician").strip().lower()
+            fees = _fees_for_category(cat, str(validated.get("promo_code") or ""))
+            pending.category = cat
+            pending.amount_inr = float(fees.get("total_fee_inr") or 0)
+            txn.amount = float(fees.get("total_fee_inr") or 0)
+            db.add(pending)
+            db.add(txn)
+            db.flush()
             if validated.get("promo_applied"):
                 pending.amount_inr = 0.0
                 txn.amount = 0.0

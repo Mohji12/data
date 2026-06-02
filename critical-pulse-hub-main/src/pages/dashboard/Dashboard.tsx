@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
 import { useOdometer } from '@/hooks/useOdometer';
-import { PlayCircle, ClipboardCheck, BookOpen, ArrowUpRight, AlertTriangle } from 'lucide-react';
+import { PlayCircle, ClipboardCheck, BookOpen, ArrowUpRight } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 
@@ -47,18 +47,6 @@ export default function Dashboard() {
             >
               Pay & extend access →
             </Link>
-          </div>
-        )}
-
-        {(!summary?.video?.enabled || !summary?.mock_test?.enabled || !summary?.certificate?.enabled) && (
-          <div className="bg-amber-pale border border-amber/30 rounded-sm px-5 py-3 mt-3 flex items-center gap-3">
-            <AlertTriangle size={15} className="text-amber shrink-0" />
-            <span className="font-sans text-sm text-amber">
-              Limited access based on subscription: {summary?.mock_test?.reason || summary?.video?.reason || summary?.certificate?.reason || 'Check your package.'}
-            </span>
-            {summary?.extension?.enabled && (
-              <Link to="/dashboard/extend-subscription" className="font-sans text-sm text-mint ml-auto">Extend →</Link>
-            )}
           </div>
         )}
       </div>

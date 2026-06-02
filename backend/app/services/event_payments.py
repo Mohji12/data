@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.models import EventPaymentTxn, EventRegistration
 from app.schemas import PaymentOrderResponse
 from app.services.event_registration import (
+    _fees_for_category,
     event_registration_slugs,
     icu_d_conclave_slug,
     try_send_event_confirmation_email,
@@ -59,6 +60,18 @@ def create_event_payment_order(db: Session, request_id: str) -> PaymentOrderResp
 
     if txn.is_finalized == "1" or (reg.payment_status or "").strip().lower() == "credit":
         raise HTTPException(status_code=400, detail="Payment already completed for this registration.")
+
+    cat = (reg.category or "clinician").strip().lower()
+    fees = _fees_for_category(cat, promo_code=None)
+    if not fees.get("promo_applied"):
+        refreshed = float(fees.get("total_fee_inr") or 0)
+        reg.amount_inr = refreshed
+        txn.amount = refreshed
+        reg.updated_at = datetime.utcnow()
+        txn.updated_at = datetime.utcnow()
+        db.add(reg)
+        db.add(txn)
+        db.flush()
 
     settings = get_settings()
     key_id = (settings.payment_key_id or "").strip()

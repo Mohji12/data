@@ -5,17 +5,50 @@ import { toast } from 'sonner';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { apiClient } from '@/lib/apiClient';
-import {
-  EVENT_DISPLAY_NAME,
-  EVENT_SLUG,
-} from '@/lib/eventConclave';
+import { EVENT_DISPLAY_NAME, EVENT_SLUG } from '@/lib/eventConclave';
 
 const API_BASE = `/events/${EVENT_SLUG}`;
 
 type Category = 'clinician' | 'student';
 
+type FeeCell = {
+  base_fee_inr: number;
+  gst_percent: number;
+  gst_amount_inr: number;
+  total_fee_inr: number;
+};
+
+type EventConfig = {
+  active: boolean;
+  registration_open: boolean;
+  current_tier: string | null;
+  current_tier_label: string | null;
+  fee_schedule: Record<string, Record<string, FeeCell>>;
+  contact_phone?: string;
+  contact_name?: string;
+};
+
+type PayableResponse = FeeCell & {
+  tier?: string;
+  tier_label?: string;
+  category?: string;
+  fee_inr?: number;
+};
+
+const TIER_ORDER = ['early_bird', 'regular', 'spot'] as const;
+
+const TIER_HEADINGS: Record<(typeof TIER_ORDER)[number], string> = {
+  early_bird: 'Early Bird (up to 15 Jun 2026)',
+  regular: 'Regular (16 Jun – 10 Jul 2026)',
+  spot: 'Spot (11–12 Jul 2026)',
+};
+
 const inputClass =
   'w-full bg-chalk border border-border-soft rounded-sm py-3 px-4 font-sans text-sm text-ink focus:border-mint/50 focus:ring-1 focus:ring-mint/15 outline-none';
+
+function formatInr(n: number) {
+  return n.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
 
 export default function EventConclaveRegister() {
   const navigate = useNavigate();
@@ -39,7 +72,17 @@ export default function EventConclaveRegister() {
 
   const { data: config, isLoading: configLoading, isError: configError } = useQuery({
     queryKey: ['event-config', EVENT_SLUG],
-    queryFn: () => apiClient(`${API_BASE}/config`),
+    queryFn: () => apiClient(`${API_BASE}/config`) as Promise<EventConfig>,
+  });
+
+  const { data: payable, isLoading: payableLoading } = useQuery({
+    queryKey: ['event-payable', EVENT_SLUG, form.category],
+    queryFn: () =>
+      apiClient(`${API_BASE}/payable`, {
+        method: 'POST',
+        body: JSON.stringify({ category: form.category }),
+      }) as Promise<PayableResponse>,
+    enabled: !!config?.registration_open,
   });
 
   const { data: countries = [] } = useQuery({
@@ -185,7 +228,7 @@ export default function EventConclaveRegister() {
     );
   }
 
-  if (config && config.active === false) {
+  if (!config.registration_open || config.active === false) {
     return (
       <div className="min-h-screen bg-chalk-warm">
         <Navbar />
@@ -201,10 +244,11 @@ export default function EventConclaveRegister() {
     );
   }
 
-  const baseFee = config?.base_fee_inr ?? 0;
-  const gstPercent = config?.gst_percent ?? 18;
-  const gstAmount = config?.gst_amount_inr ?? 0;
-  const totalFee = config?.total_fee_inr ?? config?.fee_inr ?? 0;
+  const baseFee = payable?.base_fee_inr ?? 0;
+  const gstPercent = payable?.gst_percent ?? 18;
+  const gstAmount = payable?.gst_amount_inr ?? 0;
+  const totalFee = payable?.total_fee_inr ?? payable?.fee_inr ?? 0;
+  const currentTier = config.current_tier;
 
   return (
     <div className="min-h-screen bg-chalk-warm">
@@ -220,9 +264,75 @@ export default function EventConclaveRegister() {
             1st NATIONAL &ldquo;ICU-ID CONCLAVE&rdquo;
           </h1>
           <p className="font-sans text-lg text-ink-secondary mt-2">11th and 12th July 2026</p>
+          {config.current_tier_label && (
+            <p className="font-mono text-[11px] text-mint mt-3 uppercase tracking-wide">
+              Current fee window: {config.current_tier_label}
+            </p>
+          )}
         </header>
 
         <form onSubmit={handleSubmit} className="space-y-10">
+          <section className="bg-chalk border border-border-soft rounded-sm p-6 overflow-x-auto">
+            <h2 className="font-display font-bold text-lg text-slate mb-4">Registration fee structure</h2>
+            <table className="w-full font-sans text-sm text-left min-w-[520px]">
+              <thead>
+                <tr className="border-b border-border-soft text-[11px] uppercase tracking-wide text-ink-faint">
+                  <th className="py-2 pr-3">Period</th>
+                  <th className="py-2 pr-3">Student (incl. 18% GST)</th>
+                  <th className="py-2">Practicing Clinician (incl. 18% GST)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {TIER_ORDER.map((tier) => {
+                  const row = config.fee_schedule?.[tier];
+                  const student = row?.student;
+                  const clinician = row?.clinician;
+                  const active = tier === currentTier;
+                  return (
+                    <tr
+                      key={tier}
+                      className={`border-b border-border-soft ${active ? 'bg-mint-pale/60' : ''}`}
+                    >
+                      <td className="py-3 pr-3 align-top">
+                        <span className="font-medium text-slate">{TIER_HEADINGS[tier]}</span>
+                        {active && (
+                          <span className="ml-2 inline-block text-[10px] font-mono uppercase tracking-wide text-mint">
+                            Active now
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 pr-3 text-ink-secondary">
+                        {student ? (
+                          <>
+                            ₹ {formatInr(student.base_fee_inr)} + ₹ {formatInr(student.gst_amount_inr)} GST
+                            <br />
+                            <span className="font-semibold text-slate">₹ {formatInr(student.total_fee_inr)}</span>
+                          </>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="py-3 text-ink-secondary">
+                        {clinician ? (
+                          <>
+                            ₹ {formatInr(clinician.base_fee_inr)} + ₹ {formatInr(clinician.gst_amount_inr)} GST
+                            <br />
+                            <span className="font-semibold text-slate">₹ {formatInr(clinician.total_fee_inr)}</span>
+                          </>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <p className="font-sans text-xs text-ink-muted mt-4">
+              Student: valid student ID or proof must be furnished on the day of the conference.
+            </p>
+          </section>
+
           <section>
             <h2 className="font-display font-bold text-xl text-slate mb-6">Personal details</h2>
             <div className="space-y-4">
@@ -253,6 +363,9 @@ export default function EventConclaveRegister() {
                     Student
                   </label>
                 </div>
+                <p className="font-sans text-xs text-ink-muted mt-2">
+                  Students must bring valid student ID or proof on the conference day.
+                </p>
               </Field>
               <Field label="4. Specialty *">
                 <input className={inputClass} value={form.specialty} onChange={(e) => update('specialty', e.target.value)} required />
@@ -310,31 +423,38 @@ export default function EventConclaveRegister() {
           </section>
 
           <section className="bg-chalk border border-border-soft rounded-sm p-6">
-            <h2 className="font-display font-bold text-lg text-slate mb-2">Registration fee</h2>
-            <div className="font-sans text-sm text-ink-secondary space-y-2 mb-4">
-              <div className="flex justify-between">
-                <span>Registration fee</span>
-                <span>₹ {baseFee.toLocaleString('en-IN')}</span>
+            <h2 className="font-display font-bold text-lg text-slate mb-2">Your registration fee</h2>
+            {payable?.tier_label && (
+              <p className="font-sans text-xs text-ink-muted mb-3">{payable.tier_label}</p>
+            )}
+            {payableLoading ? (
+              <p className="font-sans text-sm text-ink-muted mb-4">Calculating fee…</p>
+            ) : (
+              <div className="font-sans text-sm text-ink-secondary space-y-2 mb-4">
+                <div className="flex justify-between">
+                  <span>Base fee ({form.category === 'student' ? 'Student' : 'Practicing Clinician'})</span>
+                  <span>₹ {formatInr(baseFee)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>GST ({gstPercent}%)</span>
+                  <span>₹ {formatInr(gstAmount)}</span>
+                </div>
+                <div className="flex justify-between border-t border-border-soft pt-2 font-semibold text-slate">
+                  <span>Total payable</span>
+                  <span className="font-display font-black text-xl text-mint">
+                    ₹ {formatInr(totalFee)}{' '}
+                    <span className="font-sans text-sm font-normal text-ink-muted">INR</span>
+                  </span>
+                </div>
               </div>
-              <div className="flex justify-between">
-                <span>GST ({gstPercent}%)</span>
-                <span>₹ {gstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-              </div>
-              <div className="flex justify-between border-t border-border-soft pt-2 font-semibold text-slate">
-                <span>Total payable</span>
-                <span className="font-display font-black text-xl text-mint">
-                  ₹ {totalFee.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{' '}
-                  <span className="font-sans text-sm font-normal text-ink-muted">INR</span>
-                </span>
-              </div>
-            </div>
+            )}
             <p className="font-sans text-sm text-ink-muted mb-6">
               Click Register now to pay securely via Razorpay. Your unique registration number will be emailed after
               successful payment.
             </p>
             <button
               type="submit"
-              disabled={loading || totalFee <= 0}
+              disabled={loading || payableLoading || totalFee <= 0}
               className="magnetic w-full bg-slate text-chalk rounded-sm py-4 font-sans font-semibold hover:bg-slate-light transition-all disabled:opacity-50"
             >
               {loading ? 'Processing…' : 'Register now — Pay with Razorpay'}
@@ -350,9 +470,7 @@ export default function EventConclaveRegister() {
                 checked={form.declaration_accepted}
                 onChange={(e) => update('declaration_accepted', e.target.checked)}
               />
-              <span>
-                I confirm that the above details provided are correct and authentic.
-              </span>
+              <span>I confirm that the above details provided are correct and authentic.</span>
             </label>
           </section>
 

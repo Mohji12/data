@@ -45,6 +45,7 @@ class EventInitRequest(BaseModel):
 
 
 class EventPayableRequest(BaseModel):
+    category: str = Field(description="clinician or student")
     promo_code: Optional[str] = None
 
 
@@ -54,6 +55,9 @@ class EventPayableResponse(BaseModel):
     gst_amount_inr: float
     total_fee_inr: float
     fee_inr: float
+    tier: Optional[str] = None
+    tier_label: Optional[str] = None
+    category: Optional[str] = None
     promo_applied: bool = False
     promo_invalid: bool = False
 
@@ -90,7 +94,7 @@ def event_config() -> dict[str, Any]:
 
 @router.post(f"/{_SLUG}/payable", response_model=EventPayableResponse)
 def event_payable(body: EventPayableRequest) -> EventPayableResponse:
-    result = get_event_payable_amount(body.promo_code)
+    result = get_event_payable_amount(body.category, body.promo_code)
     return EventPayableResponse(**result)
 
 
