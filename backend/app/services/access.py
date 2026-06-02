@@ -261,14 +261,26 @@ def _one_time_course_end_date(pkg: Package | None) -> date | None:
     return _coerce_date(pkg.end_date)
 
 
+def _one_time_course_start_date(pkg: Package | None) -> date | None:
+    if not pkg:
+        return None
+    if (pkg.plan_type or "one_time").strip().lower() == "subscription":
+        return None
+    return _coerce_date(pkg.batch_start_date)
+
+
 def ensure_one_time_batch_access(db: Session, user: User) -> tuple[bool, str | None]:
     if not user.package_id:
         return True, None
     pkg = db.query(Package).filter(Package.id == user.package_id).first()
+    start = _one_time_course_start_date(pkg)
     end = _one_time_course_end_date(pkg)
     if not end:
         return True, None
-    if date.today() > end:
+    today = date.today()
+    if start and today < start:
+        return False, f"Your batch access starts on {start.strftime('%d %b %Y')}."
+    if today > end:
         return False, "Your batch access period has ended."
     return True, None
 
@@ -665,12 +677,17 @@ def admin_subscription_summary(
         start = user.payment_date
     elif user.created_at:
         start = user.created_at
+    course_start = _one_time_course_start_date(pkg)
+    if course_start:
+        start = datetime.combine(course_start, datetime.min.time())
     end = _one_time_course_end_date(pkg)
     access_status = "active"
     today = now.date()
-    if end and end < today:
+    if course_start and today < course_start:
+        access_status = "pending"
+    elif end and end < today:
         access_status = "expired"
-    days_remaining = (end - today).days if end else None
+    days_remaining = (end - today).days if end and today <= end else None
     return {
         "plan_type": "one_time",
         "plan_type_label": "One-time access",

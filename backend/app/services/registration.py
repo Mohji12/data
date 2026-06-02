@@ -1435,6 +1435,42 @@ def course_end_from_batch_start(batch_start: date, months: int = BATCH_COURSE_MO
     return _add_months(dt, months).date()
 
 
+def set_batch_course_access_dates(
+    db: Session,
+    subscription: str,
+    course_start: date,
+    course_months: int = BATCH_COURSE_MONTHS_DEFAULT,
+) -> dict:
+    """
+    Set batch_start_date on all active packages for video/mock access (batch_start + course_months).
+    Does not change registration tier start_date / end_date (Early Bird / Regular sale windows).
+    """
+    sub = (subscription or "").strip()
+    if not sub:
+        raise HTTPException(status_code=422, detail="subscription is required")
+    rows = (
+        db.query(Package)
+        .filter(_subscription_name_eq(Package.subscription, sub), Package.status == "1")
+        .all()
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No active packages for subscription {sub!r}")
+
+    course_end = course_end_from_batch_start(course_start, course_months)
+    start_dt = datetime.combine(course_start, datetime.min.time())
+    for p in rows:
+        p.batch_start_date = start_dt
+        db.add(p)
+    db.commit()
+    return {
+        "subscription": sub,
+        "course_start": course_start.isoformat(),
+        "course_end": course_end.isoformat(),
+        "course_months": course_months,
+        "packages_updated": len(rows),
+    }
+
+
 def apply_batch_course_window(
     db: Session,
     subscription: str,
