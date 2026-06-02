@@ -448,7 +448,11 @@ export default function AdminUsers() {
         <h1 className="font-display font-bold text-3xl text-slate text-center sm:text-left">Users</h1>
         <button
           type="button"
-          onClick={() => void openAuthenticatedExport(`/admin/users/export.csv${exportQuery}`)}
+          onClick={() =>
+            void openAuthenticatedExport(`/admin/users/export.csv${exportQuery}`).catch((e) =>
+              toast.error(e instanceof Error ? e.message : 'Export failed'),
+            )
+          }
           className="inline-flex items-center justify-center gap-2 magnetic bg-slate text-chalk rounded-sm px-5 py-2.5 font-sans text-xs font-semibold hover:bg-slate-light shrink-0"
         >
           <Download size={14} />

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiClient } from '@/lib/apiClient';
-import { getApiBaseUrl } from '@/lib/apiBase';
+import { downloadAuthenticatedFile } from '@/lib/apiBase';
 import { EVENT_DISPLAY_NAME } from '@/lib/eventConclave';
 
 type EventRow = {
@@ -199,21 +199,11 @@ export default function AdminEventRegistrations() {
 
   const exportExcel = async () => {
     try {
-      const token =
-        sessionStorage.getItem('admin_access_token') || localStorage.getItem('access_token');
       const params = paymentStatus ? `?payment_status=${encodeURIComponent(paymentStatus)}` : '';
-      const url = `${getApiBaseUrl()}/admin/events/registrations/export.xlsx${params}`;
-      const res = await fetch(url, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error(`Export failed: ${res.status}`);
-      const blob = await res.blob();
-      const dl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = dl;
-      a.download = `event-registrations-${new Date().toISOString().slice(0, 10)}.xlsx`;
-      a.click();
-      URL.revokeObjectURL(dl);
+      await downloadAuthenticatedFile(
+        `/admin/events/registrations/export.xlsx${params}`,
+        `event-registrations-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      );
       toast.success('Excel file downloaded');
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Export failed');

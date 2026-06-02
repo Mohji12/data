@@ -69,6 +69,48 @@ def _add_payment(db, user_id: int, request_id: str, payment_date: datetime) -> N
     )
 
 
+def _create_fields_for_email(email: str) -> dict | None:
+    profiles: dict[str, dict] = {
+        "abhijeetanandccm@gmail.com": {
+            "title": "Dr.",
+            "name": "ABHIJEET ANAND",
+            "contact_number": "9876543210",
+            "hospital": "Dummy Hospital",
+            "qualification": "MD",
+            "speciality": "Critical Care",
+            "country_id": 243,
+            "state": "Delhi",
+            "city": "New Delhi",
+            "pin_code": "110001",
+        },
+        "akshaysingadwar99@gmail.com": {
+            "title": "Dr.",
+            "name": "AKSHAY SINGADWAR",
+            "contact_number": "9876500001",
+            "hospital": "Dummy Hospital",
+            "qualification": "MD",
+            "speciality": "Critical Care",
+            "country_id": 243,
+            "state": "Maharashtra",
+            "city": "Nagpur",
+            "pin_code": "440001",
+        },
+        "sandeep.anesth@aiimsbhopal.edu.in": {
+            "title": "Dr.",
+            "name": "SANDEEP",
+            "contact_number": "9876500002",
+            "hospital": "AIIMS Bhopal",
+            "qualification": "MD",
+            "speciality": "Anaesthesia",
+            "country_id": 243,
+            "state": "Madhya Pradesh",
+            "city": "Bhopal",
+            "pin_code": "462020",
+        },
+    }
+    return profiles.get(email)
+
+
 def upsert_dummy_user(
     db,
     email: str,
@@ -151,20 +193,7 @@ def main() -> int:
     try:
         for raw_email in args.emails:
             email = raw_email.strip().lower()
-            create_fields = None
-            if email == "abhijeetanandccm@gmail.com":
-                create_fields = {
-                    "title": "Dr.",
-                    "name": "ABHIJEET ANAND",
-                    "contact_number": "9876543210",
-                    "hospital": "Dummy Hospital",
-                    "qualification": "MD",
-                    "speciality": "Critical Care",
-                    "country_id": 243,
-                    "state": "Delhi",
-                    "city": "New Delhi",
-                    "pin_code": "110001",
-                }
+            create_fields = _create_fields_for_email(email)
 
             try:
                 action, user = upsert_dummy_user(

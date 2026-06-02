@@ -162,6 +162,63 @@ def list_event_registrations(
     )
 
 
+def _filtered_export_rows(db: Session, payment_status: Optional[str]) -> list[EventRegistration]:
+    query = _base_query(db)
+    if payment_status:
+        query = query.filter(
+            func.lower(func.trim(EventRegistration.payment_status))
+            == payment_status.strip().lower()
+        )
+    return query.order_by(EventRegistration.id.desc()).all()
+
+
+# Static paths must be registered before /registrations/{registration_id} or FastAPI
+# treats "export.xlsx" as registration_id and returns 422.
+@router.get("/registrations/export.csv")
+def export_event_registrations_csv(
+    payment_status: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    rows = _filtered_export_rows(db, payment_status)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(_EVENT_EXPORT_COLUMNS)
+    for r in rows:
+        writer.writerow(_export_row_values(r))
+    filename = f"event-registrations-{_EVENT_SLUG}-{datetime.utcnow().strftime('%Y%m%d')}.csv"
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/registrations/export.xlsx")
+def export_event_registrations_xlsx(
+    payment_status: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    rows = _filtered_export_rows(db, payment_status)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Registrations"
+    ws.append(_EVENT_EXPORT_COLUMNS)
+    for r in rows:
+        ws.append(_export_row_values(r))
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"event-registrations-{_EVENT_SLUG}-{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/registrations/{registration_id}")
 def get_event_registration(
     registration_id: int,
@@ -208,59 +265,4 @@ def approve_event_registration(
         resend_email=body.resend_email,
         payment_id=body.payment_id,
         admin_note=body.admin_note,
-    )
-
-
-def _filtered_export_rows(db: Session, payment_status: Optional[str]) -> list[EventRegistration]:
-    query = _base_query(db)
-    if payment_status:
-        query = query.filter(
-            func.lower(func.trim(EventRegistration.payment_status))
-            == payment_status.strip().lower()
-        )
-    return query.order_by(EventRegistration.id.desc()).all()
-
-
-@router.get("/registrations/export.csv")
-def export_event_registrations_csv(
-    payment_status: Optional[str] = Query(None),
-    db: Session = Depends(get_db),
-) -> Response:
-    rows = _filtered_export_rows(db, payment_status)
-
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(_EVENT_EXPORT_COLUMNS)
-    for r in rows:
-        writer.writerow(_export_row_values(r))
-    filename = f"event-registrations-{_EVENT_SLUG}-{datetime.utcnow().strftime('%Y%m%d')}.csv"
-    return Response(
-        content=buf.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-@router.get("/registrations/export.xlsx")
-def export_event_registrations_xlsx(
-    payment_status: Optional[str] = Query(None),
-    db: Session = Depends(get_db),
-) -> Response:
-    rows = _filtered_export_rows(db, payment_status)
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Registrations"
-    ws.append(_EVENT_EXPORT_COLUMNS)
-    for r in rows:
-        ws.append(_export_row_values(r))
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    filename = f"event-registrations-{_EVENT_SLUG}-{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
-    return Response(
-        content=buf.getvalue(),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

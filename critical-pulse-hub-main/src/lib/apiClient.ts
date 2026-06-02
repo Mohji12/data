@@ -1,10 +1,9 @@
 import { getApiBaseUrl } from '@/lib/apiBase';
+import { getAuthBearerToken } from '@/lib/authToken';
 import { isSessionInvalidError, notifySessionInvalidated } from '@/lib/sessionEvents';
-const STUDENT_TOKEN_KEY = 'access_token';
-const ADMIN_TOKEN_KEY = 'admin_access_token';
 
 export async function apiClient(endpoint: string, options: RequestInit = {}) {
-  const token = sessionStorage.getItem(ADMIN_TOKEN_KEY) || localStorage.getItem(STUDENT_TOKEN_KEY);
+  const token = getAuthBearerToken();
   
   const headers = new Headers(options.headers || {});
   if (token) {
@@ -46,7 +45,7 @@ export async function apiDownload(
   endpoint: string,
   filename: string,
 ): Promise<void> {
-  const token = sessionStorage.getItem(ADMIN_TOKEN_KEY) || localStorage.getItem(STUDENT_TOKEN_KEY);
+  const token = getAuthBearerToken();
   const headers = new Headers();
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
