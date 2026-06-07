@@ -38,7 +38,7 @@ const navItems = [
     label: 'COMMUNICATION',
     items: [
       { label: 'WhatsApp', to: '/admin/communication/whatsapp', icon: Send },
-      { label: 'Bulk Mail', to: 'https://staging.d1daw2yg43xlwa.amplifyapp.com/', icon: Mail },
+      { label: 'Bulk Mail', to: 'https://staging.d5w312h4wy6nw.amplifyapp.com/', icon: Mail },
     ],
   },
   {

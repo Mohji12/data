@@ -624,7 +624,7 @@ def generate_coupons(
         exists = db.query(CouponMaster.id).filter(CouponMaster.code == code).first()
         if exists:
             continue
-        row = CouponMaster(code=code, status="1")
+        row = CouponMaster(code=code, status="0")
         if has_amt:
             row.discount_amount = discount_amount
         if has_pct:

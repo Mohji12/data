@@ -32,7 +32,7 @@ export default function AdminCoupons() {
     mutationFn: () =>
       apiClient('/admin/commerce/coupons', {
         method: 'POST',
-        body: JSON.stringify({ code: code.trim(), status: '1', discount_amount: Number(discount) || 0 }),
+        body: JSON.stringify({ code: code.trim(), status: '0', discount_amount: Number(discount) || 0 }),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['adminCoupons'] });
@@ -188,10 +188,10 @@ export default function AdminCoupons() {
                 <td className="px-6 py-4">
                   <span
                     className={`font-mono text-[11px] border rounded-sm px-2 py-0.5 ${
-                      c.status === '1' ? 'border-mint/30 text-mint' : 'border-ink-faint/30 text-ink-faint'
+                      c.status === '0' ? 'border-mint/30 text-mint' : 'border-ink-faint/30 text-ink-faint'
                     }`}
                   >
-                    {c.status === '1' ? 'active' : 'off'}
+                    {c.status === '0' ? 'available' : 'used'}
                   </span>
                 </td>
                 <td className="px-6 py-4">

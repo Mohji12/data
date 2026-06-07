@@ -256,8 +256,28 @@ export default function Register() {
     });
   }, [packageList, searchParams]);
 
+  const emailForPricing = String(form.email || '').trim().toLowerCase();
+
+  const { data: oldStudentCheck } = useQuery({
+    queryKey: ['regOldStudent', emailForPricing, selectedSubscription],
+    enabled: !!emailForPricing && !!selectedSubscription,
+    queryFn: () =>
+      apiClient('/registration/old-student-check', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: emailForPricing,
+          subscription: selectedSubscription,
+        }),
+      }),
+  });
+
+  const isOldStudent = !!oldStudentCheck?.is_old_student;
+  const isIndiaDelegate =
+    String(form.registration_type || '').toLowerCase() === 'indian delegates' ||
+    String(form.country_id) === '101';
+
   const { data: payablePreview } = useQuery({
-    queryKey: ['regPayablePreview', form.batch_slug, form.package_id, form.country_id, form.email, selectedSubscription, form.coupon_code],
+    queryKey: ['regPayablePreview', form.batch_slug, form.package_id, form.country_id, emailForPricing, selectedSubscription, form.coupon_code],
     enabled: !!form.batch_slug && !!form.package_id && !!selectedSubscription,
     queryFn: () =>
       apiClient('/registration/payable-amount', {
@@ -267,7 +287,7 @@ export default function Register() {
           package_id: parseInt(String(form.package_id), 10),
           country_id: parseInt(String(form.country_id), 10),
           subscription: selectedSubscription,
-          email: String(form.email || '').trim().toLowerCase(),
+          email: emailForPricing,
           coupon_code: String(form.coupon_code || '').trim() || undefined,
         }),
       }),
@@ -281,6 +301,16 @@ export default function Register() {
   const displayTotal = Number(
     payablePreview?.total_amount ?? selectedPackage?.total_amount ?? 0,
   );
+
+  /** Package list shows catalog price; returning students pay the fixed old-student slab. */
+  const packageLineTotal = (p: RegPackage) => {
+    if (isOldStudent) {
+      return isIndiaDelegate
+        ? Number(oldStudentCheck?.discount_inr ?? 21240)
+        : Number(oldStudentCheck?.discount_usd ?? 260);
+    }
+    return Number(p.total_amount ?? 0);
+  };
 
   const update = (k: string, v: any) => setForm((prev) => ({ ...prev, [k]: v }));
 
@@ -372,7 +402,7 @@ export default function Register() {
                         </div>
                         <span className="font-display font-bold text-slate">
                           {p.currency_name === 'USD' ? '$' : '₹'}
-                          {p.total_amount.toLocaleString()}
+                          {packageLineTotal(p).toLocaleString()}
                         </span>
                       </label>
                     ))}
@@ -404,16 +434,28 @@ export default function Register() {
                 </div>
                 <span className="font-display font-bold text-slate">
                   {p.currency_name === 'USD' ? '$' : '₹'}
-                  {p.total_amount.toLocaleString()}
+                  {packageLineTotal(p).toLocaleString()}
                 </span>
               </label>
             ))}
           </div>
         )}
 
+        {isOldStudent && (
+          <p className="font-sans text-xs text-mint mt-3">
+            Returning student rate applies (you have a previous paid registration). All tiers are{' '}
+            {isIndiaDelegate ? '₹' : '$'}
+            {(isIndiaDelegate
+              ? Number(oldStudentCheck?.discount_inr ?? 21240)
+              : Number(oldStudentCheck?.discount_usd ?? 260)
+            ).toLocaleString()}{' '}
+            incl. GST.
+          </p>
+        )}
+
         {form.package_id && (
           <div className="mt-4 pt-4 border-t border-border-soft">
-            {showCoupon && (
+            {showCoupon && !isOldStudent && (
               <input
                 value={form.coupon_code || ''}
                 onChange={(e) => update('coupon_code', e.target.value)}
