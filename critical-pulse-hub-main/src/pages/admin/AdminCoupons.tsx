@@ -7,6 +7,10 @@ import { toast } from 'sonner';
 
 type CouponRow = { id: number; code: string; status: string; discount_amount: number };
 
+function couponStatusLabel(status: string): string {
+  return status === '0' ? 'available' : 'expired';
+}
+
 export default function AdminCoupons() {
   const qc = useQueryClient();
   const isTech = useIsTechAdmin();
@@ -188,10 +192,10 @@ export default function AdminCoupons() {
                 <td className="px-6 py-4">
                   <span
                     className={`font-mono text-[11px] border rounded-sm px-2 py-0.5 ${
-                      c.status === '0' ? 'border-mint/30 text-mint' : 'border-ink-faint/30 text-ink-faint'
+                      c.status === '0' ? 'border-mint/30 text-mint' : 'border-blush/30 text-blush'
                     }`}
                   >
-                    {c.status === '0' ? 'available' : 'used'}
+                    {couponStatusLabel(c.status)}
                   </span>
                 </td>
                 <td className="px-6 py-4">

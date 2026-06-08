@@ -4,8 +4,34 @@ import path from "path";
 import { componentTagger } from "lovable-tagger";
 
 const LOCAL_API = "http://127.0.0.1:8000";
-const API_PROXY_PATTERN =
-  "^/(admin|auth|registration|dashboard|exams|videos|certificate|upload|health|events)";
+const API_PROXY_PREFIXES = [
+  "admin",
+  "auth",
+  "registration",
+  "dashboard",
+  "exams",
+  "videos",
+  "certificate",
+  "upload",
+  "health",
+  "events",
+] as const;
+
+function buildDevProxy(proxyTarget: string) {
+  const shared = {
+    target: proxyTarget,
+    changeOrigin: true,
+    secure: proxyTarget.startsWith("https://"),
+    // Only SPA navigations (GET + HTML). Never bypass POST/PUT API calls.
+    bypass: (req: { method?: string; headers?: { accept?: string } }) => {
+      if (req.method !== "GET") return undefined;
+      const accept = req.headers?.accept ?? "";
+      if (accept.includes("text/html")) return "/index.html";
+      return undefined;
+    },
+  };
+  return Object.fromEntries(API_PROXY_PREFIXES.map((prefix) => [`/${prefix}`, shared]));
+}
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -25,18 +51,7 @@ export default defineConfig(({ mode }) => {
         overlay: false,
       },
       // Dev: browser → localhost:8080 → proxy → VITE_API_URL (or local :8000). Avoids CORS.
-      proxy: {
-        [API_PROXY_PATTERN]: {
-          target: proxyTarget,
-          changeOrigin: true,
-          secure: proxyTarget.startsWith("https://"),
-          bypass: (req) => {
-            if (req.headers.accept?.includes("html")) {
-              return "/index.html";
-            }
-          },
-        },
-      },
+      proxy: buildDevProxy(proxyTarget),
     },
     plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
     resolve: {

@@ -49,7 +49,7 @@ BATCH_DEFINITIONS: dict[str, BatchDefinition] = {
     "cp-8": BatchDefinition(slug="cp-8", title="Critical Pearls 8", registration_type="CP", requires_document=True, coupon_enabled=True),
     "cp-9": BatchDefinition(slug="cp-9", title="Critical Pearls 9", registration_type="CP", requires_document=True, coupon_enabled=True),
     "cp-10": BatchDefinition(slug="cp-10", title="Critical Pearls 10", registration_type="CP", requires_document=True, coupon_enabled=True),
-    "edic-10": BatchDefinition(slug="edic-10", title="EDIC 10", registration_type="EDIC", requires_document=True, coupon_enabled=False),
+    "edic-10": BatchDefinition(slug="edic-10", title="EDIC 10", registration_type="EDIC", requires_document=True, coupon_enabled=True),
     "ccm-2": BatchDefinition(slug="ccm-2", title="CCM 2", registration_type="CCM", requires_document=True, coupon_enabled=True),
 }
 
@@ -207,7 +207,7 @@ def _infer_registration_flags(title: str) -> tuple[str, bool, bool]:
     """registration_type, requires_document, coupon_enabled — when not in BATCH_DEFINITIONS."""
     t = (title or "").lower()
     if "edic" in t:
-        return "EDIC", True, False
+        return "EDIC", True, True
     if "critical pearl" in t or re.search(r"\bcp\s*\d", t) or t.startswith("cp "):
         return "CP", True, True
     if "ccm" in t:
@@ -1115,11 +1115,8 @@ def _validate_coupon_row(
     code = (coupon_code or "").strip()
     if not code:
         return None
-    if not batch.coupon_enabled:
-        raise HTTPException(status_code=400, detail="Coupon not allowed for this batch")
     has_pct = _coupon_has_column(db, "discount_percent")
     has_amt = _coupon_has_column(db, "discount_amount")
-    has_sub = _coupon_has_column(db, "subscriptions")
     has_email = _coupon_has_column(db, "assigned_email")
     coupon = _coupon_query(db).filter(CouponMaster.code == code, CouponMaster.status == "0").first()
     if not coupon:
@@ -1131,9 +1128,6 @@ def _validate_coupon_row(
     assigned_email = (coupon.assigned_email if has_email else None)
     if not _assigned_email_matches(assigned_email, email):
         raise HTTPException(status_code=400, detail="This coupon is not valid for this email address")
-    allowed_subscriptions = (coupon.subscriptions if has_sub else None)
-    if not _subscription_allowed_for_coupon(allowed_subscriptions, subscription):
-        raise HTTPException(status_code=400, detail="This coupon is not valid for this course")
     return coupon
 
 
