@@ -15,6 +15,7 @@ const API_PROXY_PREFIXES = [
   "upload",
   "health",
   "events",
+  "webhook",
 ] as const;
 
 function buildDevProxy(proxyTarget: string) {

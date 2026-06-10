@@ -127,6 +127,12 @@ class Settings:
         self.whatsapp_send_delay_ms: int = max(0, int(os.getenv("WHATSAPP_SEND_DELAY_MS", "100")))
         self.whatsapp_send_max_retries: int = max(0, int(os.getenv("WHATSAPP_SEND_MAX_RETRIES", "1")))
         self.whatsapp_send_timeout_sec: int = max(1, int(os.getenv("WHATSAPP_SEND_TIMEOUT_SEC", "15")))
+        # Meta webhook (GET verify + POST inbound). Never commit real values.
+        self.whatsapp_verify_token: str = os.getenv("WHATSAPP_VERIFY_TOKEN", "").strip()
+        self.whatsapp_app_secret: str = os.getenv("WHATSAPP_APP_SECRET", "").strip()
+        self.auto_create_whatsapp_webhook_table: bool = os.getenv(
+            "AUTO_CREATE_WHATSAPP_WEBHOOK_TABLE", "true"
+        ).lower() in ("1", "true", "yes")
 
     @property
     def sqlalchemy_database_uri(self) -> str:

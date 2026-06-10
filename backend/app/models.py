@@ -429,6 +429,22 @@ class EventPaymentTxn(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class WhatsAppWebhookEvent(Base):
+    """Inbound WhatsApp Cloud API webhook events (messages, statuses, errors)."""
+
+    __tablename__ = "whatsapp_webhook_event"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_kind = Column(String(64), nullable=False)
+    field = Column(String(64))
+    phone = Column(String(32))
+    wa_message_id = Column(String(128))
+    event_status = Column(String(64))
+    user_id = Column(Integer)
+    payload = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Admin(Base):
     __tablename__ = "admin"
 

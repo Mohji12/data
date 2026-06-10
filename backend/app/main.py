@@ -11,7 +11,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db import engine, get_db
-from app.models import EmailTemplateMaster, EventPaymentTxn, EventRegistration, RegistrationPaymentTxn
+from app.models import (
+    EmailTemplateMaster,
+    EventPaymentTxn,
+    EventRegistration,
+    RegistrationPaymentTxn,
+    WhatsAppWebhookEvent,
+)
 from app.routers.dashboard import router as dashboard_router
 from app.routers.exams import router as exams_router
 from app.routers.auth import router as auth_router
@@ -29,6 +35,7 @@ from app.routers.admin_whatsapp import router as admin_whatsapp_router
 from app.routers.certificate import router as certificate_router
 from app.routers.events import router as events_router
 from app.routers.admin_events import router as admin_events_router
+from app.routers.whatsapp_webhook import router as whatsapp_webhook_router
 
 
 @asynccontextmanager
@@ -40,6 +47,8 @@ async def lifespan(app: FastAPI):
     if settings.auto_create_event_tables:
         EventRegistration.__table__.create(bind=engine, checkfirst=True)
         EventPaymentTxn.__table__.create(bind=engine, checkfirst=True)
+    if settings.auto_create_whatsapp_webhook_table:
+        WhatsAppWebhookEvent.__table__.create(bind=engine, checkfirst=True)
     yield
 
 
@@ -71,6 +80,7 @@ app.include_router(admin_whatsapp_router)
 app.include_router(certificate_router)
 app.include_router(events_router)
 app.include_router(admin_events_router)
+app.include_router(whatsapp_webhook_router)
 
 # Same URL shape as PHP: files saved under uploads/registration (see uploads.save_registration_document).
 registration_uploads = Path(__file__).resolve().parent.parent / "uploads" / "registration"
