@@ -22,6 +22,10 @@ export default function AdminWhatsApp() {
   const [subscriptions, setSubscriptions] = useState<string[]>([]);
   const [approve, setApprove] = useState('');
   const [message, setMessage] = useState('');
+  const [sendMode, setSendMode] = useState<'text' | 'template'>('template');
+  const [templateName, setTemplateName] = useState('');
+  const [templateLanguage, setTemplateLanguage] = useState('en');
+  const [templateBodyParams, setTemplateBodyParams] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [externalNumbers, setExternalNumbers] = useState('');
   
@@ -43,6 +47,8 @@ export default function AdminWhatsApp() {
     queryFn: async () => {
       const res = await apiClient('/admin/whatsapp/template');
       setMessage(res.template);
+      if (res.default_template_name) setTemplateName(res.default_template_name);
+      if (res.default_template_language) setTemplateLanguage(res.default_template_language);
       return res;
     },
     staleTime: Infinity,
@@ -176,21 +182,32 @@ export default function AdminWhatsApp() {
 
   const bulkSendMutation = useMutation({
     mutationFn: async () => {
-      if (!message.trim()) {
-        throw new Error('Message is required');
-      }
       if (allRecipients.length === 0) {
         throw new Error('Please select users or add external numbers');
+      }
+      if (sendMode === 'text' && !message.trim()) {
+        throw new Error('Message is required for text mode');
+      }
+      if (sendMode === 'template' && !templateName.trim()) {
+        throw new Error('Template name is required for template mode');
       }
       const recipients = allRecipients.map((r) => ({
         user_id: r.isExternal ? null : r.id,
         name: r.name,
         phone: r.phone,
       }));
+      const bodyParams = templateBodyParams
+        .split(/[\n,]/)
+        .map((p) => p.trim())
+        .filter(Boolean);
       return apiClient('/admin/whatsapp/bulk-send', {
         method: 'POST',
         body: JSON.stringify({
-          message: message.trim(),
+          send_mode: sendMode,
+          message: sendMode === 'text' ? message.trim() : null,
+          template_name: sendMode === 'template' ? templateName.trim() : null,
+          template_language: templateLanguage.trim() || 'en',
+          template_body_params: sendMode === 'template' ? bodyParams : [],
           recipients,
           dedupe: true,
         }),
@@ -301,8 +318,59 @@ export default function AdminWhatsApp() {
               <MessageCircle size={16} className="text-blush" />
               API Bulk Dispatch
             </h3>
+            <div className="space-y-2">
+              <label className="font-mono text-[10px] text-ink-faint uppercase tracking-wide">Send mode</label>
+              <select
+                value={sendMode}
+                onChange={(e) => setSendMode(e.target.value as 'text' | 'template')}
+                className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm focus:outline-none focus:border-mint transition-colors"
+              >
+                <option value="template">Approved template (recommended for bulk)</option>
+                <option value="text">Free text (24h reply window only)</option>
+              </select>
+            </div>
+            {sendMode === 'template' ? (
+              <div className="space-y-3">
+                <div>
+                  <label className="font-mono text-[10px] text-ink-faint uppercase tracking-wide">Template name</label>
+                  <input
+                    value={templateName}
+                    onChange={(e) => setTemplateName(e.target.value)}
+                    placeholder="e.g. hello_world"
+                    className="mt-1 w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm focus:outline-none focus:border-mint transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="font-mono text-[10px] text-ink-faint uppercase tracking-wide">Language code</label>
+                  <input
+                    value={templateLanguage}
+                    onChange={(e) => setTemplateLanguage(e.target.value)}
+                    placeholder="en or en_US"
+                    className="mt-1 w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm focus:outline-none focus:border-mint transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="font-mono text-[10px] text-ink-faint uppercase tracking-wide">Body variables (optional)</label>
+                  <textarea
+                    value={templateBodyParams}
+                    onChange={(e) => setTemplateBodyParams(e.target.value)}
+                    placeholder="One per line or comma-separated for {{1}}, {{2}}, ..."
+                    rows={3}
+                    className="mt-1 w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm focus:outline-none focus:border-mint transition-colors"
+                  />
+                </div>
+              </div>
+            ) : (
+              <p className="text-[10px] text-ink-faint">
+                Free text only works if each recipient messaged your business number within the last 24 hours.
+              </p>
+            )}
             <button
-              disabled={bulkSendMutation.isPending || !message.trim() || allRecipients.length === 0}
+              disabled={
+                bulkSendMutation.isPending ||
+                allRecipients.length === 0 ||
+                (sendMode === 'text' ? !message.trim() : !templateName.trim())
+              }
               onClick={() => bulkSendMutation.mutate()}
               className="w-full bg-slate text-chalk rounded-sm px-4 py-2 font-sans text-[11px] font-bold hover:bg-slate-light transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -325,7 +393,7 @@ export default function AdminWhatsApp() {
               </div>
             )}
             <p className="text-[10px] text-ink-faint">
-              API key is kept only on backend. This action triggers server-side Meta Cloud dispatch.
+              API key is kept only on backend. Use an approved Meta template for cold bulk outreach.
             </p>
           </div>
         </div>

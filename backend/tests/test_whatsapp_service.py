@@ -1,4 +1,10 @@
-from app.services.whatsapp import SendResult, normalize_phone, send_bulk_text, split_batches
+from app.services.whatsapp import (
+    SendResult,
+    normalize_phone,
+    send_bulk_template,
+    send_bulk_text,
+    split_batches,
+)
 
 
 def test_normalize_phone_accepts_indian_10_digit():
@@ -34,3 +40,18 @@ def test_send_bulk_text_dedupes_and_aggregates(monkeypatch):
     assert out["sent"] == 1
     assert out["failed"] == 1
     assert len(calls) == 2
+
+
+def test_send_bulk_template_aggregates(monkeypatch):
+    calls: list[str] = []
+
+    def fake_send(phone: str, template_name: str, language_code: str, body_params=None):
+        calls.append(phone)
+        return SendResult(phone=phone, success=True, provider_message_id="wamid.t", status_code=200)
+
+    monkeypatch.setattr("app.services.whatsapp.send_whatsapp_template", fake_send)
+
+    out = send_bulk_template(["+919999999999"], "hello_world", "en")
+    assert out["total"] == 1
+    assert out["sent"] == 1
+    assert calls == ["+919999999999"]

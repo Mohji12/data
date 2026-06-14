@@ -88,8 +88,8 @@ class EventFinalizeResponse(BaseModel):
 
 
 @router.get(f"/{_SLUG}/config")
-def event_config() -> dict[str, Any]:
-    return get_event_public_config()
+def event_config(db: Session = Depends(get_db)) -> dict[str, Any]:
+    return get_event_public_config(db)
 
 
 @router.post(f"/{_SLUG}/payable", response_model=EventPayableResponse)

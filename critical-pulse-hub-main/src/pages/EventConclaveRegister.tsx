@@ -5,7 +5,9 @@ import { toast } from 'sonner';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { apiClient } from '@/lib/apiClient';
+import { resolvePublicUploadUrl } from '@/lib/apiBase';
 import { EVENT_DISPLAY_NAME, EVENT_SLUG } from '@/lib/eventConclave';
+import { FileText } from 'lucide-react';
 
 const API_BASE = `/events/${EVENT_SLUG}`;
 
@@ -26,6 +28,7 @@ type EventConfig = {
   fee_schedule: Record<string, Record<string, FeeCell>>;
   contact_phone?: string;
   contact_name?: string;
+  brochure_url?: string | null;
 };
 
 type PayableResponse = FeeCell & {
@@ -249,6 +252,7 @@ export default function EventConclaveRegister() {
   const gstAmount = payable?.gst_amount_inr ?? 0;
   const totalFee = payable?.total_fee_inr ?? payable?.fee_inr ?? 0;
   const currentTier = config.current_tier;
+  const brochureUrl = resolvePublicUploadUrl(config.brochure_url);
 
   return (
     <div className="min-h-screen bg-chalk-warm">
@@ -271,6 +275,33 @@ export default function EventConclaveRegister() {
             </p>
           )}
         </header>
+
+        {brochureUrl && (
+          <section className="mb-10 bg-chalk border border-border-soft rounded-sm p-6 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
+              <div>
+                <h2 className="font-display font-bold text-lg text-slate flex items-center gap-2">
+                  <FileText size={18} className="text-mint shrink-0" />
+                  Conference brochure
+                </h2>
+                <p className="font-sans text-sm text-ink-muted mt-1">
+                  Download or view the PDF for programme details, faculty, and venue information.
+                </p>
+              </div>
+              <a
+                href={brochureUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center rounded-sm bg-slate text-chalk px-5 py-2.5 font-sans text-sm font-semibold hover:bg-slate-light transition-colors shrink-0"
+              >
+                Open brochure PDF
+              </a>
+            </div>
+            <div className="w-full h-[min(70vh,560px)] overflow-hidden rounded-sm border border-border-soft bg-chalk-warm">
+              <iframe src={brochureUrl} title="ICU-ID Conclave brochure" className="w-full h-full border-0" />
+            </div>
+          </section>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-10">
           <section className="bg-chalk border border-border-soft rounded-sm p-6 overflow-x-auto">

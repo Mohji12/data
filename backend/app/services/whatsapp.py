@@ -4,7 +4,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any, Callable, TypeVar
 from urllib import error, request
 
 from app.core.config import get_settings
@@ -58,20 +58,50 @@ def _meta_headers() -> dict[str, str]:
     }
 
 
+def _to_wa_id(phone: str) -> str:
+    """Meta expects E.164 digits without the leading +."""
+    return phone.lstrip("+")
+
+
 def _meta_payload(phone: str, message: str) -> dict[str, Any]:
     return {
         "messaging_product": "whatsapp",
-        "to": phone,
+        "to": _to_wa_id(phone),
         "type": "text",
         "text": {"preview_url": False, "body": message},
     }
 
 
-def send_whatsapp_text(phone: str, message: str) -> SendResult:
+def _meta_template_payload(
+    phone: str,
+    template_name: str,
+    language_code: str,
+    body_params: list[str] | None = None,
+) -> dict[str, Any]:
+    template: dict[str, Any] = {
+        "name": template_name,
+        "language": {"code": language_code},
+    }
+    params = [p for p in (body_params or []) if (p or "").strip()]
+    if params:
+        template["components"] = [
+            {
+                "type": "body",
+                "parameters": [{"type": "text", "text": p} for p in params],
+            }
+        ]
+    return {
+        "messaging_product": "whatsapp",
+        "to": _to_wa_id(phone),
+        "type": "template",
+        "template": template,
+    }
+
+
+def _post_meta_message(payload: dict[str, Any], phone: str) -> SendResult:
     settings = get_settings()
     endpoint = _meta_endpoint()
     headers = _meta_headers()
-    payload = _meta_payload(phone, message)
     retries = settings.whatsapp_send_max_retries
     timeout = settings.whatsapp_send_timeout_sec
 
@@ -117,14 +147,33 @@ def send_whatsapp_text(phone: str, message: str) -> SendResult:
             return SendResult(phone=phone, success=False, error=str(exc)[:500], status_code=None)
 
 
-def send_bulk_text(phones: list[str], message: str) -> dict[str, Any]:
+def send_whatsapp_text(phone: str, message: str) -> SendResult:
+    return _post_meta_message(_meta_payload(phone, message), phone)
+
+
+def send_whatsapp_template(
+    phone: str,
+    template_name: str,
+    language_code: str,
+    body_params: list[str] | None = None,
+) -> SendResult:
+    return _post_meta_message(
+        _meta_template_payload(phone, template_name, language_code, body_params),
+        phone,
+    )
+
+
+def _send_bulk(
+    phones: list[str],
+    send_one: Callable[[str], SendResult],
+) -> dict[str, Any]:
     settings = get_settings()
     unique = list(dict.fromkeys(phones))
     batches = split_batches(unique, settings.whatsapp_batch_size)
     results: list[SendResult] = []
     for idx, batch in enumerate(batches):
         for phone in batch:
-            results.append(send_whatsapp_text(phone, message))
+            results.append(send_one(phone))
             if settings.whatsapp_send_delay_ms > 0:
                 time.sleep(settings.whatsapp_send_delay_ms / 1000.0)
         if idx < len(batches) - 1 and settings.whatsapp_send_delay_ms > 0:
@@ -146,3 +195,19 @@ def send_bulk_text(phones: list[str], message: str) -> dict[str, Any]:
             for r in results
         ],
     }
+
+
+def send_bulk_text(phones: list[str], message: str) -> dict[str, Any]:
+    return _send_bulk(phones, lambda phone: send_whatsapp_text(phone, message))
+
+
+def send_bulk_template(
+    phones: list[str],
+    template_name: str,
+    language_code: str,
+    body_params: list[str] | None = None,
+) -> dict[str, Any]:
+    return _send_bulk(
+        phones,
+        lambda phone: send_whatsapp_template(phone, template_name, language_code, body_params),
+    )

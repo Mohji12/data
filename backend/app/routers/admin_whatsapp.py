@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,7 +10,9 @@ from app.admin_security import get_current_admin, require_admin_type
 from app.core.config import get_settings
 from app.db import get_db
 from app.models import Admin, Audit, Option
-from app.services.whatsapp import normalize_phone, send_bulk_text
+from typing import Literal
+
+from app.services.whatsapp import normalize_phone, send_bulk_template, send_bulk_text
 
 router = APIRouter(prefix="/admin/whatsapp", tags=["admin-whatsapp"], dependencies=[Depends(get_current_admin)])
 
@@ -46,8 +49,13 @@ class WhatsAppTemplatePayload(BaseModel):
 @router.get("/template")
 def get_whatsapp_template(db: Session = Depends(get_db)):
     """Fetches the global WhatsApp message template from options."""
+    settings = get_settings()
     opt = db.query(Option).filter(Option.option_name == "whatsapp_default_template").first()
-    return {"template": opt.option_value if opt else "Hello! This is from Harish Critical Care Classes."}
+    return {
+        "template": opt.option_value if opt else "Hello! This is from Harish Critical Care Classes.",
+        "default_template_name": settings.whatsapp_default_template_name,
+        "default_template_language": settings.whatsapp_default_template_language,
+    }
 
 
 @router.post("/template")
@@ -75,27 +83,55 @@ class BulkRecipient(BaseModel):
 
 
 class WhatsAppBulkSendPayload(BaseModel):
-    message: str
+    send_mode: Literal["text", "template"] = "template"
+    message: str | None = None
+    template_name: str | None = None
+    template_language: str = "en"
+    template_body_params: list[str] = []
     recipients: list[BulkRecipient]
     dedupe: bool = True
     max_recipients: int = 300
 
     @field_validator("message")
     @classmethod
-    def validate_message(cls, v: str) -> str:
-        val = (v or "").strip()
-        if not val:
-            raise ValueError("message is required")
+    def validate_message(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        val = v.strip()
         if len(val) > 4096:
             raise ValueError("message is too long")
+        return val or None
+
+    @field_validator("template_name")
+    @classmethod
+    def validate_template_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        val = v.strip()
+        if val and not re.match(r"^[a-z0-9_]+$", val):
+            raise ValueError("template_name must use lowercase letters, numbers, and underscores")
+        return val or None
+
+    @field_validator("template_language")
+    @classmethod
+    def validate_template_language(cls, v: str) -> str:
+        val = (v or "en").strip()
+        if not val:
+            raise ValueError("template_language is required")
         return val
 
     @model_validator(mode="after")
-    def validate_recipients(self) -> "WhatsAppBulkSendPayload":
+    def validate_payload(self) -> "WhatsAppBulkSendPayload":
         if not self.recipients:
             raise ValueError("At least one recipient is required")
         if len(self.recipients) > self.max_recipients:
             raise ValueError(f"Recipient limit exceeded (max {self.max_recipients})")
+        if self.send_mode == "text":
+            if not (self.message or "").strip():
+                raise ValueError("message is required for text mode")
+        else:
+            if not (self.template_name or "").strip():
+                raise ValueError("template_name is required for template mode")
         return self
 
 
@@ -113,7 +149,17 @@ def bulk_send_whatsapp(
     if payload.dedupe:
         recipient_phones = list(dict.fromkeys(recipient_phones))
 
-    summary = send_bulk_text(recipient_phones, payload.message)
+    if payload.send_mode == "template":
+        summary = send_bulk_template(
+            recipient_phones,
+            (payload.template_name or "").strip(),
+            payload.template_language,
+            payload.template_body_params or None,
+        )
+        dispatch_label = f"template={payload.template_name}"
+    else:
+        summary = send_bulk_text(recipient_phones, (payload.message or "").strip())
+        dispatch_label = "text"
     audit_time = datetime.utcnow()
     result_map = {r["phone"]: r for r in summary.get("results", [])}
 
@@ -123,7 +169,7 @@ def bulk_send_whatsapp(
         err = (res.get("error") or "")[:250]
         msg_id = (res.get("provider_message_id") or "")[:120]
         details = (
-            f"WhatsApp bulk {status_label}; phone={rec.phone}; "
+            f"WhatsApp bulk {status_label}; mode={dispatch_label}; phone={rec.phone}; "
             f"provider_message_id={msg_id or 'na'}; error={err or 'na'}"
         )
         db.add(

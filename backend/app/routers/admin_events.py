@@ -5,17 +5,24 @@ import io
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File
 from openpyxl import Workbook
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from app.admin_security import get_current_admin
+from app.admin_security import get_current_admin, require_admin_type
 from app.db import get_db
-from app.models import EventPaymentTxn, EventRegistration
+from app.models import EventPaymentTxn, EventRegistration, Option
 from app.services.event_payments import admin_approve_event_registration
-from app.services.event_registration import event_registration_slugs, icu_d_conclave_slug
+from app.services.event_registration import (
+    event_brochure_option_key,
+    event_brochure_public_url,
+    event_registration_slugs,
+    icu_d_conclave_slug,
+    resolve_event_brochure_filename,
+)
+from app.services.uploads import save_batch_brochure
 
 router = APIRouter(
     prefix="/admin/events",
@@ -266,3 +273,48 @@ def approve_event_registration(
         payment_id=body.payment_id,
         admin_note=body.admin_note,
     )
+
+
+def _upsert_option(db: Session, option_name: str, option_value: str) -> None:
+    row = db.query(Option).filter(Option.option_name == option_name).first()
+    if not row:
+        row = Option(option_name=option_name, option_value=option_value)
+    else:
+        row.option_value = option_value
+    db.add(row)
+
+
+@router.get(f"/{_EVENT_SLUG}/brochure")
+def get_event_brochure(db: Session = Depends(get_db)) -> dict[str, str | None]:
+    filename = resolve_event_brochure_filename(db)
+    return {
+        "brochure_file": filename,
+        "brochure_url": event_brochure_public_url(filename),
+    }
+
+
+@router.post(
+    f"/{_EVENT_SLUG}/upload-brochure",
+    dependencies=[Depends(require_admin_type("techadmin"))],
+)
+def upload_event_brochure(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    filename = save_batch_brochure(file)
+    _upsert_option(db, event_brochure_option_key(), filename)
+    db.commit()
+    return {
+        "file_name": filename,
+        "brochure_url": event_brochure_public_url(filename) or "",
+    }
+
+
+@router.delete(
+    f"/{_EVENT_SLUG}/brochure",
+    dependencies=[Depends(require_admin_type("techadmin"))],
+)
+def remove_event_brochure(db: Session = Depends(get_db)) -> dict[str, str]:
+    _upsert_option(db, event_brochure_option_key(), "")
+    db.commit()
+    return {"status": "ok"}

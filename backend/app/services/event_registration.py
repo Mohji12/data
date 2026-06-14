@@ -95,13 +95,40 @@ def get_event_payable_amount(
     return fees
 
 
-def get_event_public_config() -> dict[str, Any]:
+def event_brochure_option_key(event_slug: str | None = None) -> str:
+    slug = (event_slug or icu_d_conclave_slug()).strip().casefold()
+    return f"event_brochure::{slug}"
+
+
+def event_brochure_public_url(filename: str | None) -> str | None:
+    value = (filename or "").strip()
+    if not value:
+        return None
+    return f"/upload/brochures/{value}"
+
+
+def resolve_event_brochure_filename(db: Session | None = None) -> str | None:
+    settings = get_settings()
+    if db is not None:
+        opt = (
+            db.query(Option)
+            .filter(Option.option_name == event_brochure_option_key())
+            .first()
+        )
+        if opt and (opt.option_value or "").strip():
+            return str(opt.option_value).strip()
+    env_file = (settings.event_icu_d_conclave_brochure_file or "").strip()
+    return env_file or None
+
+
+def get_event_public_config(db: Session | None = None) -> dict[str, Any]:
     settings = get_settings()
     slug = icu_d_conclave_slug()
     tier = resolve_event_fee_tier()
     reg_open = registration_open_for_date() and bool(settings.event_icu_d_conclave_active)
     amounts = amounts_for_current_tier() if tier else {}
     preview = amounts.get("clinician") or {}
+    brochure_file = resolve_event_brochure_filename(db)
     return {
         "event_slug": slug,
         "title": EVENT_TITLE,
@@ -121,6 +148,8 @@ def get_event_public_config() -> dict[str, Any]:
         "contact_name": "Dr. Harish Mallapura Maheshwarappa",
         "register_path": f"/events/{slug}/register",
         "promo_enabled": bool(_event_promo_codes()),
+        "brochure_file": brochure_file,
+        "brochure_url": event_brochure_public_url(brochure_file),
     }
 
 

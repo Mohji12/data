@@ -48,6 +48,9 @@ class Settings:
         self.event_icu_d_conclave_promo_codes: list[str] = [
             c.strip().upper() for c in _promo.split(",") if c.strip()
         ]
+        self.event_icu_d_conclave_brochure_file: str = os.getenv(
+            "EVENT_ICU_D_CONCLAVE_BROCHURE_FILE", ""
+        ).strip()
         self.auto_create_event_tables: bool = os.getenv(
             "AUTO_CREATE_EVENT_TABLES", "true"
         ).lower() in ("1", "true", "yes")
@@ -127,6 +130,10 @@ class Settings:
         self.whatsapp_send_delay_ms: int = max(0, int(os.getenv("WHATSAPP_SEND_DELAY_MS", "100")))
         self.whatsapp_send_max_retries: int = max(0, int(os.getenv("WHATSAPP_SEND_MAX_RETRIES", "1")))
         self.whatsapp_send_timeout_sec: int = max(1, int(os.getenv("WHATSAPP_SEND_TIMEOUT_SEC", "15")))
+        self.whatsapp_default_template_name: str = os.getenv("WHATSAPP_DEFAULT_TEMPLATE_NAME", "").strip()
+        self.whatsapp_default_template_language: str = os.getenv(
+            "WHATSAPP_DEFAULT_TEMPLATE_LANGUAGE", "en"
+        ).strip() or "en"
         # Meta webhook (GET verify + POST inbound). Never commit real values.
         self.whatsapp_verify_token: str = os.getenv("WHATSAPP_VERIFY_TOKEN", "").strip()
         self.whatsapp_app_secret: str = os.getenv("WHATSAPP_APP_SECRET", "").strip()

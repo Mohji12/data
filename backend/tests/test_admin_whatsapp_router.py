@@ -26,6 +26,7 @@ def test_bulk_send_requires_configuration(monkeypatch):
     db.refresh(admin)
 
     payload = admin_whatsapp_router.WhatsAppBulkSendPayload(
+        send_mode="text",
         message="hello",
         recipients=[admin_whatsapp_router.BulkRecipient(phone="+919876543210", user_id=1)],
     )
@@ -61,6 +62,7 @@ def test_bulk_send_returns_summary_and_audits(monkeypatch):
     monkeypatch.setattr(admin_whatsapp_router, "send_bulk_text", fake_bulk_send)
 
     payload = admin_whatsapp_router.WhatsAppBulkSendPayload(
+        send_mode="text",
         message="hello",
         recipients=[
             admin_whatsapp_router.BulkRecipient(phone="+919876543210", user_id=11),

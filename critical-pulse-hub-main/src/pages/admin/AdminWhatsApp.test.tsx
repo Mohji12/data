@@ -34,7 +34,13 @@ function renderPage() {
 describe('AdminWhatsApp', () => {
   it('submits API bulk send and shows summary', async () => {
     apiClientMock.mockImplementation((endpoint: string) => {
-      if (endpoint === '/admin/whatsapp/template') return Promise.resolve({ template: 'Hello users' });
+      if (endpoint === '/admin/whatsapp/template') {
+        return Promise.resolve({
+          template: 'Hello users',
+          default_template_name: 'hello_world',
+          default_template_language: 'en',
+        });
+      }
       if (endpoint.startsWith('/admin/users?')) {
         return Promise.resolve({
           items: [{ id: 1, name: 'A', contact_number: '9876543210', subscription: 'X', approve: '1' }],

@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiClient } from '@/lib/apiClient';
-import { downloadAuthenticatedFile } from '@/lib/apiBase';
-import { EVENT_DISPLAY_NAME } from '@/lib/eventConclave';
+import { downloadAuthenticatedFile, resolvePublicUploadUrl } from '@/lib/apiBase';
+import { EVENT_DISPLAY_NAME, EVENT_SLUG } from '@/lib/eventConclave';
 
 type EventRow = {
   id: number;
@@ -128,6 +128,47 @@ export default function AdminEventRegistrations() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const queryClient = useQueryClient();
 
+  const { data: brochureMeta } = useQuery({
+    queryKey: ['adminEventBrochure', EVENT_SLUG],
+    queryFn: () =>
+      apiClient(`/admin/events/${EVENT_SLUG}/brochure`) as Promise<{
+        brochure_file?: string | null;
+        brochure_url?: string | null;
+      }>,
+  });
+
+  const uploadBrochureMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      return apiClient(`/admin/events/${EVENT_SLUG}/upload-brochure`, {
+        method: 'POST',
+        body: formData,
+      }) as Promise<{ file_name: string; brochure_url: string }>;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['adminEventBrochure', EVENT_SLUG] });
+      toast.success('Conference brochure uploaded');
+    },
+    onError: (err: unknown) => {
+      toast.error(err instanceof Error ? err.message : 'Brochure upload failed');
+    },
+  });
+
+  const removeBrochureMutation = useMutation({
+    mutationFn: () =>
+      apiClient(`/admin/events/${EVENT_SLUG}/brochure`, { method: 'DELETE' }) as Promise<{ status: string }>,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['adminEventBrochure', EVENT_SLUG] });
+      toast.success('Brochure removed');
+    },
+    onError: (err: unknown) => {
+      toast.error(err instanceof Error ? err.message : 'Could not remove brochure');
+    },
+  });
+
+  const brochureHref = resolvePublicUploadUrl(brochureMeta?.brochure_url);
+
   const approveMutation = useMutation({
     mutationFn: (payload: { id: number; force_manual?: boolean; resend_email?: boolean }) =>
       apiClient(`/admin/events/registrations/${payload.id}/approve`, {
@@ -226,6 +267,59 @@ export default function AdminEventRegistrations() {
         >
           Download Excel
         </button>
+      </div>
+
+      <div className="mb-8 bg-chalk border border-border-soft rounded-sm p-5">
+        <h2 className="font-display font-semibold text-slate text-sm mb-2">Conference brochure (PDF)</h2>
+        <p className="font-sans text-xs text-ink-muted mb-4">
+          Shown on the public registration page so attendees can read programme details before registering.
+        </p>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <label className="inline-flex items-center justify-center rounded-sm bg-slate text-chalk px-4 py-2 font-sans text-xs font-semibold hover:bg-slate-light cursor-pointer">
+            {uploadBrochureMutation.isPending ? 'Uploading…' : 'Upload PDF'}
+            <input
+              type="file"
+              accept="application/pdf,.pdf"
+              className="hidden"
+              disabled={uploadBrochureMutation.isPending}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void uploadBrochureMutation.mutateAsync(file);
+                e.target.value = '';
+              }}
+            />
+          </label>
+          {brochureMeta?.brochure_file && (
+            <>
+              <span className="font-mono text-[10px] text-ink-faint truncate">{brochureMeta.brochure_file}</span>
+              {brochureHref && (
+                <a
+                  href={brochureHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-sans text-xs text-mint hover:text-mint-dark"
+                >
+                  Preview PDF
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm('Remove the brochure from the registration page?')) {
+                    void removeBrochureMutation.mutateAsync();
+                  }
+                }}
+                disabled={removeBrochureMutation.isPending}
+                className="font-sans text-xs text-blush hover:underline disabled:opacity-50"
+              >
+                Remove
+              </button>
+            </>
+          )}
+          {!brochureMeta?.brochure_file && (
+            <span className="font-sans text-xs text-ink-faint">No brochure uploaded yet (max 5 MB PDF)</span>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-col sm:flex-row flex-wrap gap-3 mb-6">
