@@ -41,8 +41,8 @@ type PayableResponse = FeeCell & {
 const TIER_ORDER = ['early_bird', 'regular', 'spot'] as const;
 
 const TIER_HEADINGS: Record<(typeof TIER_ORDER)[number], string> = {
-  early_bird: 'Early Bird (up to 15 Jun 2026)',
-  regular: 'Regular (16 Jun – 10 Jul 2026)',
+  early_bird: 'Early Bird (up to 26 Jun 2026)',
+  regular: 'Regular (27 Jun – 10 Jul 2026)',
   spot: 'Spot (11–12 Jul 2026)',
 };
 

@@ -15,8 +15,8 @@ EventCategory = Literal["student", "clinician"]
 
 VALID_CATEGORIES = frozenset({"student", "clinician"})
 
-EARLY_BIRD_END = date(2026, 6, 15)
-REGULAR_START = date(2026, 6, 16)
+EARLY_BIRD_END = date(2026, 6, 26)
+REGULAR_START = date(2026, 6, 27)
 REGULAR_END = date(2026, 7, 10)
 SPOT_START = date(2026, 7, 11)
 SPOT_END = date(2026, 7, 12)
@@ -29,14 +29,14 @@ FEE_BASE_INR: dict[EventFeeTier, dict[EventCategory, float]] = {
 }
 
 TIER_LABELS: dict[EventFeeTier, str] = {
-    "early_bird": "Early Bird (valid up to 15th June 2026)",
-    "regular": "Regular (16th June 2026 to 10th July 2026)",
+    "early_bird": "Early Bird (valid up to 26th June 2026)",
+    "regular": "Regular (27th June 2026 to 10th July 2026)",
     "spot": "Spot registration (11th & 12th July 2026)",
 }
 
 TIER_WINDOWS: dict[EventFeeTier, str] = {
-    "early_bird": "Valid up to 15th June 2026",
-    "regular": "16th June 2026 to 10th July 2026",
+    "early_bird": "Valid up to 26th June 2026",
+    "regular": "27th June 2026 to 10th July 2026",
     "spot": "11th & 12th July 2026",
 }
 
