@@ -37,6 +37,11 @@ def user_subscription_batch_active(db: Session, user: User) -> tuple[bool, str |
         ok, _ = can_access_certificate(db, user)
         if ok:
             return True, None
+    # Paid, approved enrollees keep login when batch is closed to new registration only.
+    payment = str(getattr(user, "payment_status", None) or "").strip().lower()
+    approved = str(getattr(user, "approve", None) or "").strip()
+    if payment == "credit" and approved == "1":
+        return True, None
     return (
         False,
         f"The batch “{sub}” has been deactivated by the administrator. Login and dashboard access are not available.",
