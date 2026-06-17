@@ -13,9 +13,17 @@ export const registrationExcludedSlugs = new Set([
   'ccm-2',
   'ccm-practical',
   'ccm-practical-series',
+  'batch-edic-10',
+  'edic-10',
+  'batch-10-edic-1',
+  'edic-1',
 ]);
 
-const registrationExcludedNames = new Set(['batch 15', 'ccm batch 2']);
+const registrationExcludedNames = new Set([
+  'batch 15',
+  'ccm batch 2',
+  'batch edic 10',
+]);
 
 export function isRegistrationExcludedBatch(row: {
   batch_slug?: string;
@@ -41,7 +49,7 @@ export function filterPublicBatches(rows: RegistrationCatalogRow[]): Registratio
   return (rows || []).filter((b) => String(b.status ?? '0') === '1');
 }
 
-/** Active catalog rows allowed on registration flows (excludes Batch 15, CCM Batch 2). */
+/** Active catalog rows allowed on registration flows (excludes closed batches e.g. Batch 15, CCM Batch 2, Batch EDIC 10). */
 export function filterRegistrationCatalogBatches(
   rows: RegistrationCatalogRow[],
 ): RegistrationCatalogRow[] {

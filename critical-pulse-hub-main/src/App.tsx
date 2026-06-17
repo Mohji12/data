@@ -112,8 +112,9 @@ const App = () => {
           <Route path="/admin/login" element={<AdminLoginPage />} />
           <Route path="/register/batch-15" element={<RegistrationFeePage batchSlug="batch-15" />} />
           <Route path="/register/ccm-practical-series" element={<RegistrationFeePage batchSlug="ccm-2" />} />
-          <Route path="/register/batch-10-edic-1" element={<RegistrationFeePage batchSlug="batch-10-edic-1" />} />
-          <Route path="/register/edic-10" element={<RegistrationFeePage batchSlug="edic-10" />} />
+          <Route path="/register/batch-10-edic-1" element={<Navigate to="/courses" replace />} />
+          <Route path="/register/edic-10" element={<Navigate to="/courses" replace />} />
+          <Route path="/register/batch-edic-10" element={<Navigate to="/courses" replace />} />
           <Route path="/register/comprehensive-course-1" element={<RegistrationFeePage batchSlug="comprehensive-course-1" />} />
           <Route path="/register/comprehensive-1" element={<RegistrationFeePage batchSlug="comprehensive-1" />} />
           <Route path="/register/comprehensive-course-2" element={<RegistrationFeePage batchSlug="comprehensive-course-2" />} />

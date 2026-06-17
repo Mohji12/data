@@ -72,10 +72,10 @@ BATCH_SLUG_TO_PACKAGE_SUBSCRIPTION: dict[str, str] = {
     "comprehensive-1": "CP 7",
     "comprehensive-course-2": "CP 8",
     "comprehensive-2": "CP 8",
-    "practical-series-batch-3": "CCM Batch 3",
-    "ccm-practical-series-batch-3": "CCM Batch 3",
-    "ccm-3": "CCM Batch 3",
-    "ccm-batch-3": "CCM Batch 3",
+    "practical-series-batch-3": "PRACTICAL SERIES BATCH 3",
+    "ccm-practical-series-batch-3": "PRACTICAL SERIES BATCH 3",
+    "ccm-3": "PRACTICAL SERIES BATCH 3",
+    "ccm-batch-3": "PRACTICAL SERIES BATCH 3",
     "batch-16-mccm": "BATCH 16-MCCM",
     "edic-10": "Batch EDIC 10",
     "batch-10-edic-1": "Batch EDIC 10",
@@ -183,6 +183,64 @@ def package_subscription_for_batch(batch: BatchDefinition) -> str:
     if mapped:
         return mapped.strip()
     return (batch.title or "").strip()
+
+
+_CCM_PRACTICAL_BATCH_3_SLUGS = frozenset(
+    {
+        "practical-series-batch-3",
+        "ccm-practical-series-batch-3",
+        "ccm-3",
+        "ccm-batch-3",
+    }
+)
+
+_COMPREHENSIVE_COURSE_SLUGS = frozenset(
+    {
+        "comprehensive-course-1",
+        "comprehensive-1",
+        "cp-7",
+        "comprehensive-course-2",
+        "comprehensive-2",
+        "cp-8",
+    }
+)
+
+_COMPREHENSIVE_COURSE_SUBS = frozenset({"cp 7", "cp 8"})
+
+
+def _is_ccm_practical_batch_3(batch: BatchDefinition) -> bool:
+    """PRACTICAL SERIES BATCH 3 and CCM Batch 3 share two legacy package.subscription names."""
+    slug = (batch.slug or "").strip().lower()
+    if slug in _CCM_PRACTICAL_BATCH_3_SLUGS:
+        return True
+    aliases = {s.casefold() for s in CCM_BATCH_3_USER_SUBSCRIPTIONS}
+    title_cf = (batch.title or "").strip().casefold()
+    if title_cf in aliases:
+        return True
+    return package_subscription_for_batch(batch).casefold() in aliases
+
+
+def package_subscriptions_for_batch(batch: BatchDefinition) -> list[str]:
+    """All package.subscription keys used for fee/registration lookup (usually one; two for CCM Batch 3)."""
+    if _is_ccm_practical_batch_3(batch):
+        return list(CCM_BATCH_3_USER_SUBSCRIPTIONS)
+    primary = package_subscription_for_batch(batch)
+    return [primary] if primary else []
+
+
+def _is_comprehensive_course_batch(batch: BatchDefinition) -> bool:
+    slug = (batch.slug or "").strip().lower()
+    if slug in _COMPREHENSIVE_COURSE_SLUGS:
+        return True
+    title = (batch.title or "").strip().casefold()
+    if "comprehensive course 1" in title or "comprehensive course 2" in title:
+        return True
+    return package_subscription_for_batch(batch).casefold() in _COMPREHENSIVE_COURSE_SUBS
+
+
+def _shows_all_pricing_tiers(batch: BatchDefinition) -> bool:
+    """Fee/register UI lists every active package tier (not only the current sale window)."""
+    return _is_ccm_practical_batch_3(batch) or _is_comprehensive_course_batch(batch)
 
 
 def _row_package_subscription(row: BatchMaster) -> Optional[str]:
@@ -595,6 +653,21 @@ def _has_registerable_package_today(db: Session, subscription_title: str) -> boo
     return any(_package_visible_for_registration(p, today) for p in rows)
 
 
+def _has_registerable_package_for_batch(db: Session, batch: BatchDefinition) -> bool:
+    return any(_has_registerable_package_today(db, sub) for sub in package_subscriptions_for_batch(batch))
+
+
+def _count_current_packages_for_batch_delegate(
+    db: Session,
+    batch: BatchDefinition,
+    delegate: str,
+) -> int:
+    total = 0
+    for sub in package_subscriptions_for_batch(batch):
+        total += _count_current_packages_for_delegate(db, sub, delegate)
+    return total
+
+
 def list_batches(db: Session) -> list[BatchDefinition]:
     """Active rows in batch_master (status=1) with a current package in `package` table — matches admin Batch Master."""
     rows = (
@@ -609,7 +682,7 @@ def list_batches(db: Session) -> list[BatchDefinition]:
         if not title:
             continue
         bd = batch_definition_from_master_row(row)
-        if not _has_registerable_package_today(db, package_subscription_for_batch(bd)):
+        if not _has_registerable_package_for_batch(db, bd):
             continue
         out.append(bd)
     return out
@@ -660,9 +733,8 @@ def build_registration_catalog(
         name = (row.name or "").strip()
         if not name:
             continue
-        pkg_sub = package_subscription_for_batch(bd)
-        indian_count = _count_current_packages_for_delegate(db, pkg_sub, "Indian")
-        foreign_count = _count_current_packages_for_delegate(db, pkg_sub, "Foreign")
+        indian_count = _count_current_packages_for_batch_delegate(db, bd, "Indian")
+        foreign_count = _count_current_packages_for_batch_delegate(db, bd, "Foreign")
         has_indian = indian_count > 0
         has_foreign = foreign_count > 0
         active_flag = (row.status or "0") == "1"
@@ -761,7 +833,7 @@ def _get_batch_or_400(db: Session, batch_slug: str) -> BatchDefinition:
             detail=f"Unknown or inactive batch '{batch_slug}'. Active batch slugs: {slugs}",
         )
     _row, bd = found
-    if not _has_registerable_package_today(db, package_subscription_for_batch(bd)):
+    if not _has_registerable_package_for_batch(db, bd):
         raise HTTPException(
             status_code=400,
             detail="No active registration package for this batch at this time.",
@@ -859,10 +931,8 @@ def _assert_package_eligible_for_batch(
     """Match Register.php save(): subscription, category_name, date window, status."""
     today = date.today()
     expected_cat = _registration_category_name(db, country_id)
-    pkg_sub = package_subscription_for_batch(batch)
-    pkg_sub_cf = pkg_sub.casefold()
-    batch_title = (batch.title or "").strip().casefold()
-    if (pkg.subscription or "").strip().casefold() != pkg_sub_cf:
+    allowed_subs = {s.casefold() for s in package_subscriptions_for_batch(batch)}
+    if (pkg.subscription or "").strip().casefold() not in allowed_subs:
         raise HTTPException(
             status_code=400,
             detail="Selected package does not match this batch.",
@@ -882,7 +952,7 @@ def _assert_package_eligible_for_batch(
         raise HTTPException(status_code=400, detail="Invalid package date in database.")
     if pkg.start_date is not None:
         start_d = _as_date(pkg.start_date)
-        if start_d > today:
+        if start_d is not None and start_d > today and not _shows_all_pricing_tiers(batch):
             raise HTTPException(
                 status_code=400,
                 detail="This package is not yet active.",
@@ -1054,18 +1124,26 @@ def query_active_packages_for_registration(
     """Packages in active (or soon-starting) pricing windows — all tiers, not only 6/9/12 subscription rows."""
     today = date.today()
     category = _registration_category_for_packages(db, country_id, registration_type)
-    pkg_sub = package_subscription_for_batch(batch)
-    q = (
-        db.query(Package)
-        .filter(
-            _subscription_name_eq(Package.subscription, pkg_sub),
-            Package.status == "1",
-            Package.category_name == category,
+    by_id: dict[int, Package] = {}
+    for pkg_sub in package_subscriptions_for_batch(batch):
+        q = (
+            db.query(Package)
+            .filter(
+                _subscription_name_eq(Package.subscription, pkg_sub),
+                Package.status == "1",
+                Package.category_name == category,
+            )
+            .order_by(Package.start_date.asc(), Package.id.asc())
         )
-        .order_by(Package.start_date.asc(), Package.id.asc())
-    )
-    pkgs = [p for p in q.all() if _package_visible_for_registration(p, today)]
-    pkgs = _attach_subscription_duration_siblings(db, pkgs, pkg_sub, category)
+        pkgs_raw = q.all()
+        if _shows_all_pricing_tiers(batch):
+            visible = list(pkgs_raw)
+        else:
+            visible = [p for p in pkgs_raw if _package_visible_for_registration(p, today)]
+        visible = _attach_subscription_duration_siblings(db, visible, pkg_sub, category)
+        for p in visible:
+            by_id[p.id] = p
+    pkgs = sorted(by_id.values(), key=lambda p: (_as_date(p.start_date) or date.min, p.id))
     if not pkgs:
         return []
 
@@ -1076,9 +1154,11 @@ def query_active_packages_for_registration(
     for group in windows:
         out.extend(group["packages"])  # type: ignore[arg-type]
     if out:
-        return out
+        return sorted(out, key=lambda p: (_as_date(p.start_date) or date.min, p.id))
     if sub_rows:
         return sorted(sub_rows, key=lambda x: (int(x.duration_months or 0), x.id))
+    if _shows_all_pricing_tiers(batch) and len(pkgs) > 1:
+        return _sort_fee_table_columns(pkgs)
     return _narrow_packages_to_single_pricing_tier(pkgs)
 
 
@@ -1597,34 +1677,69 @@ def sync_package_tiers_from_reference(
     return updated
 
 
-def _query_packages_for_fee_table(db: Session, subscription: str, *, indian: bool) -> List[Package]:
+def _package_for_fee_table_column(p: Package, today: date) -> bool:
+    """Include active tiers on the public fee page (current, upcoming, not expired)."""
+    end = _as_date(p.end_date)
+    if end is not None and end < today:
+        return False
+    return True
+
+
+def _query_packages_for_fee_table(
+    db: Session,
+    subscription: str,
+    *,
+    indian: bool,
+    subscriptions: Optional[list[str]] = None,
+    batch: Optional[BatchDefinition] = None,
+) -> List[Package]:
     """
     Fee table columns: one_time → one column per pricing tier (Early Bird, Regular, …).
     subscription → one column per duration (6 / 9 / 12 months) so Batch 16 shows all plans.
     """
     needle = "Indian" if indian else "Foreign"
     today = date.today()
-    rows = (
-        db.query(Package)
-        .filter(
-            _subscription_name_eq(Package.subscription, subscription.strip()),
-            Package.status == "1",
-            Package.category_name.ilike(f"%{needle}%"),
-        )
-        .order_by(Package.start_date.asc(), Package.id.asc())
-        .all()
-    )
-    visible = [p for p in rows if _package_visible_for_registration(p, today)]
+    subs = subscriptions if subscriptions else [subscription.strip()]
+    by_id: dict[int, Package] = {}
+    for sub in subs:
+        sub = (sub or "").strip()
+        if not sub:
+            continue
+        for p in (
+            db.query(Package)
+            .filter(
+                _subscription_name_eq(Package.subscription, sub),
+                Package.status == "1",
+                Package.category_name.ilike(f"%{needle}%"),
+            )
+            .order_by(Package.start_date.asc(), Package.id.asc())
+            .all()
+        ):
+            by_id[p.id] = p
+    rows = sorted(by_id.values(), key=lambda p: (_as_date(p.start_date) or date.min, p.id))
     category = "Indian Delegates" if indian else "Foreign Delegates"
-    visible = _attach_subscription_duration_siblings(db, visible, subscription.strip(), category)
-    if not visible:
+    columns: list[Package] = []
+    seen: set[int] = set()
+    for sub in subs:
+        sub = (sub or "").strip()
+        if not sub:
+            continue
+        tier_rows = [p for p in rows if (p.subscription or "").strip().casefold() == sub.casefold()]
+        if not (batch and _shows_all_pricing_tiers(batch)):
+            tier_rows = [p for p in tier_rows if _package_for_fee_table_column(p, today)]
+        tier_rows = _attach_subscription_duration_siblings(db, tier_rows, sub, category)
+        for p in tier_rows:
+            if p.id not in seen:
+                seen.add(p.id)
+                columns.append(p)
+    columns = sorted(columns, key=lambda p: (_as_date(p.start_date) or date.min, p.id))
+    if not columns:
         return []
 
-    sub_rows = [p for p in visible if (p.plan_type or "").strip().lower() == "subscription"]
+    sub_rows = [p for p in columns if (p.plan_type or "").strip().lower() == "subscription"]
     if sub_rows:
         return sorted(sub_rows, key=lambda p: (int(p.duration_months or 0), p.id))
 
-    columns = _narrow_packages_to_single_pricing_tier(visible)
     if len(columns) > 1:
         return _sort_fee_table_columns(columns)
     return columns
@@ -1712,10 +1827,11 @@ def get_batch_master_row_by_slug(db: Session, batch_slug: str) -> Tuple[BatchMas
 def build_fee_structure_response(db: Session, batch_slug: str) -> FeeStructureResponse:
     """Build fee table from all active `package` rows (any date window)."""
     row, bd = get_batch_master_row_by_slug(db, batch_slug)
-    sub = package_subscription_for_batch(bd)
+    subs = package_subscriptions_for_batch(bd)
+    primary_sub = package_subscription_for_batch(bd)
     usd_rate = _get_usd_rate(db)
-    ind_pkgs = _query_packages_for_fee_table(db, sub, indian=True)
-    for_pkgs = _query_packages_for_fee_table(db, sub, indian=False)
+    ind_pkgs = _query_packages_for_fee_table(db, primary_sub, indian=True, subscriptions=subs, batch=bd)
+    for_pkgs = _query_packages_for_fee_table(db, primary_sub, indian=False, subscriptions=subs, batch=bd)
     if not ind_pkgs and not for_pkgs:
         raise HTTPException(
             status_code=404,

@@ -46,11 +46,6 @@ export const marketingBatches = [
     slugCandidates: ['batch-9-cc-2', 'comprehensive-course-2', 'comprehensive-2', 'cp-8'],
   },
   {
-    label: 'Batch 10 EDIC 1',
-    pillTo: '/register/batch-10-edic-1',
-    slugCandidates: ['batch-edic-10', 'edic-10', 'batch-10-edic-1', 'edic-1', 'batch-edic-10'],
-  },
-  {
     label: 'BATCH 16-MCCM',
     pillTo: '/register/batch-16-mccm',
     slugCandidates: ['batch-16-mccm', 'batch-16', 'batch-16-mccm'],
