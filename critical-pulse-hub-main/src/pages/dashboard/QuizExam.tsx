@@ -15,24 +15,21 @@ export default function QuizExam() {
   
   const [currentIdx, setCurrentIdx] = useState(1);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
+  const [examReady, setExamReady] = useState(false);
   const examStartedRef = useRef(false);
 
-  // 1. Initial Start Exam or Resume
-  const { data: currentData, isLoading: examLoading, isPlaceholderData, refetch: refreshQuestion } = useQuery({
-    queryKey: ['examQuestion', id, currentIdx],
-    queryFn: () => apiClient(`/exams/${id}/question?user_id=${user?.id}&display_question_id=${currentIdx}`),
-    enabled: !!user?.id && !!id,
-    retry: false,
-    placeholderData: keepPreviousData,
-  });
-
-  // Handle Initial Start - If the above fails or on first mount, we might need to call /start
   const startExamMutation = useMutation({
     mutationFn: () => apiClient(`/exams/${id}/start?user_id=${user?.id}`, { method: 'POST' }),
     onSuccess: (data) => {
-        setCurrentIdx(data.attempt.current_question_no);
-        setTimeRemaining(data.attempt.remaining_seconds);
-    }
+      const qNo = data.attempt.current_question_no;
+      setCurrentIdx(qNo);
+      setTimeRemaining(data.attempt.remaining_seconds);
+      queryClient.setQueryData(['examQuestion', id, qNo], data);
+      setExamReady(true);
+    },
+    onError: () => {
+      examStartedRef.current = false;
+    },
   });
 
   useEffect(() => {
@@ -40,6 +37,15 @@ export default function QuizExam() {
     examStartedRef.current = true;
     startExamMutation.mutate();
   }, [id, user?.id]);
+
+  const { data: currentData, isLoading: examLoading, isPlaceholderData } = useQuery({
+    queryKey: ['examQuestion', id, currentIdx],
+    queryFn: () => apiClient(`/exams/${id}/question?user_id=${user?.id}&display_question_id=${currentIdx}`),
+    enabled: !!user?.id && !!id && examReady,
+    retry: false,
+    placeholderData: keepPreviousData,
+    staleTime: Infinity,
+  });
 
   // Sync timer from API response
   useEffect(() => {
@@ -92,6 +98,22 @@ export default function QuizExam() {
   const attempt = currentData?.attempt;
   const total = attempt?.total_questions || 0;
   const currentQ = question;
+  const startError = startExamMutation.error instanceof Error ? startExamMutation.error.message : null;
+
+  if (startError) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-chalk-warm px-6 text-center">
+        <p className="font-sans text-slate font-semibold mb-2">Could not start the exam</p>
+        <p className="font-sans text-ink-secondary text-sm mb-6">{startError}</p>
+        <button
+          onClick={() => navigate('/dashboard/quiz')}
+          className="bg-slate text-chalk rounded-sm px-6 py-3 font-sans text-sm font-bold"
+        >
+          Back to Quiz
+        </button>
+      </div>
+    );
+  }
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
