@@ -36,6 +36,7 @@ export default function QuizExam() {
   const examStartedRef = useRef(false);
   const deadlineRef = useRef<number | null>(null);
   const timedOutRef = useRef(false);
+  const saveChainsRef = useRef<Map<number, Promise<void>>>(new Map());
 
   const bundleKey = ['examAllQuestions', id, user?.id] as const;
 
@@ -78,16 +79,23 @@ export default function QuizExam() {
   const saveAnswer = useCallback(
     (questionId: number, displayId: number, answers: string[], options?: { await?: boolean }) => {
       updateLocalAnswer(questionId, answers);
-      const request = apiClient(`/exams/${id}/answer`, {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: user?.id,
-          question_id: questionId,
-          display_question_id: displayId,
-          answers,
-          is_last_question: false,
-        }),
-      });
+      const prev = saveChainsRef.current.get(questionId) ?? Promise.resolve();
+      const request = prev
+        .catch(() => {})
+        .then(() =>
+          apiClient(`/exams/${id}/answer`, {
+            method: 'POST',
+            body: JSON.stringify({
+              user_id: user?.id,
+              question_id: questionId,
+              display_question_id: displayId,
+              answers,
+              is_last_question: false,
+            }),
+          }),
+        )
+        .then(() => undefined);
+      saveChainsRef.current.set(questionId, request);
       if (options?.await) return request;
       void request.catch(() => {});
       return Promise.resolve();

@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -117,26 +117,92 @@ def _answer_filter_for_attempt(user_id: int, exam_id: int, user_exam_id: int):
     )
 
 
+def _latest_answer_ids_subquery(
+    db: Session,
+    user_id: int,
+    exam_id: int,
+    user_exam_id: int,
+    *,
+    attempted_only: bool = False,
+):
+    """One row per question — latest answer id wins when duplicates exist."""
+    filters = list(_answer_filter_for_attempt(user_id, exam_id, user_exam_id))
+    if attempted_only:
+        filters.append(UserAnswer.is_attempt_question == "1")
+    return (
+        db.query(func.max(UserAnswer.id).label("answer_id"))
+        .filter(*filters)
+        .group_by(UserAnswer.question_id)
+        .subquery()
+    )
+
+
+def _sum_marks_for_attempt(
+    db: Session, user_id: int, exam_id: int, user_exam_id: int
+) -> float:
+    latest = _latest_answer_ids_subquery(
+        db, user_id, exam_id, user_exam_id, attempted_only=True
+    )
+    total = (
+        db.query(func.coalesce(func.sum(UserAnswer.marks - UserAnswer.negative_mark), 0.0))
+        .join(latest, UserAnswer.id == latest.c.answer_id)
+        .scalar()
+    )
+    return float(total or 0.0)
+
+
+def _latest_answers_for_attempt(
+    db: Session, user_id: int, exam_id: int, user_exam_id: int
+) -> list[UserAnswer]:
+    latest = _latest_answer_ids_subquery(
+        db, user_id, exam_id, user_exam_id, attempted_only=False
+    )
+    return (
+        db.query(UserAnswer)
+        .join(latest, UserAnswer.id == latest.c.answer_id)
+        .all()
+    )
+
+
+def _delete_answers_for_question(
+    db: Session,
+    user_id: int,
+    exam_id: int,
+    user_exam_id: int,
+    question_id: int,
+) -> None:
+    """Remove all answer rows for a question, including legacy rows without user_exam_id."""
+    db.query(UserAnswer).filter(
+        UserAnswer.user_id == user_id,
+        UserAnswer.exam_id == exam_id,
+        UserAnswer.question_id == question_id,
+        or_(UserAnswer.user_exam_id == user_exam_id, UserAnswer.user_exam_id.is_(None)),
+    ).delete(synchronize_session=False)
+
+
 def _answer_stats_for_attempt(
     db: Session, user_id: int, exam_id: int, user_exam_id: int
 ) -> tuple[int, int, int]:
-    """Return (answered, correct, wrong) counting only attempted questions."""
-    base = _answer_filter_for_attempt(user_id, exam_id, user_exam_id)
-    attempted = UserAnswer.is_attempt_question == "1"
-    total_answered = (
-        db.query(func.count(UserAnswer.id)).filter(*base, attempted).scalar()
+    """Return (answered, correct, wrong) — one count per question, not per DB row."""
+    latest = _latest_answer_ids_subquery(
+        db, user_id, exam_id, user_exam_id, attempted_only=True
     )
+    total_answered = db.query(func.count()).select_from(latest).scalar() or 0
     total_correct = (
         db.query(func.count(UserAnswer.id))
-        .filter(*base, attempted, UserAnswer.is_correct_answer == "1")
+        .join(latest, UserAnswer.id == latest.c.answer_id)
+        .filter(UserAnswer.is_correct_answer == "1")
         .scalar()
+        or 0
     )
     total_wrong = (
         db.query(func.count(UserAnswer.id))
-        .filter(*base, attempted, UserAnswer.is_correct_answer == "0")
+        .join(latest, UserAnswer.id == latest.c.answer_id)
+        .filter(UserAnswer.is_correct_answer == "0")
         .scalar()
+        or 0
     )
-    return int(total_answered or 0), int(total_correct or 0), int(total_wrong or 0)
+    return int(total_answered), int(total_correct), int(total_wrong)
 
 
 def _build_attempt_state(
@@ -339,11 +405,7 @@ def start_exam(
         attempts_used=len(attempts),
     )
 
-    total_marks = (
-        db.query(func.coalesce(func.sum(UserAnswer.marks - UserAnswer.negative_mark), 0.0))
-        .filter(*_answer_filter_for_attempt(user_id, exam.id, ue.id))
-        .scalar()
-    )
+    total_marks = _sum_marks_for_attempt(db, user_id, exam.id, ue.id)
 
     return AnswerSubmitResponse(
         finish_exam=False,
@@ -404,11 +466,7 @@ def get_question(
         attempts_used=len(attempts),
     )
 
-    total_marks = (
-        db.query(func.coalesce(func.sum(UserAnswer.marks - UserAnswer.negative_mark), 0.0))
-        .filter(*_answer_filter_for_attempt(user_id, exam.id, ue.id))
-        .scalar()
-    )
+    total_marks = _sum_marks_for_attempt(db, user_id, exam.id, ue.id)
 
     return AnswerSubmitResponse(
         finish_exam=False,
@@ -497,12 +555,8 @@ def get_all_questions(
     questions_map = {q.id: q for q in questions}
     sorted_questions = [questions_map[qid] for qid in question_ids if qid in questions_map]
 
-    # Fetch user answers
-    user_answers = (
-        db.query(UserAnswer)
-        .filter(*_answer_filter_for_attempt(user_id, exam.id, ue.id))
-        .all()
-    )
+    # Fetch user answers (latest row per question when duplicates exist)
+    user_answers = _latest_answers_for_attempt(db, user_id, exam.id, ue.id)
     ua_map = {ua.question_id: ua for ua in user_answers}
 
     question_payloads = []
@@ -567,17 +621,10 @@ def submit_answer(
         submitted_answer=submitted_answer,
     )
 
-    ua = (
-        db.query(UserAnswer)
-        .filter(
-            *_answer_filter_for_attempt(payload.user_id, exam.id, ue.id),
-            UserAnswer.question_id == question.id,
-        )
-        .first()
+    _delete_answers_for_question(
+        db, payload.user_id, exam.id, ue.id, question.id
     )
-    if ua:
-        db.delete(ua)
-        db.flush()
+    db.flush()
 
     if submitted_answer:
         ua = UserAnswer(
@@ -595,11 +642,7 @@ def submit_answer(
     db.commit()
 
     # Recalculate total marks
-    total_marks = (
-        db.query(func.coalesce(func.sum(UserAnswer.marks - UserAnswer.negative_mark), 0.0))
-        .filter(*_answer_filter_for_attempt(payload.user_id, exam.id, ue.id))
-        .scalar()
-    )
+    total_marks = _sum_marks_for_attempt(db, payload.user_id, exam.id, ue.id)
 
     finish_exam = False
     current_display_no = (
@@ -662,11 +705,7 @@ def _build_result_summary_for_attempt(
     attempt_no: int,
     user_id: int,
 ) -> ResultSummary:
-    total_marks = (
-        db.query(func.coalesce(func.sum(UserAnswer.marks - UserAnswer.negative_mark), 0.0))
-        .filter(*_answer_filter_for_attempt(user_id, exam.id, ue.id))
-        .scalar()
-    )
+    total_marks = _sum_marks_for_attempt(db, user_id, exam.id, ue.id)
     total_answered, total_correct, total_wrong = _answer_stats_for_attempt(
         db, user_id, exam.id, ue.id
     )
@@ -678,7 +717,7 @@ def _build_result_summary_for_attempt(
     questions = db.query(Question).filter(Question.id.in_(question_ids)).all()
     questions_map = {q.id: q for q in questions}
     sorted_questions = [questions_map[qid] for qid in question_ids if qid in questions_map]
-    user_answers = db.query(UserAnswer).filter(*_answer_filter_for_attempt(user_id, exam.id, ue.id)).all()
+    user_answers = _latest_answers_for_attempt(db, user_id, exam.id, ue.id)
     ua_map = {ua.question_id: ua for ua in user_answers}
 
     reviews: List[QuestionReview] = []
@@ -840,11 +879,7 @@ def finish_exam(
     ue.is_finish_exam = "1"
     ue.end_date = datetime.utcnow()
 
-    total_marks = (
-        db.query(func.coalesce(func.sum(UserAnswer.marks - UserAnswer.negative_mark), 0.0))
-        .filter(*_answer_filter_for_attempt(user_id, exam.id, ue.id))
-        .scalar()
-    )
+    total_marks = _sum_marks_for_attempt(db, user_id, exam.id, ue.id)
     ue.marks = float(total_marks or 0.0)
     db.commit()
 
@@ -862,12 +897,7 @@ def finish_exam(
     questions_map = {q.id: q for q in questions}
     sorted_questions = [questions_map[qid] for qid in question_ids if qid in questions_map]
 
-    # Fetch all user answers for this exam
-    user_answers = db.query(UserAnswer).filter(
-        UserAnswer.user_id == user_id,
-        UserAnswer.exam_id == exam.id,
-        UserAnswer.user_exam_id == ue.id,
-    ).all()
+    user_answers = _latest_answers_for_attempt(db, user_id, exam.id, ue.id)
     ua_map = {ua.question_id: ua for ua in user_answers}
 
     reviews: List[QuestionReview] = []
