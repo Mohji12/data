@@ -573,12 +573,14 @@ def submit_answer(
 
     next_question_payload: Optional[QuestionPayload] = None
 
-    if payload.is_last_question or current_display_no >= len(question_ids):
+    # Only end the attempt when the client explicitly submits the last question.
+    # Saving an answer while viewing the final question must not auto-finish.
+    if payload.is_last_question:
         ue.is_finish_exam = "1"
         ue.marks = float(total_marks or 0.0)
         finish_exam = True
         db.commit()
-    else:
+    elif current_display_no < len(question_ids):
         # Move to the next question
         current_display_no += 1
         next_question_id = get_question_id_by_display(question_ids, current_display_no)

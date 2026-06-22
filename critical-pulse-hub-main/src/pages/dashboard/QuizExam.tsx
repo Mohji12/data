@@ -52,17 +52,21 @@ export default function QuizExam() {
   );
 
   const saveAnswer = useCallback(
-    (questionId: number, displayId: number, answers: string[]) => {
+    (questionId: number, displayId: number, answers: string[], options?: { await?: boolean }) => {
       updateLocalAnswer(questionId, answers);
-      void apiClient(`/exams/${id}/answer`, {
+      const request = apiClient(`/exams/${id}/answer`, {
         method: 'POST',
         body: JSON.stringify({
           user_id: user?.id,
           question_id: questionId,
           display_question_id: displayId,
           answers,
+          is_last_question: false,
         }),
-      }).catch(() => {});
+      });
+      if (options?.await) return request;
+      void request.catch(() => {});
+      return Promise.resolve();
     },
     [id, user?.id, updateLocalAnswer],
   );
@@ -142,11 +146,21 @@ export default function QuizExam() {
 
   const handleFinish = async () => {
     if (!confirm('Are you sure you want to finish the exam?')) return;
-    if (currentQ) {
-      saveAnswer(currentQ.id, currentIdx, selectedAnswers);
+    try {
+      if (currentQ) {
+        await saveAnswer(currentQ.id, currentIdx, selectedAnswers, { await: true });
+      }
+      await apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' });
+      navigate(`/dashboard/quiz/${id}/result`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Could not finish exam';
+      // Attempt may already be closed (e.g. timer expired) — still show results.
+      if (msg.includes('No active exam attempt') || msg.includes('Exam time is over')) {
+        navigate(`/dashboard/quiz/${id}/result`);
+        return;
+      }
+      alert(msg);
     }
-    await apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' });
-    navigate(`/dashboard/quiz/${id}/result`);
   };
 
   const startError = startExamMutation.error instanceof Error ? startExamMutation.error.message : null;
