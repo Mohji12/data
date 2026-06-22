@@ -269,6 +269,20 @@ def start_exam(
             raise HTTPException(status_code=400, detail="Maximum attempts reached for this exam")
         ue = _create_user_exam_attempt(db, exam, user_id)
         attempts = _list_user_exam_attempts(db, exam.id, user_id)
+    else:
+        # Resume a paused attempt or repair legacy rows missing end_date.
+        if ue.is_paused == "1":
+            rem = ue.remaining_seconds or 0
+            if rem > 0:
+                ue.end_date = datetime.utcnow() + timedelta(seconds=rem)
+                ue.is_paused = "0"
+                db.commit()
+                db.refresh(ue)
+        elif not ue.end_date:
+            minutes = exam.timer_time or 180
+            ue.end_date = (ue.start_date or datetime.utcnow()) + timedelta(minutes=minutes)
+            db.commit()
+            db.refresh(ue)
 
     question_ids = parse_id_list(ue.exam_question_id or "")
     if not question_ids:

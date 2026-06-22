@@ -33,8 +33,28 @@ export default function QuizExam() {
   const [examReady, setExamReady] = useState(false);
   const [selectedAnswers, setSelectedAnswers] = useState<string[]>([]);
   const examStartedRef = useRef(false);
+  const deadlineRef = useRef<number | null>(null);
+  const timedOutRef = useRef(false);
 
   const bundleKey = ['examAllQuestions', id, user?.id] as const;
+
+  const syncExamDeadline = useCallback((seconds: number, force = false) => {
+    if (seconds <= 0) return;
+    const nextDeadline = Date.now() + seconds * 1000;
+    if (
+      force ||
+      deadlineRef.current === null ||
+      nextDeadline < deadlineRef.current - 2000
+    ) {
+      deadlineRef.current = nextDeadline;
+      setTimeRemaining(seconds);
+    }
+  }, []);
+
+  const pauseExam = useCallback(() => {
+    if (!user?.id || !id) return;
+    void apiClient(`/exams/${id}/pause?user_id=${user.id}`, { method: 'POST' }).catch(() => {});
+  }, [id, user?.id]);
 
   const updateLocalAnswer = useCallback(
     (questionId: number, answers: string[]) => {
@@ -72,10 +92,19 @@ export default function QuizExam() {
   );
 
   const startExamMutation = useMutation({
-    mutationFn: () => apiClient(`/exams/${id}/start?user_id=${user?.id}`, { method: 'POST' }),
+    mutationFn: async () => {
+      const data = await apiClient(`/exams/${id}/start?user_id=${user?.id}`, { method: 'POST' });
+      try {
+        const resumed = await apiClient(`/exams/${id}/resume?user_id=${user?.id}`, { method: 'POST' });
+        const rem = resumed?.remaining_seconds ?? data.attempt.remaining_seconds;
+        return { ...data, attempt: { ...data.attempt, remaining_seconds: rem } };
+      } catch {
+        return data;
+      }
+    },
     onSuccess: (data) => {
       setCurrentIdx(data.attempt.current_question_no);
-      setTimeRemaining(data.attempt.remaining_seconds);
+      syncExamDeadline(data.attempt.remaining_seconds, true);
       setExamReady(true);
     },
     onError: () => {
@@ -101,21 +130,45 @@ export default function QuizExam() {
   const total = questions.length;
   const currentQ = questions[currentIdx - 1] ?? null;
 
-  // Sync timer from bundle when loaded
+  // Sync timer from bundle only when it has positive time (never reset a running clock to 0).
   useEffect(() => {
-    if (examBundle?.remaining_seconds !== undefined) {
-      setTimeRemaining(examBundle.remaining_seconds);
+    if (examBundle?.remaining_seconds && examBundle.remaining_seconds > 0) {
+      syncExamDeadline(examBundle.remaining_seconds);
     }
-  }, [examBundle?.remaining_seconds]);
+  }, [examBundle?.remaining_seconds, syncExamDeadline]);
 
-  // Local timer decrement
+  // Stable countdown driven by a wall-clock deadline.
   useEffect(() => {
-    if (timeRemaining === null || timeRemaining <= 0) return;
-    const interval = setInterval(() => {
-      setTimeRemaining((prev) => (prev !== null && prev > 0 ? prev - 1 : 0));
-    }, 1000);
+    if (!examReady) return;
+
+    const tick = () => {
+      if (deadlineRef.current === null) return;
+      const left = Math.max(0, Math.floor((deadlineRef.current - Date.now()) / 1000));
+      setTimeRemaining(left);
+      if (left === 0 && !timedOutRef.current) {
+        timedOutRef.current = true;
+        void apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' })
+          .catch(() => {})
+          .finally(() => navigate(`/dashboard/quiz/${id}/result`));
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, [timeRemaining]);
+  }, [examReady, id, user?.id, navigate]);
+
+  // Pause the attempt when leaving so remaining time is preserved server-side.
+  useEffect(() => {
+    if (!examReady || !user?.id || !id) return;
+
+    const onLeave = () => pauseExam();
+    window.addEventListener('beforeunload', onLeave);
+    return () => {
+      onLeave();
+      window.removeEventListener('beforeunload', onLeave);
+    };
+  }, [examReady, id, user?.id, pauseExam]);
 
   // Sync selected options when the active question changes
   useEffect(() => {
