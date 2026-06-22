@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
 import { apiClient } from '@/lib/apiClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Check } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Check, Loader2 } from 'lucide-react';
 
 type QuestionPayload = {
   id: number;
@@ -32,6 +32,7 @@ export default function QuizExam() {
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
   const [examReady, setExamReady] = useState(false);
   const [selectedAnswers, setSelectedAnswers] = useState<string[]>([]);
+  const [isFinishing, setIsFinishing] = useState(false);
   const examStartedRef = useRef(false);
   const deadlineRef = useRef<number | null>(null);
   const timedOutRef = useRef(false);
@@ -70,6 +71,9 @@ export default function QuizExam() {
     },
     [queryClient, bundleKey],
   );
+
+  const shouldPersistAnswer = (answers: string[], prior?: string[] | null) =>
+    answers.length > 0 || (prior?.length ?? 0) > 0;
 
   const saveAnswer = useCallback(
     (questionId: number, displayId: number, answers: string[], options?: { await?: boolean }) => {
@@ -147,6 +151,7 @@ export default function QuizExam() {
       setTimeRemaining(left);
       if (left === 0 && !timedOutRef.current) {
         timedOutRef.current = true;
+        setIsFinishing(true);
         void apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' })
           .catch(() => {})
           .finally(() => navigate(`/dashboard/quiz/${id}/result`));
@@ -191,29 +196,36 @@ export default function QuizExam() {
 
   const goToQuestion = (nextIdx: number) => {
     if (nextIdx === currentIdx || nextIdx < 1 || nextIdx > total) return;
-    if (currentQ) {
+    if (currentQ && shouldPersistAnswer(selectedAnswers, currentQ.user_answer)) {
       saveAnswer(currentQ.id, currentIdx, selectedAnswers);
     }
     setCurrentIdx(nextIdx);
   };
 
-  const handleFinish = async () => {
-    if (!confirm('Are you sure you want to finish the exam?')) return;
+  const finishExamAndNavigate = useCallback(async () => {
+    if (isFinishing) return;
+    setIsFinishing(true);
     try {
-      if (currentQ) {
+      if (currentQ && shouldPersistAnswer(selectedAnswers, currentQ.user_answer)) {
         await saveAnswer(currentQ.id, currentIdx, selectedAnswers, { await: true });
       }
       await apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' });
       navigate(`/dashboard/quiz/${id}/result`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Could not finish exam';
-      // Attempt may already be closed (e.g. timer expired) — still show results.
       if (msg.includes('No active exam attempt') || msg.includes('Exam time is over')) {
         navigate(`/dashboard/quiz/${id}/result`);
         return;
       }
+      setIsFinishing(false);
       alert(msg);
     }
+  }, [isFinishing, currentQ, selectedAnswers, currentIdx, saveAnswer, id, user?.id, navigate]);
+
+  const handleFinish = () => {
+    if (isFinishing) return;
+    if (!confirm('Are you sure you want to finish the exam?')) return;
+    void finishExamAndNavigate();
   };
 
   const startError = startExamMutation.error instanceof Error ? startExamMutation.error.message : null;
@@ -241,8 +253,19 @@ export default function QuizExam() {
 
   const showSkeleton = !examReady || questionsLoading || !currentQ;
 
+  const finishOverlay = isFinishing ? (
+    <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-chalk-warm/95 backdrop-blur-sm">
+      <Loader2 className="w-10 h-10 text-mint animate-spin mb-4" aria-hidden />
+      <p className="font-display font-bold text-lg text-slate">Calculating your score…</p>
+      <p className="font-mono text-[11px] text-ink-faint mt-2 uppercase tracking-widest">
+        Please wait
+      </p>
+    </div>
+  ) : null;
+
   return (
     <div className="flex flex-col min-h-screen bg-chalk-warm">
+      {finishOverlay}
       {/* Top bar */}
       <div className="h-[64px] bg-chalk border-b border-border-soft px-6 lg:px-8 flex items-center justify-between sticky top-0 z-40">
         <div className="flex flex-col">
@@ -329,6 +352,7 @@ export default function QuizExam() {
                       <button
                         key={opt.key}
                         onClick={() => handleToggleOption(opt.key)}
+                        disabled={isFinishing}
                         className={`group w-full flex items-center gap-4 border rounded-sm p-3 text-left transition-colors duration-100 ${
                           isSelected
                             ? 'border-mint bg-mint/5'
@@ -383,6 +407,7 @@ export default function QuizExam() {
                     <button
                       key={q.id}
                       onClick={() => goToQuestion(num)}
+                      disabled={isFinishing}
                       className={`w-7 h-7 rounded-sm text-[10px] font-mono font-bold flex items-center justify-center border transition-colors duration-100 ${
                         isCurrent
                           ? 'bg-slate text-chalk border-slate shadow-md scale-105 z-10'
@@ -401,10 +426,11 @@ export default function QuizExam() {
 
           <div className="p-6 bg-chalk border-t border-border-soft space-y-3">
             <button
-              onClick={() => void handleFinish()}
-              className="w-full bg-cherry text-white rounded-sm py-4 font-sans font-bold text-xs tracking-widest uppercase hover:bg-cherry-dark transition-all shadow-md active:scale-95"
+              onClick={handleFinish}
+              disabled={isFinishing}
+              className="w-full bg-cherry text-white rounded-sm py-4 font-sans font-bold text-xs tracking-widest uppercase hover:bg-cherry-dark transition-all shadow-md active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              Finish Exam
+              {isFinishing ? 'Finishing…' : 'Finish Exam'}
             </button>
             <p className="font-mono text-[9px] text-ink-faint text-center">Progress saved automatically</p>
           </div>
@@ -415,7 +441,7 @@ export default function QuizExam() {
       <div className="h-[72px] bg-chalk border-t border-border-soft px-6 lg:px-8 flex items-center justify-between sticky bottom-0 z-40">
         <button
           onClick={() => goToQuestion(currentIdx - 1)}
-          disabled={currentIdx === 1 || total === 0}
+          disabled={currentIdx === 1 || total === 0 || isFinishing}
           className="flex items-center gap-2 border border-border-strong text-ink-secondary rounded-sm px-7 py-3 font-sans text-sm font-semibold hover:bg-chalk-cool transition-all disabled:opacity-20 cursor-pointer"
         >
           <ChevronLeft size={16} /> Previous
@@ -427,13 +453,18 @@ export default function QuizExam() {
               if (currentIdx < total) {
                 goToQuestion(currentIdx + 1);
               } else {
-                void handleFinish();
+                handleFinish();
               }
             }}
-            disabled={total === 0}
+            disabled={total === 0 || isFinishing}
             className="group flex items-center gap-2 bg-slate text-chalk rounded-sm px-10 py-3 font-sans text-sm font-bold hover:bg-slate-light transition-all shadow-lg active:scale-95 cursor-pointer disabled:opacity-50"
           >
-            {total === 0 ? (
+            {isFinishing ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+                Calculating…
+              </>
+            ) : total === 0 ? (
               'Loading...'
             ) : currentIdx === total ? (
               'Finish Exam'

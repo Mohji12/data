@@ -3,7 +3,7 @@ import { useOdometer } from '@/hooks/useOdometer';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient, apiDownload } from '@/lib/apiClient';
 import { useAuthStore } from '@/store/authStore';
-import { CheckCircle, XCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { CheckCircle, XCircle, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -32,7 +32,15 @@ export default function QuizResult() {
   const score = useOdometer(result?.total_marks || 0);
 
   if (isLoading || !result) {
-     return <div className="min-h-screen flex items-center justify-center font-mono text-sm text-ink-faint">Calculating your score...</div>;
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-chalk-warm">
+        <Loader2 className="w-10 h-10 text-mint animate-spin mb-4" aria-hidden />
+        <p className="font-display font-bold text-lg text-slate">Calculating your score…</p>
+        <p className="font-mono text-[11px] text-ink-faint mt-2 uppercase tracking-widest">
+          Please wait
+        </p>
+      </div>
+    );
   }
 
   const toggleExpand = (qid: number) => {

@@ -117,6 +117,28 @@ def _answer_filter_for_attempt(user_id: int, exam_id: int, user_exam_id: int):
     )
 
 
+def _answer_stats_for_attempt(
+    db: Session, user_id: int, exam_id: int, user_exam_id: int
+) -> tuple[int, int, int]:
+    """Return (answered, correct, wrong) counting only attempted questions."""
+    base = _answer_filter_for_attempt(user_id, exam_id, user_exam_id)
+    attempted = UserAnswer.is_attempt_question == "1"
+    total_answered = (
+        db.query(func.count(UserAnswer.id)).filter(*base, attempted).scalar()
+    )
+    total_correct = (
+        db.query(func.count(UserAnswer.id))
+        .filter(*base, attempted, UserAnswer.is_correct_answer == "1")
+        .scalar()
+    )
+    total_wrong = (
+        db.query(func.count(UserAnswer.id))
+        .filter(*base, attempted, UserAnswer.is_correct_answer == "0")
+        .scalar()
+    )
+    return int(total_answered or 0), int(total_correct or 0), int(total_wrong or 0)
+
+
 def _build_attempt_state(
     exam: QuizExam,
     ue: UserExam,
@@ -557,18 +579,19 @@ def submit_answer(
         db.delete(ua)
         db.flush()
 
-    ua = UserAnswer(
-        user_id=payload.user_id,
-        exam_id=exam.id,
-        user_exam_id=ue.id,
-        question_id=question.id,
-        answer=submitted_answer,
-        is_correct_answer="1" if is_correct else "0",
-        is_attempt_question="1" if submitted_answer else "0",
-        marks=marks,
-        negative_mark=negative_mark,
-    )
-    db.add(ua)
+    if submitted_answer:
+        ua = UserAnswer(
+            user_id=payload.user_id,
+            exam_id=exam.id,
+            user_exam_id=ue.id,
+            question_id=question.id,
+            answer=submitted_answer,
+            is_correct_answer="1" if is_correct else "0",
+            is_attempt_question="1",
+            marks=marks,
+            negative_mark=negative_mark,
+        )
+        db.add(ua)
     db.commit()
 
     # Recalculate total marks
@@ -644,27 +667,8 @@ def _build_result_summary_for_attempt(
         .filter(*_answer_filter_for_attempt(user_id, exam.id, ue.id))
         .scalar()
     )
-    total_answered = (
-        db.query(func.count(UserAnswer.id))
-        .filter(*_answer_filter_for_attempt(user_id, exam.id, ue.id))
-        .scalar()
-    )
-    total_correct = (
-        db.query(func.count(UserAnswer.id))
-        .filter(
-            *_answer_filter_for_attempt(user_id, exam.id, ue.id),
-            UserAnswer.is_correct_answer == "1",
-        )
-        .scalar()
-    )
-    total_wrong = (
-        db.query(func.count(UserAnswer.id))
-        .filter(
-            *_answer_filter_for_attempt(user_id, exam.id, ue.id),
-            UserAnswer.is_correct_answer == "0",
-            UserAnswer.is_attempt_question == "1",
-        )
-        .scalar()
+    total_answered, total_correct, total_wrong = _answer_stats_for_attempt(
+        db, user_id, exam.id, ue.id
     )
 
     question_ids = parse_id_list(ue.exam_question_id or "")
@@ -728,27 +732,8 @@ def list_attempt_results(
     attempts = _list_user_exam_attempts(db, exam_id, user_id)
     out: list[AttemptSummary] = []
     for idx, ue in enumerate(attempts, start=1):
-        total_answered = (
-            db.query(func.count(UserAnswer.id))
-            .filter(*_answer_filter_for_attempt(user_id, exam_id, ue.id))
-            .scalar()
-        )
-        total_correct = (
-            db.query(func.count(UserAnswer.id))
-            .filter(
-                *_answer_filter_for_attempt(user_id, exam_id, ue.id),
-                UserAnswer.is_correct_answer == "1",
-            )
-            .scalar()
-        )
-        total_wrong = (
-            db.query(func.count(UserAnswer.id))
-            .filter(
-                *_answer_filter_for_attempt(user_id, exam_id, ue.id),
-                UserAnswer.is_correct_answer == "0",
-                UserAnswer.is_attempt_question == "1",
-            )
-            .scalar()
+        total_answered, total_correct, total_wrong = _answer_stats_for_attempt(
+            db, user_id, exam_id, ue.id
         )
         out.append(
             AttemptSummary(
@@ -863,31 +848,8 @@ def finish_exam(
     ue.marks = float(total_marks or 0.0)
     db.commit()
 
-    total_answered = (
-        db.query(func.count(UserAnswer.id))
-        .filter(*_answer_filter_for_attempt(user_id, exam.id, ue.id))
-        .scalar()
-    )
-    total_correct = (
-        db.query(func.count(UserAnswer.id))
-        .filter(
-            UserAnswer.user_id == user_id,
-            UserAnswer.exam_id == exam.id,
-            UserAnswer.user_exam_id == ue.id,
-            UserAnswer.is_correct_answer == "1",
-        )
-        .scalar()
-    )
-    total_wrong = (
-        db.query(func.count(UserAnswer.id))
-        .filter(
-            UserAnswer.user_id == user_id,
-            UserAnswer.exam_id == exam.id,
-            UserAnswer.user_exam_id == ue.id,
-            UserAnswer.is_correct_answer == "0",
-            UserAnswer.is_attempt_question == "1",
-        )
-        .scalar()
+    total_answered, total_correct, total_wrong = _answer_stats_for_attempt(
+        db, user_id, exam.id, ue.id
     )
 
     question_ids = parse_id_list(ue.exam_question_id or "")
