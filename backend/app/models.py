@@ -76,7 +76,7 @@ class Question(Base):
     option_d = Column(Text)
     option_e = Column(Text)
     answer = Column(String(50))
-    answer_type = Column(String(5), nullable=False)  # R, C, MTF
+    answer_type = Column(String(5), nullable=False)  # R, C, MTF, K, K
     total_option = Column(Integer, default=0)
     marking_type_id = Column(Integer)
     marks = Column(Integer)

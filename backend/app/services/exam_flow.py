@@ -47,13 +47,53 @@ def get_question_id_by_display(question_ids: Sequence[int], display_question_id:
     return question_ids[index]
 
 
+def _answer_letter_set(csv: str) -> set[str]:
+    return {p.strip().upper() for p in (csv or "").split(",") if p.strip()}
+
+
+def count_k_type_correct_judgments(
+    question: Question,
+    submitted_answer: str,
+    correct_answer: str,
+) -> int:
+    """
+    K-type / K-prime: each statement is True (selected) or False (not selected).
+    `correct_answer` lists option letters that are True (e.g. "A,C" for T,F,T,F).
+    """
+    total_option = question.total_option or 4
+    options = ["A", "B", "C", "D", "E"][:total_option]
+    selected = _answer_letter_set(submitted_answer)
+    correct_true = _answer_letter_set(correct_answer)
+
+    correct_count = 0
+    for key in options:
+        correct_is_true = key in correct_true
+        student_is_true = key in selected
+        if correct_is_true == student_is_true:
+            correct_count += 1
+    return correct_count
+
+
+def score_k_type_marks(correct_count: int, total_option: int = 4) -> tuple[bool, float]:
+    """
+    K-type scoring: all correct = 1 mark, one wrong = 0.5, otherwise 0.
+    No negative marking (caller must not apply negative_mark).
+    """
+    n = total_option if total_option > 0 else 4
+    if correct_count == n:
+        return True, 1.0
+    if correct_count == n - 1:
+        return True, 0.5
+    return False, 0.0
+
+
 def calculate_marks(
     question: Question,
     marking_type: MarkingType,
     submitted_answer: str | None,
 ) -> Tuple[bool, float, float]:
     """
-    Port of the PHP marking logic for R, C, and MTF questions.
+    Port of the PHP marking logic for R, C, MTF, and K questions.
     Returns (is_correct, marks, negative_mark).
     """
     if submitted_answer is None:
@@ -123,6 +163,16 @@ def calculate_marks(
                 negative_mark = float(marking_type.negative_mark or 0.0)
         else:
             negative_mark = float(marking_type.negative_mark or 0.0)
+
+    elif question.answer_type == "K":
+        # K-type: unanswered = 0; partial credit 0.5 at (n-1)/n; no negative marking.
+        if not submitted_answer:
+            return False, 0.0, 0.0
+        total_option = question.total_option or 4
+        correct_count = count_k_type_correct_judgments(
+            question, submitted_answer, correct_answer
+        )
+        is_correct, marks = score_k_type_marks(correct_count, total_option)
 
     return is_correct, marks, negative_mark
 

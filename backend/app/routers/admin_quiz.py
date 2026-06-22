@@ -1,7 +1,7 @@
 from __future__ import annotations
 import csv
 import io
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
@@ -18,6 +18,15 @@ from app.services.uploads import remove_question_image_file, save_question_image
 router = APIRouter(prefix="/admin/quiz", tags=["admin-quiz"], dependencies=[Depends(get_current_admin)])
 
 _QUESTION_COLS = {c.key for c in Question.__table__.columns}
+
+
+def _iso_date_only(value: date | datetime | None) -> str | None:
+    """Serialize DB date/datetime columns as YYYY-MM-DD."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    return value.isoformat()
 
 
 def _attempt_no_map(rows: list[UserExam]) -> dict[int, int]:
@@ -61,6 +70,11 @@ def _validate_question_options(answer_type: str, payload: dict[str, Any]) -> Non
     if at in ("R", "C"):
         if _count_filled_options(payload) == 0:
             raise HTTPException(status_code=422, detail="At least one option (A–E) is required for Radio/Checkbox questions.")
+    if at == "K":
+        n = _count_filled_options(payload)
+        total = int(payload.get("total_option") or 0) or n
+        if total < 4:
+            raise HTTPException(status_code=422, detail="K-type questions require 4 statements (options A–D).")
 
 
 class SectionPayload(BaseModel):
@@ -174,6 +188,8 @@ def _answer_type_label(at: str | None) -> str:
         return "Checkbox"
     if x == "MTF":
         return "Multiple True False"
+    if x == "K":
+        return "K-type (True/False)"
     return "Free Format"
 
 
@@ -403,8 +419,8 @@ def list_exams(
                 "batch": e.batch,
                 "total_questions": e.total_questions,
                 "timer_time": e.timer_time,
-                "start_date": e.start_date.isoformat() if e.start_date else None,
-                "end_date": e.end_date.isoformat() if e.end_date else None,
+                "start_date": _iso_date_only(e.start_date),
+                "end_date": _iso_date_only(e.end_date),
                 "status": e.status,
                 "is_display_result": e.is_display_result,
                 "is_display_correct_answer": e.is_display_correct_answer,
@@ -427,8 +443,8 @@ def get_exam(exam_id: int, db: Session = Depends(get_db)) -> dict:
         "batch": e.batch or "",
         "total_questions": e.total_questions,
         "timer_time": e.timer_time,
-        "start_date": e.start_date.date().isoformat() if e.start_date else None,
-        "end_date": e.end_date.date().isoformat() if e.end_date else None,
+        "start_date": _iso_date_only(e.start_date),
+        "end_date": _iso_date_only(e.end_date),
         "status": e.status or "1",
         "is_display_result": e.is_display_result or "1",
         "is_display_correct_answer": e.is_display_correct_answer or "0",
