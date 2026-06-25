@@ -838,3 +838,75 @@ def download_result_pdf(user_exam_id: int, db: Session = Depends(get_db)) -> Res
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+class MockTestAttemptLimitsResponse(BaseModel):
+    default_max_attempts: int
+    batch_overrides: dict[str, int]
+
+
+class MockTestAttemptLimitsUpdate(BaseModel):
+    default_max_attempts: int = Field(ge=1, le=50)
+    batch_overrides: dict[str, int] = Field(default_factory=dict)
+
+
+class BatchAttemptLimitPayload(BaseModel):
+    batch_name: str
+    max_attempts: int | None = Field(
+        default=None,
+        description="Set attempts for batch; null removes override",
+    )
+
+
+@router.get("/attempt-limits", response_model=MockTestAttemptLimitsResponse)
+def get_mock_test_attempt_limits(db: Session = Depends(get_db)) -> MockTestAttemptLimitsResponse:
+    from app.services.mock_test_attempts import load_attempt_limits_config
+
+    config = load_attempt_limits_config(db)
+    return MockTestAttemptLimitsResponse(
+        default_max_attempts=int(config.get("default", 2)),
+        batch_overrides=dict(config.get("batches") or {}),
+    )
+
+
+@router.put("/attempt-limits", response_model=MockTestAttemptLimitsResponse)
+def update_mock_test_attempt_limits(
+    payload: MockTestAttemptLimitsUpdate,
+    db: Session = Depends(get_db),
+) -> MockTestAttemptLimitsResponse:
+    from app.services.mock_test_attempts import load_attempt_limits_config, save_attempt_limits_config
+
+    existing = load_attempt_limits_config(db)
+    cleaned_batches: dict[str, int] = {}
+    for name, val in (payload.batch_overrides or {}).items():
+        batch = (name or "").strip()
+        if not batch:
+            continue
+        cleaned_batches[batch] = int(val)
+    config = save_attempt_limits_config(
+        db,
+        {
+            "default": payload.default_max_attempts,
+            "batches": cleaned_batches,
+            "users": existing.get("users") or {},
+        },
+    )
+    return MockTestAttemptLimitsResponse(
+        default_max_attempts=int(config.get("default", 2)),
+        batch_overrides=dict(config.get("batches") or {}),
+    )
+
+
+@router.post("/attempt-limits/batch", response_model=MockTestAttemptLimitsResponse)
+def set_batch_mock_test_attempt_limit(
+    payload: BatchAttemptLimitPayload,
+    db: Session = Depends(get_db),
+) -> MockTestAttemptLimitsResponse:
+    from app.services.mock_test_attempts import load_attempt_limits_config, set_batch_max_attempts
+
+    set_batch_max_attempts(db, payload.batch_name, payload.max_attempts)
+    config = load_attempt_limits_config(db)
+    return MockTestAttemptLimitsResponse(
+        default_max_attempts=int(config.get("default", 2)),
+        batch_overrides=dict(config.get("batches") or {}),
+    )

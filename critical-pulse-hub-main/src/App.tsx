@@ -61,6 +61,7 @@ const AdminPayments = lazy(() => import('@/pages/admin/AdminPayments'));
 const AdminPackages = lazy(() => import('@/pages/admin/AdminPackages'));
 const AdminQuizSections = lazy(() => import('@/pages/admin/AdminQuizSections'));
 const AdminMarkingTypes = lazy(() => import('@/pages/admin/AdminMarkingTypes'));
+const AdminMockTestAttempts = lazy(() => import('@/pages/admin/AdminMockTestAttempts'));
 const AdminTestimonials = lazy(() => import('@/pages/admin/AdminTestimonials'));
 const AdminAuditorium = lazy(() => import('@/pages/admin/AdminAuditorium'));
 const AdminVideoQuestions = lazy(() => import('@/pages/admin/AdminVideoQuestions'));
@@ -163,6 +164,7 @@ const App = () => {
             <Route path="quiz/sections" element={<AdminQuizSections />} />
             <Route path="quiz/marking-types" element={<AdminMarkingTypes />} />
             <Route path="quiz/results" element={<AdminResults />} />
+            <Route path="quiz/attempt-limits" element={<AdminMockTestAttempts />} />
             <Route path="coupons" element={<AdminCoupons />} />
             <Route path="testimonials" element={<AdminTestimonials />} />
             <Route path="auditorium" element={<AdminAuditorium />} />

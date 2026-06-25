@@ -6,6 +6,14 @@ import { useState, useMemo, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, Search, Download } from 'lucide-react';
 import { toast } from 'sonner';
 import { resolveAdminDocumentHref } from '@/lib/legacyUploadBase';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 
 type BatchRow = { id: number; name: string; status: string };
 type EmailTemplateType = 'registration_thank_you' | 'document_verified' | 'document_denied';
@@ -63,6 +71,12 @@ type AdminUserRow = {
   plaintext_password?: string | null;
   created_at?: string | null;
   subscription_access?: SubscriptionAccess | null;
+  mock_test_attempts?: {
+    default_max_attempts: number;
+    batch_override: number | null;
+    user_override: number | null;
+    effective_max_attempts: number;
+  } | null;
 };
 
 function resolveDocUrl(u: AdminUserRow, which: 1 | 2): string | null {
@@ -173,6 +187,8 @@ export default function AdminUsers() {
   const [tplSubject, setTplSubject] = useState('');
   const [tplBody, setTplBody] = useState('');
   const [encryptedPasswordById, setEncryptedPasswordById] = useState<Record<number, string>>({});
+  const [attemptsUser, setAttemptsUser] = useState<AdminUserRow | null>(null);
+  const [attemptsInput, setAttemptsInput] = useState('');
 
   const queryString = useMemo(() => {
     const p = new URLSearchParams();
@@ -423,6 +439,43 @@ export default function AdminUsers() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const mockAttemptsMut = useMutation({
+    mutationFn: ({ userId, max_attempts }: { userId: number; max_attempts: number | null }) =>
+      apiClient(`/admin/users/${userId}/mock-test-attempts`, {
+        method: 'PUT',
+        body: JSON.stringify({ max_attempts }),
+      }),
+    onSuccess: () => {
+      toast.success('Mock test attempts updated');
+      setAttemptsUser(null);
+      invalidateUsers();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const openAttemptsDialog = (user: AdminUserRow) => {
+    const info = user.mock_test_attempts;
+    setAttemptsUser(user);
+    setAttemptsInput(
+      info?.user_override != null ? String(info.user_override) : String(info?.effective_max_attempts ?? 2),
+    );
+  };
+
+  const saveUserAttempts = () => {
+    if (!attemptsUser) return;
+    const trimmed = attemptsInput.trim();
+    if (!trimmed) {
+      mockAttemptsMut.mutate({ userId: attemptsUser.id, max_attempts: null });
+      return;
+    }
+    const n = parseInt(trimmed, 10);
+    if (Number.isNaN(n) || n < 1 || n > 50) {
+      toast.error('Enter a number between 1 and 50, or leave blank to clear override');
+      return;
+    }
+    mockAttemptsMut.mutate({ userId: attemptsUser.id, max_attempts: n });
+  };
+
   const resetPaging = () => setOffset(0);
 
   const toggleSort = (field: string) => {
@@ -440,7 +493,7 @@ export default function AdminUsers() {
     return <span className="ml-1 text-mint">{order === 'asc' ? '↑' : '↓'}</span>;
   };
 
-  const COL_COUNT = 26;
+  const COL_COUNT = 27;
 
   return (
     <div className="p-6 lg:p-8 min-w-0 max-w-full">
@@ -773,6 +826,7 @@ export default function AdminUsers() {
                   { id: 'created_at', label: 'Registered' },
                   { label: 'Mail' },
                   { id: 'approve', label: 'Account' },
+                  { label: 'Mock' },
                   { label: 'Actions' },
                 ].map((h) => (
                   <th
@@ -984,6 +1038,33 @@ export default function AdminUsers() {
                         </span>
                       )}
                     </td>
+                    <td className="px-3 py-2 whitespace-nowrap min-w-[100px]">
+                      {(() => {
+                        const info = u.mock_test_attempts;
+                        if (!info) return <span className="text-[10px] text-ink-faint">—</span>;
+                        const source =
+                          info.user_override != null
+                            ? `user ${info.user_override}`
+                            : info.batch_override != null
+                              ? `batch ${info.batch_override}`
+                              : `default ${info.default_max_attempts}`;
+                        return (
+                          <div className="flex flex-col gap-1">
+                            <span className="font-mono text-[10px] text-ink-muted">
+                              {info.effective_max_attempts} max
+                            </span>
+                            <span className="font-mono text-[9px] text-ink-faint">{source}</span>
+                            <button
+                              type="button"
+                              onClick={() => openAttemptsDialog(u)}
+                              className="text-[10px] font-semibold text-mint hover:underline w-fit text-left"
+                            >
+                              Edit
+                            </button>
+                          </div>
+                        );
+                      })()}
+                    </td>
                     <td className="px-3 py-2 min-w-[200px]">
                       <div className="flex flex-col gap-1">
                         {showPaymentActions && (
@@ -1090,6 +1171,55 @@ export default function AdminUsers() {
           )}
         </div>
       </div>
+
+      <Dialog open={!!attemptsUser} onOpenChange={(open) => !open && setAttemptsUser(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Mock test attempts</DialogTitle>
+          </DialogHeader>
+          {attemptsUser && (
+            <div className="space-y-4 font-sans text-sm">
+              <p className="text-ink-muted">
+                User: <span className="font-semibold text-ink">{displayName(attemptsUser)}</span>
+                <br />
+                <span className="font-mono text-xs">{attemptsUser.email}</span>
+              </p>
+              {attemptsUser.mock_test_attempts && (
+                <p className="font-mono text-[11px] text-ink-faint">
+                  Current effective limit: {attemptsUser.mock_test_attempts.effective_max_attempts}
+                  {attemptsUser.mock_test_attempts.user_override != null
+                    ? ` (user override)`
+                    : attemptsUser.mock_test_attempts.batch_override != null
+                      ? ` (batch override)`
+                      : ` (site default)`}
+                </p>
+              )}
+              <label className="block text-ink-secondary">
+                Max attempts (1–50)
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={attemptsInput}
+                  onChange={(e) => setAttemptsInput(e.target.value)}
+                  className="mt-2 w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-mono text-sm"
+                />
+              </label>
+              <p className="text-xs text-ink-faint">
+                Clear the field and save to remove the per-user override (batch/default will apply).
+              </p>
+            </div>
+          )}
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" onClick={() => setAttemptsUser(null)}>
+              Cancel
+            </Button>
+            <Button type="button" disabled={mockAttemptsMut.isPending} onClick={saveUserAttempts}>
+              {mockAttemptsMut.isPending ? 'Saving…' : 'Save'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

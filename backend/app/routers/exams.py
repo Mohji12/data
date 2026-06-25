@@ -34,11 +34,11 @@ from app.services.exam_flow import (
     get_remaining_seconds,
     parse_id_list,
 )
+from app.services.mock_test_attempts import DEFAULT_MAX_ATTEMPTS, get_max_attempts_for_user
 from app.services.pdfs import build_quiz_review_pdf
 
 
 router = APIRouter(prefix="/exams", tags=["exams"])
-MAX_EXAM_ATTEMPTS = 2
 
 
 def _ensure_exam_access(db: Session, user: User) -> None:
@@ -213,6 +213,7 @@ def _build_attempt_state(
     user_id: int,
     attempt_no: int,
     attempts_used: int,
+    max_attempts: int,
 ) -> AttemptState:
     total_questions = len(question_ids)
     remaining_seconds = get_remaining_seconds(ue)
@@ -226,8 +227,8 @@ def _build_attempt_state(
         remaining_seconds=remaining_seconds,
         attempt_no=attempt_no,
         attempts_used=attempts_used,
-        max_attempts=MAX_EXAM_ATTEMPTS,
-        remaining_attempts=max(0, MAX_EXAM_ATTEMPTS - attempts_used),
+        max_attempts=max_attempts,
+        remaining_attempts=max(0, max_attempts - attempts_used),
     )
 
 
@@ -286,6 +287,12 @@ def list_exams(
     # Order by ID to ensure Mock Test 1, 2, etc. appear in order
     exams = query.order_by(QuizExam.id.asc()).all()
     results: list[ExamSummary] = []
+    exam_user = db.query(User).filter(User.id == user_id).first() if user_id else None
+    max_attempts = (
+        get_max_attempts_for_user(db, exam_user)
+        if exam_user
+        else DEFAULT_MAX_ATTEMPTS
+    )
     for exam in exams:
         duration_seconds = (exam.timer_time or 180) * 60
         total_questions = exam.total_questions or 0
@@ -302,8 +309,8 @@ def list_exams(
             attempts_used = len(attempts)
             active_attempt = _find_active_attempt(attempts)
             has_active_attempt = active_attempt is not None
-            can_retake = attempts_used < MAX_EXAM_ATTEMPTS
-            is_finished = attempts_used >= MAX_EXAM_ATTEMPTS and active_attempt is None
+            can_retake = attempts_used < max_attempts
+            is_finished = attempts_used >= max_attempts and active_attempt is None
 
         results.append(
             ExamSummary(
@@ -314,8 +321,8 @@ def list_exams(
                 duration_seconds=duration_seconds,
                 is_finished=is_finished,
                 attempts_used=attempts_used,
-                max_attempts=MAX_EXAM_ATTEMPTS,
-                remaining_attempts=max(0, MAX_EXAM_ATTEMPTS - attempts_used),
+                max_attempts=max_attempts,
+                remaining_attempts=max(0, max_attempts - attempts_used),
                 can_retake=can_retake,
                 has_active_attempt=has_active_attempt,
             )
@@ -350,10 +357,11 @@ def start_exam(
     _ensure_exam_access(db, current_user)
     user_id = _resolve_user_id(current_user, user_id)
     exam = _get_exam_or_404(db, exam_id)
+    max_attempts = get_max_attempts_for_user(db, current_user)
     attempts = _list_user_exam_attempts(db, exam.id, user_id)
     ue = _find_active_attempt(attempts)
     if not ue:
-        if len(attempts) >= MAX_EXAM_ATTEMPTS:
+        if len(attempts) >= max_attempts:
             raise HTTPException(status_code=400, detail="Maximum attempts reached for this exam")
         ue = _create_user_exam_attempt(db, exam, user_id)
         attempts = _list_user_exam_attempts(db, exam.id, user_id)
@@ -403,6 +411,7 @@ def start_exam(
         user_id=user_id,
         attempt_no=attempt_no,
         attempts_used=len(attempts),
+        max_attempts=max_attempts,
     )
 
     total_marks = _sum_marks_for_attempt(db, user_id, exam.id, ue.id)
@@ -426,6 +435,7 @@ def get_question(
     _ensure_exam_access(db, current_user)
     user_id = _resolve_user_id(current_user, user_id)
     exam = _get_exam_or_404(db, exam_id)
+    max_attempts = get_max_attempts_for_user(db, current_user)
     attempts = _list_user_exam_attempts(db, exam.id, user_id)
     ue = _find_active_attempt(attempts)
     if not ue:
@@ -464,6 +474,7 @@ def get_question(
         user_id=user_id,
         attempt_no=attempt_no,
         attempts_used=len(attempts),
+        max_attempts=max_attempts,
     )
 
     total_marks = _sum_marks_for_attempt(db, user_id, exam.id, ue.id)
@@ -585,6 +596,7 @@ def submit_answer(
     if payload.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Cannot access another user's exam data")
     exam = _get_exam_or_404(db, exam_id)
+    max_attempts = get_max_attempts_for_user(db, current_user)
     attempts = _list_user_exam_attempts(db, exam.id, payload.user_id)
     ue = _find_active_attempt(attempts)
     if not ue:
@@ -688,6 +700,7 @@ def submit_answer(
         user_id=payload.user_id,
         attempt_no=attempt_no,
         attempts_used=len(attempts),
+        max_attempts=max_attempts,
     )
 
     return AnswerSubmitResponse(

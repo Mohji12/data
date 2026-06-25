@@ -20,6 +20,7 @@ import {
   Package,
   ListTree,
   Percent,
+  Repeat,
   Quote,
   Building2,
   CircleHelp,
@@ -75,6 +76,7 @@ const navItems = [
       { label: 'Quiz sections', to: '/admin/quiz/sections', icon: ListTree },
       { label: 'Marking types', to: '/admin/quiz/marking-types', icon: Percent },
       { label: 'Results', to: '/admin/quiz/results', icon: BarChart3 },
+      { label: 'Attempt limits', to: '/admin/quiz/attempt-limits', icon: Repeat },
     ],
   },
   {

@@ -16,9 +16,10 @@ from app.services.event_conclave_fees import (
 @pytest.mark.parametrize(
     ("on_date", "expected"),
     [
-        (date(2026, 6, 26), "early_bird"),
+        (date(2026, 7, 8), "early_bird"),
         (date(2026, 6, 1), "early_bird"),
-        (date(2026, 6, 27), "regular"),
+        (date(2026, 6, 27), "early_bird"),
+        (date(2026, 7, 9), "regular"),
         (date(2026, 7, 10), "regular"),
         (date(2026, 7, 11), "spot"),
         (date(2026, 7, 12), "spot"),
@@ -36,8 +37,8 @@ def test_resolve_event_fee_tier(on_date: date, expected: str | None) -> None:
     [
         (date(2026, 6, 10), "student", 2700.0, 486.0, 3186.0),
         (date(2026, 6, 10), "clinician", 3200.0, 576.0, 3776.0),
-        (date(2026, 6, 28), "student", 3500.0, 630.0, 4130.0),
-        (date(2026, 6, 28), "clinician", 4000.0, 720.0, 4720.0),
+        (date(2026, 7, 9), "student", 3500.0, 630.0, 4130.0),
+        (date(2026, 7, 9), "clinician", 4000.0, 720.0, 4720.0),
         (date(2026, 7, 11), "student", 4000.0, 720.0, 4720.0),
         (date(2026, 7, 11), "clinician", 4500.0, 810.0, 5310.0),
     ],

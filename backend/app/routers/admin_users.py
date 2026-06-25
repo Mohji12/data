@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, inspect
 from sqlalchemy.orm import Session, load_only
 
@@ -235,6 +235,8 @@ def list_users(
     settings = get_settings()
     user_rows = [row[0] for row in rows]
     subscription_summaries = batch_admin_subscription_summaries(db, user_rows)
+    from app.services.mock_test_attempts import describe_attempt_limits_for_user
+
     items = []
     for row in rows:
         u = row[0]
@@ -242,6 +244,7 @@ def list_users(
         d = _serialize_user_admin(u)
         d["country_name"] = country_name
         d["subscription_access"] = subscription_summaries.get(u.id) or admin_subscription_summary(u)
+        d["mock_test_attempts"] = describe_attempt_limits_for_user(db, u)
         _attach_document_urls(d, u, settings)
         items.append(d)
     return PagedUsersResponse(total=total, items=items)
@@ -706,4 +709,49 @@ def get_user(user_id: int, db: Session = Depends(get_db)) -> dict:
         for p in pay_rows
     ]
     return {"user": udict, "recent_payments": payments}
+
+
+class UserMockTestAttemptsResponse(BaseModel):
+    user_id: int
+    subscription: str | None = None
+    default_max_attempts: int
+    batch_override: int | None = None
+    user_override: int | None = None
+    effective_max_attempts: int
+
+
+class UserMockTestAttemptsUpdate(BaseModel):
+    max_attempts: int | None = Field(
+        default=None,
+        description="Per-user override; null clears override",
+        ge=1,
+        le=50,
+    )
+
+
+@router.get("/{user_id}/mock-test-attempts", response_model=UserMockTestAttemptsResponse)
+def get_user_mock_test_attempts(user_id: int, db: Session = Depends(get_db)) -> UserMockTestAttemptsResponse:
+    from app.services.mock_test_attempts import describe_attempt_limits_for_user
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    info = describe_attempt_limits_for_user(db, user)
+    return UserMockTestAttemptsResponse(**info)
+
+
+@router.put("/{user_id}/mock-test-attempts", response_model=UserMockTestAttemptsResponse)
+def update_user_mock_test_attempts(
+    user_id: int,
+    payload: UserMockTestAttemptsUpdate,
+    db: Session = Depends(get_db),
+) -> UserMockTestAttemptsResponse:
+    from app.services.mock_test_attempts import describe_attempt_limits_for_user, set_user_max_attempts
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    result = set_user_max_attempts(db, user_id, payload.max_attempts)
+    info = result.get("user") or describe_attempt_limits_for_user(db, user)
+    return UserMockTestAttemptsResponse(**info)
 
