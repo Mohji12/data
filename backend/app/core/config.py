@@ -134,6 +134,14 @@ class Settings:
         self.whatsapp_default_template_language: str = os.getenv(
             "WHATSAPP_DEFAULT_TEMPLATE_LANGUAGE", "en"
         ).strip() or "en"
+        # Approved Meta template with {{1}} (or more) for admin-composed custom body text.
+        self.whatsapp_custom_message_template_name: str = os.getenv(
+            "WHATSAPP_CUSTOM_MESSAGE_TEMPLATE", ""
+        ).strip()
+        self.whatsapp_custom_message_template_language: str = os.getenv(
+            "WHATSAPP_CUSTOM_MESSAGE_TEMPLATE_LANGUAGE",
+            os.getenv("WHATSAPP_DEFAULT_TEMPLATE_LANGUAGE", "en"),
+        ).strip() or "en"
         # Meta webhook (GET verify + POST inbound). Never commit real values.
         self.whatsapp_verify_token: str = os.getenv("WHATSAPP_VERIFY_TOKEN", "").strip()
         self.whatsapp_app_secret: str = os.getenv("WHATSAPP_APP_SECRET", "").strip()

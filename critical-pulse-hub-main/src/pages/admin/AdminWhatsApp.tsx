@@ -22,8 +22,9 @@ export default function AdminWhatsApp() {
   const [subscriptions, setSubscriptions] = useState<string[]>([]);
   const [approve, setApprove] = useState('');
   const [message, setMessage] = useState('');
-  const [sendMode, setSendMode] = useState<'text' | 'template'>('template');
+  const [sendMode, setSendMode] = useState<'text' | 'template' | 'custom'>('custom');
   const [templateName, setTemplateName] = useState('');
+  const [customTemplateName, setCustomTemplateName] = useState('');
   const [templateLanguage, setTemplateLanguage] = useState('en');
   const [templateBodyParams, setTemplateBodyParams] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -49,6 +50,10 @@ export default function AdminWhatsApp() {
       setMessage(res.template);
       if (res.default_template_name) setTemplateName(res.default_template_name);
       if (res.default_template_language) setTemplateLanguage(res.default_template_language);
+      if (res.custom_message_template_name) setCustomTemplateName(res.custom_message_template_name);
+      if (res.custom_message_template_language && sendMode === 'custom') {
+        setTemplateLanguage(res.custom_message_template_language);
+      }
       return res;
     },
     staleTime: Infinity,
@@ -188,6 +193,9 @@ export default function AdminWhatsApp() {
       if (sendMode === 'text' && !message.trim()) {
         throw new Error('Message is required for text mode');
       }
+      if (sendMode === 'custom' && !message.trim()) {
+        throw new Error('Type your custom message first');
+      }
       if (sendMode === 'template' && !templateName.trim()) {
         throw new Error('Template name is required for template mode');
       }
@@ -204,8 +212,14 @@ export default function AdminWhatsApp() {
         method: 'POST',
         body: JSON.stringify({
           send_mode: sendMode,
-          message: sendMode === 'text' ? message.trim() : null,
-          template_name: sendMode === 'template' ? templateName.trim() : null,
+          message:
+            sendMode === 'text' || sendMode === 'custom' ? message.trim() : null,
+          template_name:
+            sendMode === 'custom'
+              ? customTemplateName.trim() || null
+              : sendMode === 'template'
+                ? templateName.trim()
+                : null,
           template_language: templateLanguage.trim() || 'en',
           template_body_params: sendMode === 'template' ? bodyParams : [],
           recipients,
@@ -262,24 +276,24 @@ export default function AdminWhatsApp() {
           <div className="bg-chalk border border-border-soft rounded-sm p-6 space-y-4 shadow-sm">
             <h3 className="font-sans text-sm font-semibold text-slate flex items-center gap-2">
               <MessageCircle size={16} className="text-mint" />
-              Message Template
+              Custom message
             </h3>
             <textarea
               value={message}
               onChange={(e) => setMessage(e.target.value)}
-              placeholder="Type your message here..."
+              placeholder="Type the message you want to send to users..."
               rows={6}
               className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm focus:outline-none focus:border-mint transition-colors"
             />
             <button
               onClick={saveTemplate}
               disabled={isSaving || !message.trim()}
-              className="w-full bg-mint text-slate rounded-sm px-4 py-2 font-sans text-[11px] font-bold hover:bg-mint-light transition-all disabled:opacity-50"
+              className="w-full bg-chalk-cool text-slate border border-border-soft rounded-sm px-4 py-2 font-sans text-[11px] font-semibold hover:bg-chalk-warm transition-all disabled:opacity-50"
             >
-              {isSaving ? 'Saving...' : 'Save as Default Template'}
+              {isSaving ? 'Saving...' : 'Save as default draft'}
             </button>
             <p className="text-[10px] text-ink-faint">
-              This message will be pre-filled when you click the WhatsApp icon next to a user.
+              Used for <strong>Custom message (API)</strong> and pre-filled when you open WhatsApp manually (icon per user).
             </p>
           </div>
 
@@ -316,20 +330,50 @@ export default function AdminWhatsApp() {
           <div className="bg-chalk border border-border-soft rounded-sm p-6 space-y-4 shadow-sm">
             <h3 className="font-sans text-sm font-semibold text-slate flex items-center gap-2">
               <MessageCircle size={16} className="text-blush" />
-              API Bulk Dispatch
+              Send via API
             </h3>
             <div className="space-y-2">
               <label className="font-mono text-[10px] text-ink-faint uppercase tracking-wide">Send mode</label>
               <select
                 value={sendMode}
-                onChange={(e) => setSendMode(e.target.value as 'text' | 'template')}
+                onChange={(e) => setSendMode(e.target.value as 'text' | 'template' | 'custom')}
                 className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm focus:outline-none focus:border-mint transition-colors"
               >
-                <option value="template">Approved template (recommended for bulk)</option>
-                <option value="text">Free text (24h reply window only)</option>
+                <option value="custom">Custom message (approved Meta template)</option>
+                <option value="text">Free text (user replied in last 24h only)</option>
+                <option value="template">Fixed Meta template + variables</option>
               </select>
             </div>
-            {sendMode === 'template' ? (
+            {sendMode === 'custom' ? (
+              <div className="space-y-3">
+                <p className="text-[10px] text-ink-faint leading-relaxed">
+                  Your text above is sent as template variable <code className="font-mono">{'{{1}}'}</code>.
+                  Create an approved template in Meta with a body like &quot;{'{{1}}'}&quot; or
+                  &quot;Message: {'{{1}}'}&quot;, then set its name below or in backend{' '}
+                  <code className="font-mono">WHATSAPP_CUSTOM_MESSAGE_TEMPLATE</code>.
+                </p>
+                <div>
+                  <label className="font-mono text-[10px] text-ink-faint uppercase tracking-wide">
+                    Custom template name
+                  </label>
+                  <input
+                    value={customTemplateName}
+                    onChange={(e) => setCustomTemplateName(e.target.value)}
+                    placeholder="e.g. user_notification"
+                    className="mt-1 w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm focus:outline-none focus:border-mint transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="font-mono text-[10px] text-ink-faint uppercase tracking-wide">Language code</label>
+                  <input
+                    value={templateLanguage}
+                    onChange={(e) => setTemplateLanguage(e.target.value)}
+                    placeholder="en or en_US"
+                    className="mt-1 w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm focus:outline-none focus:border-mint transition-colors"
+                  />
+                </div>
+              </div>
+            ) : sendMode === 'template' ? (
               <div className="space-y-3">
                 <div>
                   <label className="font-mono text-[10px] text-ink-faint uppercase tracking-wide">Template name</label>
@@ -362,19 +406,25 @@ export default function AdminWhatsApp() {
               </div>
             ) : (
               <p className="text-[10px] text-ink-faint">
-                Free text only works if each recipient messaged your business number within the last 24 hours.
+                Free text only works if the recipient messaged your business WhatsApp number within the last 24 hours.
               </p>
             )}
             <button
               disabled={
                 bulkSendMutation.isPending ||
                 allRecipients.length === 0 ||
-                (sendMode === 'text' ? !message.trim() : !templateName.trim())
+                (sendMode === 'text' || sendMode === 'custom'
+                  ? !message.trim()
+                  : !templateName.trim())
               }
               onClick={() => bulkSendMutation.mutate()}
               className="w-full bg-slate text-chalk rounded-sm px-4 py-2 font-sans text-[11px] font-bold hover:bg-slate-light transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {bulkSendMutation.isPending ? 'Sending via API...' : `Send via API (${allRecipients.length})`}
+              {bulkSendMutation.isPending
+                ? 'Sending via API...'
+                : sendMode === 'custom'
+                  ? `Send custom message (${allRecipients.length})`
+                  : `Send via API (${allRecipients.length})`}
             </button>
             {apiResult && (
               <div className="rounded-sm border border-border-soft bg-chalk-warm p-3 space-y-1">
@@ -393,7 +443,7 @@ export default function AdminWhatsApp() {
               </div>
             )}
             <p className="text-[10px] text-ink-faint">
-              API key is kept only on backend. Use an approved Meta template for cold bulk outreach.
+              Tech admin only. For instant custom text without Meta setup, use the green WhatsApp icon (opens WhatsApp Web).
             </p>
           </div>
         </div>

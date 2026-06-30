@@ -55,6 +55,8 @@ def get_whatsapp_template(db: Session = Depends(get_db)):
         "template": opt.option_value if opt else "Hello! This is from Harish Critical Care Classes.",
         "default_template_name": settings.whatsapp_default_template_name,
         "default_template_language": settings.whatsapp_default_template_language,
+        "custom_message_template_name": settings.whatsapp_custom_message_template_name,
+        "custom_message_template_language": settings.whatsapp_custom_message_template_language,
     }
 
 
@@ -83,7 +85,7 @@ class BulkRecipient(BaseModel):
 
 
 class WhatsAppBulkSendPayload(BaseModel):
-    send_mode: Literal["text", "template"] = "template"
+    send_mode: Literal["text", "template", "custom"] = "custom"
     message: str | None = None
     template_name: str | None = None
     template_language: str = "en"
@@ -129,6 +131,9 @@ class WhatsAppBulkSendPayload(BaseModel):
         if self.send_mode == "text":
             if not (self.message or "").strip():
                 raise ValueError("message is required for text mode")
+        elif self.send_mode == "custom":
+            if not (self.message or "").strip():
+                raise ValueError("message is required for custom mode")
         else:
             if not (self.template_name or "").strip():
                 raise ValueError("template_name is required for template mode")
@@ -157,6 +162,27 @@ def bulk_send_whatsapp(
             payload.template_body_params or None,
         )
         dispatch_label = f"template={payload.template_name}"
+    elif payload.send_mode == "custom":
+        tpl = (payload.template_name or settings.whatsapp_custom_message_template_name or "").strip()
+        lang = (
+            payload.template_language
+            or settings.whatsapp_custom_message_template_language
+            or "en"
+        ).strip()
+        if not tpl:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Custom message template is not configured. Set WHATSAPP_CUSTOM_MESSAGE_TEMPLATE "
+                    "in backend .env to an approved Meta template with a {{1}} body variable, "
+                    "or enter the template name in the admin form."
+                ),
+            )
+        body_text = (payload.message or "").strip()
+        extra_params = [p for p in (payload.template_body_params or []) if (p or "").strip()]
+        body_params = [body_text, *extra_params] if body_text else extra_params
+        summary = send_bulk_template(recipient_phones, tpl, lang, body_params or None)
+        dispatch_label = f"custom template={tpl}"
     else:
         summary = send_bulk_text(recipient_phones, (payload.message or "").strip())
         dispatch_label = "text"
