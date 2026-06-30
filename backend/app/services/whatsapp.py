@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import re
 import time
+import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, TypeVar
 from urllib import error, request
 
@@ -77,24 +80,61 @@ def _meta_template_payload(
     template_name: str,
     language_code: str,
     body_params: list[str] | None = None,
+    image_header_link: str | None = None,
 ) -> dict[str, Any]:
     template: dict[str, Any] = {
         "name": template_name,
         "language": {"code": language_code},
     }
+    components: list[dict[str, Any]] = []
+    link = (image_header_link or "").strip()
+    if link:
+        components.append(
+            {
+                "type": "header",
+                "parameters": [{"type": "image", "image": {"link": link}}],
+            }
+        )
     params = [p for p in (body_params or []) if (p or "").strip()]
     if params:
-        template["components"] = [
+        components.append(
             {
                 "type": "body",
                 "parameters": [{"type": "text", "text": p} for p in params],
             }
-        ]
+        )
+    if components:
+        template["components"] = components
     return {
         "messaging_product": "whatsapp",
         "to": _to_wa_id(phone),
         "type": "template",
         "template": template,
+    }
+
+
+def _meta_image_payload(
+    phone: str,
+    *,
+    media_id: str | None = None,
+    image_link: str | None = None,
+    caption: str | None = None,
+) -> dict[str, Any]:
+    image: dict[str, Any] = {}
+    if media_id:
+        image["id"] = media_id
+    elif image_link:
+        image["link"] = image_link
+    else:
+        raise ValueError("media_id or image_link is required for image messages")
+    cap = (caption or "").strip()
+    if cap:
+        image["caption"] = cap[:1024]
+    return {
+        "messaging_product": "whatsapp",
+        "to": _to_wa_id(phone),
+        "type": "image",
+        "image": image,
     }
 
 
@@ -156,9 +196,80 @@ def send_whatsapp_template(
     template_name: str,
     language_code: str,
     body_params: list[str] | None = None,
+    image_header_link: str | None = None,
 ) -> SendResult:
     return _post_meta_message(
-        _meta_template_payload(phone, template_name, language_code, body_params),
+        _meta_template_payload(
+            phone,
+            template_name,
+            language_code,
+            body_params,
+            image_header_link=image_header_link,
+        ),
+        phone,
+    )
+
+
+def upload_image_to_meta(file_path: Path) -> str:
+    """Upload a local image to Meta; returns media id for outbound image messages."""
+    settings = get_settings()
+    if not settings.whatsapp_api_key or not settings.whatsapp_phone_number_id:
+        raise ValueError("WhatsApp API is not configured")
+    if not file_path.is_file():
+        raise ValueError("Image file not found")
+
+    mime = mimetypes.guess_type(file_path.name)[0] or "image/jpeg"
+    file_data = file_path.read_bytes()
+    boundary = f"----WhatsAppBoundary{uuid.uuid4().hex}"
+    parts: list[bytes] = []
+
+    def _field(name: str, value: str) -> None:
+        parts.append(f"--{boundary}\r\n".encode())
+        parts.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+        parts.append(f"{value}\r\n".encode())
+
+    _field("messaging_product", "whatsapp")
+    _field("type", mime)
+    parts.append(f"--{boundary}\r\n".encode())
+    parts.append(
+        f'Content-Disposition: form-data; name="file"; filename="{file_path.name}"\r\n'.encode()
+    )
+    parts.append(f"Content-Type: {mime}\r\n\r\n".encode())
+    parts.append(file_data)
+    parts.append(f"\r\n--{boundary}--\r\n".encode())
+    body = b"".join(parts)
+
+    endpoint = f"{settings.whatsapp_api_base}/{settings.whatsapp_phone_number_id}/media"
+    req = request.Request(
+        endpoint,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {settings.whatsapp_api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=settings.whatsapp_send_timeout_sec) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            media_id = data.get("id") if isinstance(data, dict) else None
+            if not media_id:
+                raise ValueError(f"Meta media upload failed: {data}")
+            return str(media_id)
+    except error.HTTPError as exc:
+        raw = exc.read().decode("utf-8") if exc.fp else str(exc)
+        raise ValueError(raw[:500]) from exc
+
+
+def send_whatsapp_image(
+    phone: str,
+    *,
+    media_id: str | None = None,
+    image_link: str | None = None,
+    caption: str | None = None,
+) -> SendResult:
+    return _post_meta_message(
+        _meta_image_payload(phone, media_id=media_id, image_link=image_link, caption=caption),
         phone,
     )
 
@@ -206,8 +317,33 @@ def send_bulk_template(
     template_name: str,
     language_code: str,
     body_params: list[str] | None = None,
+    image_header_link: str | None = None,
 ) -> dict[str, Any]:
     return _send_bulk(
         phones,
-        lambda phone: send_whatsapp_template(phone, template_name, language_code, body_params),
+        lambda phone: send_whatsapp_template(
+            phone,
+            template_name,
+            language_code,
+            body_params,
+            image_header_link=image_header_link,
+        ),
+    )
+
+
+def send_bulk_image(
+    phones: list[str],
+    *,
+    media_id: str | None = None,
+    image_link: str | None = None,
+    caption: str | None = None,
+) -> dict[str, Any]:
+    return _send_bulk(
+        phones,
+        lambda phone: send_whatsapp_image(
+            phone,
+            media_id=media_id,
+            image_link=image_link,
+            caption=caption,
+        ),
     )

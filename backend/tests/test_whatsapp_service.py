@@ -45,7 +45,7 @@ def test_send_bulk_text_dedupes_and_aggregates(monkeypatch):
 def test_send_bulk_template_aggregates(monkeypatch):
     calls: list[str] = []
 
-    def fake_send(phone: str, template_name: str, language_code: str, body_params=None):
+    def fake_send(phone: str, template_name: str, language_code: str, body_params=None, image_header_link=None):
         calls.append(phone)
         return SendResult(phone=phone, success=True, provider_message_id="wamid.t", status_code=200)
 

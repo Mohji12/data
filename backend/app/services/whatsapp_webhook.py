@@ -5,13 +5,16 @@ import hmac
 import json
 import logging
 import re
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import User, WhatsAppWebhookEvent
-from app.services.whatsapp import normalize_phone
+from app.models import User, WhatsAppWebhookEvent, Option
+from app.services.access import get_option_value
+from app.services.whatsapp import normalize_phone, send_whatsapp_text
+from app.services.whatsapp_session import phone_match_variants
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +67,47 @@ def _find_user_id_by_phone(db: Session, phone: str) -> Optional[int]:
         logger.debug("User lookup by phone skipped", exc_info=True)
         return None
     return int(row[0]) if row else None
+
+
+def _send_inbound_auto_reply(db: Session, from_phone: str) -> None:
+    """When a user messages the business, reply with free text (opens 24h window)."""
+    if get_option_value(db, "whatsapp_auto_reply_on_inbound") in {"0", "false", "no", "off"}:
+        return
+    row = db.query(Option).filter(Option.option_name == "whatsapp_default_template").first()
+    reply = (row.option_value or "").strip() if row else ""
+    if not reply:
+        return
+    keys = phone_match_variants(from_phone) if from_phone else set()
+    if keys:
+        recent = (
+            db.query(WhatsAppWebhookEvent.id)
+            .filter(
+                WhatsAppWebhookEvent.event_kind == "outbound:auto_reply",
+                WhatsAppWebhookEvent.phone.in_(list(keys)),
+                WhatsAppWebhookEvent.created_at >= datetime.utcnow() - timedelta(minutes=2),
+            )
+            .first()
+        )
+        if recent:
+            return
+    try:
+        phone = normalize_phone(from_phone)
+        result = send_whatsapp_text(phone, reply)
+        if not result.success:
+            logger.warning("WhatsApp auto-reply failed for %s: %s", from_phone, result.error)
+            return
+        _store_event(
+            db,
+            event_kind="outbound:auto_reply",
+            field="messages",
+            phone=from_phone,
+            wa_message_id=result.provider_message_id,
+            event_status="sent",
+            payload={"auto_reply": True, "preview": reply[:200]},
+        )
+        logger.info("WhatsApp auto-reply sent to %s", from_phone)
+    except Exception:
+        logger.exception("WhatsApp auto-reply error for %s", from_phone)
 
 
 def _store_event(
@@ -140,6 +184,8 @@ def process_whatsapp_webhook(db: Session, payload: dict[str, Any]) -> dict[str, 
                     msg_type,
                     user_id,
                 )
+                if from_phone:
+                    _send_inbound_auto_reply(db, from_phone)
 
             for status in value.get("statuses") or []:
                 if not isinstance(status, dict):

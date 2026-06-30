@@ -123,6 +123,14 @@ app.mount(
     name="quiz_images",
 )
 
+whatsapp_uploads = Path(__file__).resolve().parent.parent / "uploads" / "whatsapp"
+whatsapp_uploads.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/upload/whatsapp",
+    StaticFiles(directory=str(whatsapp_uploads)),
+    name="whatsapp_images",
+)
+
 
 @app.get("/")
 def root() -> dict:

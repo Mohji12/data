@@ -3,7 +3,8 @@ import { useState, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import { toast } from 'sonner';
-import { Search, MessageCircle, Copy, Users, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { Search, MessageCircle, Copy, Users, CheckCircle2, XCircle, Clock, ImagePlus, X } from 'lucide-react';
+import { resolvePublicUploadUrl } from '@/lib/apiBase';
 
 type BatchRow = { id: number; name: string; status: string };
 
@@ -17,19 +18,27 @@ type AdminUserRow = {
   payment_status?: string | null;
 };
 
+type UploadedWhatsAppImage = {
+  filename: string;
+  relative_path: string;
+  public_url: string | null;
+};
+
 export default function AdminWhatsApp() {
   const [q, setQ] = useState('');
   const [subscriptions, setSubscriptions] = useState<string[]>([]);
   const [approve, setApprove] = useState('');
   const [message, setMessage] = useState('');
-  const [sendMode, setSendMode] = useState<'text' | 'template' | 'custom'>('custom');
+  const [sendMode, setSendMode] = useState<'auto' | 'text' | 'template' | 'custom'>('auto');
   const [templateName, setTemplateName] = useState('');
   const [customTemplateName, setCustomTemplateName] = useState('');
   const [templateLanguage, setTemplateLanguage] = useState('en');
   const [templateBodyParams, setTemplateBodyParams] = useState('');
+  const [autoReplyOnInbound, setAutoReplyOnInbound] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [externalNumbers, setExternalNumbers] = useState('');
-  
+  const [uploadedImage, setUploadedImage] = useState<UploadedWhatsAppImage | null>(null);
+  const [imageUploading, setImageUploading] = useState(false);
   // Bulk sending state
   const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set());
   const [bulkStep, setBulkStep] = useState<number | null>(null); // null means modal closed, index otherwise
@@ -38,6 +47,8 @@ export default function AdminWhatsApp() {
     total: number;
     sent: number;
     failed: number;
+    cold_recipients?: number | null;
+    warm_recipients?: number | null;
     failures: { phone: string; error?: string; status_code?: number }[];
   } | null>(null);
   const queryClient = useQueryClient();
@@ -51,8 +62,11 @@ export default function AdminWhatsApp() {
       if (res.default_template_name) setTemplateName(res.default_template_name);
       if (res.default_template_language) setTemplateLanguage(res.default_template_language);
       if (res.custom_message_template_name) setCustomTemplateName(res.custom_message_template_name);
-      if (res.custom_message_template_language && sendMode === 'custom') {
+      if (res.custom_message_template_language && (sendMode === 'custom' || sendMode === 'auto')) {
         setTemplateLanguage(res.custom_message_template_language);
+      }
+      if (typeof res.auto_reply_on_inbound === 'boolean') {
+        setAutoReplyOnInbound(res.auto_reply_on_inbound);
       }
       return res;
     },
@@ -64,7 +78,10 @@ export default function AdminWhatsApp() {
       setIsSaving(true);
       await apiClient('/admin/whatsapp/template', {
         method: 'POST',
-        body: JSON.stringify({ template: message }),
+        body: JSON.stringify({
+          template: message,
+          auto_reply_on_inbound: autoReplyOnInbound,
+        }),
       });
       toast.success('Template saved successfully');
     } catch (e: any) {
@@ -73,6 +90,39 @@ export default function AdminWhatsApp() {
       setIsSaving(false);
     }
   };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!/^image\/(jpeg|jpg|png|webp)$/i.test(file.type)) {
+      toast.error('Use JPG, PNG, or WEBP (max 5MB)');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Image must be 5MB or smaller');
+      return;
+    }
+    setImageUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = (await apiClient('/admin/whatsapp/upload-image', {
+        method: 'POST',
+        body: fd,
+      })) as UploadedWhatsAppImage;
+      setUploadedImage(res);
+      toast.success('Image saved on server');
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Image upload failed');
+    } finally {
+      setImageUploading(false);
+    }
+  };
+
+  const imagePreviewUrl = uploadedImage
+    ? resolvePublicUploadUrl(uploadedImage.public_url || uploadedImage.relative_path)
+    : null;
 
   const logWhatsAppAction = async (userId: number) => {
     try {
@@ -190,11 +240,11 @@ export default function AdminWhatsApp() {
       if (allRecipients.length === 0) {
         throw new Error('Please select users or add external numbers');
       }
-      if (sendMode === 'text' && !message.trim()) {
-        throw new Error('Message is required for text mode');
+      if (sendMode === 'text' && !message.trim() && !uploadedImage) {
+        throw new Error('Type a message and/or attach an image');
       }
-      if (sendMode === 'custom' && !message.trim()) {
-        throw new Error('Type your custom message first');
+      if ((sendMode === 'custom' || sendMode === 'auto') && !message.trim() && !uploadedImage) {
+        throw new Error('Type your message first (and/or attach an image)');
       }
       if (sendMode === 'template' && !templateName.trim()) {
         throw new Error('Template name is required for template mode');
@@ -213,15 +263,18 @@ export default function AdminWhatsApp() {
         body: JSON.stringify({
           send_mode: sendMode,
           message:
-            sendMode === 'text' || sendMode === 'custom' ? message.trim() : null,
+            sendMode === 'text' || sendMode === 'custom' || sendMode === 'auto'
+              ? message.trim()
+              : null,
           template_name:
-            sendMode === 'custom'
+            sendMode === 'custom' || sendMode === 'auto'
               ? customTemplateName.trim() || null
               : sendMode === 'template'
                 ? templateName.trim()
                 : null,
           template_language: templateLanguage.trim() || 'en',
           template_body_params: sendMode === 'template' ? bodyParams : [],
+          image_filename: uploadedImage?.filename || null,
           recipients,
           dedupe: true,
         }),
@@ -232,9 +285,15 @@ export default function AdminWhatsApp() {
         total: Number(res?.total || 0),
         sent: Number(res?.sent || 0),
         failed: Number(res?.failed || 0),
+        cold_recipients: res?.cold_recipients ?? null,
+        warm_recipients: res?.warm_recipients ?? null,
         failures: Array.isArray(res?.failures) ? res.failures : [],
       });
-      toast.success(`Bulk dispatch finished. Sent ${res?.sent || 0}/${res?.total || 0}`);
+      const cold = res?.cold_recipients;
+      const warm = res?.warm_recipients;
+      const extra =
+        cold != null && warm != null ? ` (${cold} first-time via template, ${warm} free text)` : '';
+      toast.success(`Bulk dispatch finished. Sent ${res?.sent || 0}/${res?.total || 0}${extra}`);
       queryClient.invalidateQueries({ queryKey: ['adminUsers'] });
     },
     onError: (e: any) => {
@@ -292,8 +351,62 @@ export default function AdminWhatsApp() {
             >
               {isSaving ? 'Saving...' : 'Save as default draft'}
             </button>
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoReplyOnInbound}
+                onChange={(e) => setAutoReplyOnInbound(e.target.checked)}
+                className="mt-0.5 rounded-sm border-border-soft text-mint focus:ring-mint"
+              />
+              <span className="text-[10px] text-ink-faint leading-relaxed">
+                <strong>Auto-reply when user messages first</strong> — sends this draft as free text when someone
+                texts your business number (opens the 24h window for follow-ups).
+              </span>
+            </label>
             <p className="text-[10px] text-ink-faint">
-              Used for <strong>Custom message (API)</strong> and pre-filled when you open WhatsApp manually (icon per user).
+              Used for <strong>Auto / Custom (API)</strong> and pre-filled when you open WhatsApp manually (icon per user).
+            </p>
+          </div>
+
+          <div className="bg-chalk border border-border-soft rounded-sm p-6 space-y-4 shadow-sm">
+            <h3 className="font-sans text-sm font-semibold text-slate flex items-center gap-2">
+              <ImagePlus size={16} className="text-sky-500" />
+              Attach image (optional)
+            </h3>
+            <label className="block">
+              <span className="sr-only">Upload image</span>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                disabled={imageUploading}
+                onChange={(e) => void handleImageUpload(e)}
+                className="block w-full text-xs text-ink-muted file:mr-3 file:py-2 file:px-3 file:rounded-sm file:border-0 file:bg-slate file:text-chalk file:font-semibold"
+              />
+            </label>
+            {imageUploading && (
+              <p className="font-mono text-[10px] text-ink-faint animate-pulse">Uploading…</p>
+            )}
+            {uploadedImage && imagePreviewUrl && (
+              <div className="relative border border-border-soft rounded-sm overflow-hidden bg-chalk-warm">
+                <img src={imagePreviewUrl} alt="WhatsApp attachment preview" className="w-full max-h-40 object-contain" />
+                <button
+                  type="button"
+                  onClick={() => setUploadedImage(null)}
+                  className="absolute top-2 right-2 p-1 rounded-full bg-slate/80 text-chalk hover:bg-slate"
+                  title="Remove image"
+                >
+                  <X size={14} />
+                </button>
+                <p className="font-mono text-[9px] text-ink-faint p-2 truncate" title={uploadedImage.filename}>
+                  Stored: {uploadedImage.filename}
+                </p>
+              </div>
+            )}
+            <p className="text-[10px] text-ink-faint leading-relaxed">
+              Image is saved under <code className="font-mono">uploads/whatsapp/</code> on the server.
+              <strong> Free text</strong> mode sends image + caption via API (24h window).
+              <strong> Custom/template</strong> modes need an approved Meta template with <strong>IMAGE</strong> header and public HTTPS{' '}
+              <code className="font-mono">API_PUBLIC_BASE_URL</code>.
             </p>
           </div>
 
@@ -336,15 +449,45 @@ export default function AdminWhatsApp() {
               <label className="font-mono text-[10px] text-ink-faint uppercase tracking-wide">Send mode</label>
               <select
                 value={sendMode}
-                onChange={(e) => setSendMode(e.target.value as 'text' | 'template' | 'custom')}
+                onChange={(e) => setSendMode(e.target.value as 'auto' | 'text' | 'template' | 'custom')}
                 className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm focus:outline-none focus:border-mint transition-colors"
               >
-                <option value="custom">Custom message (approved Meta template)</option>
+                <option value="auto">Auto (recommended) — template for first contact, free text after</option>
+                <option value="custom">Custom message (approved Meta template for everyone)</option>
                 <option value="text">Free text (user replied in last 24h only)</option>
                 <option value="template">Fixed Meta template + variables</option>
               </select>
             </div>
-            {sendMode === 'custom' ? (
+            {sendMode === 'auto' ? (
+              <div className="space-y-3">
+                <p className="text-[10px] text-ink-faint leading-relaxed">
+                  <strong>First-time recipients</strong> get your message via an approved Meta template (
+                  <code className="font-mono">{'{{1}}'}</code> = your text above).
+                  <strong> Users who messaged you in the last 24h</strong> get free text (or image + caption).
+                  Enable <strong>auto-reply</strong> above so new contacts get your draft when they message you first.
+                </p>
+                <div>
+                  <label className="font-mono text-[10px] text-ink-faint uppercase tracking-wide">
+                    First-contact template name
+                  </label>
+                  <input
+                    value={customTemplateName}
+                    onChange={(e) => setCustomTemplateName(e.target.value)}
+                    placeholder="From WHATSAPP_CUSTOM_MESSAGE_TEMPLATE or Meta"
+                    className="mt-1 w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm focus:outline-none focus:border-mint transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="font-mono text-[10px] text-ink-faint uppercase tracking-wide">Language code</label>
+                  <input
+                    value={templateLanguage}
+                    onChange={(e) => setTemplateLanguage(e.target.value)}
+                    placeholder="en or en_US"
+                    className="mt-1 w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm focus:outline-none focus:border-mint transition-colors"
+                  />
+                </div>
+              </div>
+            ) : sendMode === 'custom' ? (
               <div className="space-y-3">
                 <p className="text-[10px] text-ink-faint leading-relaxed">
                   Your text above is sent as template variable <code className="font-mono">{'{{1}}'}</code>.
@@ -413,23 +556,30 @@ export default function AdminWhatsApp() {
               disabled={
                 bulkSendMutation.isPending ||
                 allRecipients.length === 0 ||
-                (sendMode === 'text' || sendMode === 'custom'
-                  ? !message.trim()
-                  : !templateName.trim())
+                (sendMode === 'text'
+                  ? !message.trim() && !uploadedImage
+                  : sendMode === 'custom' || sendMode === 'auto'
+                    ? !message.trim() && !uploadedImage
+                    : !templateName.trim())
               }
               onClick={() => bulkSendMutation.mutate()}
               className="w-full bg-slate text-chalk rounded-sm px-4 py-2 font-sans text-[11px] font-bold hover:bg-slate-light transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {bulkSendMutation.isPending
                 ? 'Sending via API...'
-                : sendMode === 'custom'
-                  ? `Send custom message (${allRecipients.length})`
-                  : `Send via API (${allRecipients.length})`}
+                : sendMode === 'auto'
+                  ? `Send auto (${allRecipients.length})`
+                  : sendMode === 'custom'
+                    ? `Send custom message (${allRecipients.length})`
+                    : `Send via API (${allRecipients.length})`}
             </button>
             {apiResult && (
               <div className="rounded-sm border border-border-soft bg-chalk-warm p-3 space-y-1">
                 <p className="font-mono text-[10px] text-slate uppercase tracking-wide">
                   Result: {apiResult.sent}/{apiResult.total} sent, {apiResult.failed} failed
+                  {apiResult.cold_recipients != null && apiResult.warm_recipients != null
+                    ? ` · ${apiResult.cold_recipients} template, ${apiResult.warm_recipients} free text`
+                    : ''}
                 </p>
                 {apiResult.failures.length > 0 && (
                   <div className="max-h-24 overflow-y-auto space-y-1">
