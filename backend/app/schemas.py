@@ -332,6 +332,18 @@ class PayableAmountResponse(BaseModel):
     discount_percent_used: float = 0.0
 
 
+class RegistrationIdentityCheckRequest(BaseModel):
+    email: str
+    contact_number: str
+
+
+class RegistrationIdentityCheckResponse(BaseModel):
+    available: bool
+    email_taken: bool = False
+    phone_taken: bool = False
+    message: str | None = None
+
+
 class RegistrationInitRequest(BaseModel):
     batch_slug: str
     registration_type: str

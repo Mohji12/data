@@ -43,6 +43,7 @@ export default function Register() {
     document_file: '',
   });
   const [loading, setLoading] = useState(false);
+  const [identityChecking, setIdentityChecking] = useState(false);
   const navigate = useNavigate();
 
   const {
@@ -501,6 +502,29 @@ export default function Register() {
                 alert("Please enter a valid 10-digit mobile number");
                 return;
             }
+            setIdentityChecking(true);
+            try {
+              const identity = await apiClient('/registration/check-identity', {
+                method: 'POST',
+                body: JSON.stringify({
+                  email: String(form.email || '').trim().toLowerCase(),
+                  contact_number: String(form.phone || '').trim(),
+                }),
+              }) as { available?: boolean; message?: string };
+              if (!identity?.available) {
+                alert(identity?.message || 'This email or mobile number is already registered. Please log in instead.');
+                return;
+              }
+            } catch (err: unknown) {
+              const msg =
+                (err as { detail?: string; message?: string })?.detail ||
+                (err as { message?: string })?.message ||
+                'Could not verify email and mobile number. Please try again.';
+              alert(msg);
+              return;
+            } finally {
+              setIdentityChecking(false);
+            }
         }
         if (step === 1) {
             if (!form.batch_slug || !form.hospital || !form.state || !form.city || !form.pin_code) {
@@ -893,7 +917,7 @@ export default function Register() {
             )}
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || identityChecking}
               className={`magnetic rounded-sm px-8 py-3 min-h-[46px] font-sans font-semibold text-sm transition-all border ${step === 0 ? 'ml-auto' : ''} ${
                 isPaymentStep
                   ? 'bg-slate text-chalk border-slate hover:bg-slate-light shadow-sm'
@@ -901,7 +925,7 @@ export default function Register() {
               } disabled:opacity-60`}
             >
               <span className="inline-flex items-center justify-center w-full font-semibold tracking-[0.01em]">
-                {loading ? 'Processing...' : isPaymentStep ? 'Pay & Register →' : 'Continue →'}
+                {identityChecking ? 'Checking...' : loading ? 'Processing...' : isPaymentStep ? 'Pay & Register →' : 'Continue →'}
               </span>
             </button>
           </div>

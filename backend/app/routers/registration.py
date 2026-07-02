@@ -22,6 +22,8 @@ from app.schemas import (
     PaymentFinalizeResponse,
     PaymentOrderRequest,
     PaymentOrderResponse,
+    RegistrationIdentityCheckRequest,
+    RegistrationIdentityCheckResponse,
     RegistrationInitRequest,
     RegistrationInitResponse,
     RegistrationStatusResponse,
@@ -42,6 +44,7 @@ from app.services.registration import (
     package_subscription_for_batch,
     build_fee_structure_response,
     check_old_student_discount,
+    check_registration_identity,
     get_payable_amount,
     get_registration_batch,
     initialize_registration,
@@ -241,6 +244,17 @@ def old_student_check(
     db: Session = Depends(get_db),
 ) -> OldStudentCheckResponse:
     return check_old_student_discount(db, payload.email, payload.subscription)
+
+
+@router.post("/check-identity", response_model=RegistrationIdentityCheckResponse)
+def registration_check_identity(
+    payload: RegistrationIdentityCheckRequest,
+    db: Session = Depends(get_db),
+) -> RegistrationIdentityCheckResponse:
+    """Step-1 guard: block duplicate email or mobile before continuing registration."""
+    return RegistrationIdentityCheckResponse(**check_registration_identity(
+        db, payload.email, payload.contact_number
+    ))
 
 
 @router.post("/payable-amount", response_model=PayableAmountResponse)
