@@ -11,11 +11,11 @@ load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 class Settings:
     def __init__(self) -> None:
-        self.db_host: str = "3.7.74.62"
-        self.db_port: int = 3306
-        self.db_user: str = "admin"
-        self.db_password: str = "HarishCC@2026SecureDB"
-        self.db_name: str = "admin_CriticalCareClasses"
+        self.db_host: str = os.getenv("DB_HOST", "13.200.205.130").strip()
+        self.db_port: int = int(os.getenv("DB_PORT", "3306"))
+        self.db_user: str = os.getenv("DB_USER", "admin").strip()
+        self.db_password: str = os.getenv("DB_PASSWORD", "").strip()
+        self.db_name: str = os.getenv("DB_NAME", "admin_CriticalCareClasses").strip()
         # If false: only verify login; never UPDATE users.password (PHP owns the 32-char hash).
         # If true: after successful login, rewrite password column to Python-computed PHP-outer hash.
         self.auth_sync_password_on_login: bool = os.getenv(
