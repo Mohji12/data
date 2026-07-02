@@ -56,6 +56,11 @@ def subscription_batch_keys(batch_name: str | None) -> set[str]:
     lowered = raw.lower()
     hyphen = batch_slug(raw)
     keys = {lowered, hyphen, lowered.replace(" ", "-"), lowered.replace("-", " ")}
+    # Canonical aliases for noisy labels like "Batch 15 - master classes ..."
+    m = re.search(r"\bbatch\s*[- ]*(\d+)\b", lowered)
+    if m:
+        n = m.group(1)
+        keys.update({f"batch {n}", f"batch-{n}"})
     return {k for k in keys if k}
 
 
@@ -111,26 +116,42 @@ def get_certificate_batch_settings(db: Session, batch_name: str | None) -> dict[
 
 
 def get_extension_batch_settings(db: Session, batch_name: str | None) -> dict[str, str]:
-    enabled_key = extension_option_key("enabled", batch_name)
-    gross_key = extension_option_key("gross_amount", batch_name)
-    gst_pct_key = extension_option_key("gst_percentage", batch_name)
-    gst_amt_key = extension_option_key("gst_amount", batch_name)
-    total_key = extension_option_key("total_amount", batch_name)
-    months_key = extension_option_key("months", batch_name)
-    start_key = extension_option_key("start_date", batch_name)
-    end_key = extension_option_key("end_date", batch_name)
-    base_key = extension_option_key("base_date", batch_name)
-    return {
-        "enabled": get_option_value(db, enabled_key) if enabled_key else "",
-        "gross_amount": get_option_value(db, gross_key) if gross_key else "",
-        "gst_percentage": get_option_value(db, gst_pct_key) if gst_pct_key else "",
-        "gst_amount": get_option_value(db, gst_amt_key) if gst_amt_key else "",
-        "total_amount": get_option_value(db, total_key) if total_key else "",
-        "months": get_option_value(db, months_key) if months_key else "",
-        "start_date": get_option_value(db, start_key) if start_key else "",
-        "end_date": get_option_value(db, end_key) if end_key else "",
-        "base_date": get_option_value(db, base_key) if base_key else "",
+    slug_candidates: list[str] = []
+    raw_slug = batch_slug(batch_name)
+    if raw_slug:
+        slug_candidates.append(raw_slug)
+    for key in subscription_batch_keys(batch_name):
+        s = batch_slug(key)
+        if s and s not in slug_candidates:
+            slug_candidates.append(s)
+
+    fallback = {
+        "enabled": "",
+        "gross_amount": "",
+        "gst_percentage": "",
+        "gst_amount": "",
+        "total_amount": "",
+        "months": "",
+        "start_date": "",
+        "end_date": "",
+        "base_date": "",
     }
+    for slug in slug_candidates:
+        out = {
+            "enabled": get_option_value(db, f"extension_enabled::{slug}"),
+            "gross_amount": get_option_value(db, f"extension_gross_amount::{slug}"),
+            "gst_percentage": get_option_value(db, f"extension_gst_percentage::{slug}"),
+            "gst_amount": get_option_value(db, f"extension_gst_amount::{slug}"),
+            "total_amount": get_option_value(db, f"extension_total_amount::{slug}"),
+            "months": get_option_value(db, f"extension_months::{slug}"),
+            "start_date": get_option_value(db, f"extension_start_date::{slug}"),
+            "end_date": get_option_value(db, f"extension_end_date::{slug}"),
+            "base_date": get_option_value(db, f"extension_base_date::{slug}"),
+        }
+        if any((v or "").strip() for v in out.values()):
+            return out
+        fallback = out
+    return fallback
 
 
 def parse_iso_date(value: str | None) -> date | None:
@@ -144,20 +165,25 @@ def parse_iso_date(value: str | None) -> date | None:
 
 
 def _user_has_extension_payment(db: Session, user: User) -> bool:
-    sub = (user.subscription or "").strip()
-    if not sub:
-        return False
-    row = (
-        db.query(UserPackagePayment.id)
+    user_keys = subscription_batch_keys(user.subscription)
+    rows = (
+        db.query(UserPackagePayment.subscription)
         .filter(
             UserPackagePayment.user_id == user.id,
             UserPackagePayment.payment_status == "Credit",
-            UserPackagePayment.package_type == "Topup Extension",
-            UserPackagePayment.subscription == sub,
+            UserPackagePayment.package_type.ilike("Topup Extension%"),
         )
-        .first()
+        .all()
     )
-    return row is not None
+    if not rows:
+        return False
+    if not user_keys:
+        return True
+    for (paid_sub,) in rows:
+        paid_keys = subscription_batch_keys(paid_sub)
+        if not paid_keys or (paid_keys & user_keys):
+            return True
+    return False
 
 
 def _latest_user_subscription(db: Session, user: User) -> UserSubscription | None:

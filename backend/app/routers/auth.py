@@ -40,6 +40,18 @@ def _user_is_approved(approve: object) -> bool:
         return int(approve) == 1
     return str(approve).strip() == "1"
 
+
+def _is_ccm2_practical_series(subscription: object) -> bool:
+    """Block login for CCM 2 Practical/Partical series users."""
+    if subscription is None:
+        return False
+    value = " ".join(str(subscription).strip().lower().split())
+    blocked = {
+        "ccm 2 partical series",
+        "ccm 2 practical series",
+    }
+    return value in blocked
+
 class LoginRequest(BaseModel):
     """Internal validation for POST /auth/login JSON.
 
@@ -121,6 +133,13 @@ def login(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
+        )
+
+    if _is_ccm2_practical_series(getattr(user, "subscription", None)):
+        logger.info("login blocked: subscription disabled for %s", email)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Login is disabled for this subscription.",
         )
 
     pwd = (request.password or "").strip()
