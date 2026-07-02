@@ -296,6 +296,9 @@ def _one_time_course_start_date(pkg: Package | None) -> date | None:
 
 
 def ensure_one_time_batch_access(db: Session, user: User) -> tuple[bool, str | None]:
+    # Paid extension creates user_subscriptions — that window overrides one-time package dates.
+    if has_active_subscription(db, user, user.subscription):
+        return True, None
     if not user.package_id:
         return True, None
     pkg = db.query(Package).filter(Package.id == user.package_id).first()
@@ -462,6 +465,9 @@ def get_subscription_period_for_profile(db: Session, user: User) -> dict | None:
 
 
 def get_extension_offer(db: Session, user: User) -> dict:
+    from app.services.payments import try_finalize_pending_extension_payment
+
+    try_finalize_pending_extension_payment(db, user)
     now = datetime.utcnow()
     if not (user.subscription or "").strip():
         return {"enabled": False, "reason": "No subscription assigned.", "extension_months": 2}

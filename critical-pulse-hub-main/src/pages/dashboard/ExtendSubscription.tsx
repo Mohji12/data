@@ -77,21 +77,45 @@ export default function ExtendSubscription() {
           name: 'Dr. Harish CCM',
           description: `Subscription Extension (${offer?.extension_months || 2} months)`,
           order_id: order.order_id,
-          handler: async (response: any) => {
+          handler: async (response: {
+            razorpay_order_id: string;
+            razorpay_payment_id: string;
+            razorpay_signature: string;
+          }) => {
+            const paymentPayload = {
+              request_id: requestId,
+              order_id: response.razorpay_order_id,
+              payment_id: response.razorpay_payment_id,
+              signature: response.razorpay_signature,
+              raw_payload: response,
+            };
             try {
-              await apiClient('/registration/payment/callback', {
+              const confirmed = (await apiClient('/registration/extension/confirm', {
                 method: 'POST',
-                body: JSON.stringify({
-                  request_id: requestId,
-                  order_id: response.razorpay_order_id,
-                  payment_id: response.razorpay_payment_id,
-                  signature: response.razorpay_signature,
-                  raw_payload: response,
-                }),
-              });
+                body: JSON.stringify(paymentPayload),
+              })) as { message?: string; extended_end_at?: string };
+              const until = confirmed?.extended_end_at
+                ? formatDisplayDate(confirmed.extended_end_at)
+                : null;
+              alert(
+                until
+                  ? `Payment successful. Your access is extended until ${until}.`
+                  : confirmed?.message || 'Payment successful. Your access has been extended.',
+              );
               navigate('/dashboard');
-            } catch (e: any) {
-              setError(e?.message || 'Payment verification failed.');
+            } catch (e: unknown) {
+              try {
+                await apiClient('/registration/extension/confirm', { method: 'POST', body: '{}' });
+                alert('Payment captured. Your access has been extended.');
+                navigate('/dashboard');
+              } catch (syncErr: unknown) {
+                const msg =
+                  (syncErr as { detail?: string; message?: string })?.detail ||
+                  (syncErr as { message?: string })?.message ||
+                  (e as { message?: string })?.message ||
+                  'Payment verification failed. Please refresh dashboard in a minute.';
+                setError(msg);
+              }
             } finally {
               setLoading(false);
             }

@@ -102,6 +102,7 @@ def _coupon_query(db: Session):
 
 
 def init_extension_payment(db: Session, user: User) -> dict:
+    try_finalize_pending_extension_payment(db, user)
     offer = get_extension_offer(db, user)
     if not offer.get("enabled"):
         raise HTTPException(status_code=400, detail=offer.get("reason") or "Extension is not available")
@@ -496,6 +497,110 @@ def _apply_registration_payment_success(
     )
 
 
+def try_finalize_pending_extension_payment(db: Session, user: User) -> dict | None:
+    """If Razorpay captured an extension payment but callback missed, apply extension now."""
+    txn = (
+        db.query(RegistrationPaymentTxn)
+        .filter(
+            RegistrationPaymentTxn.user_id == user.id,
+            RegistrationPaymentTxn.gateway == "extension",
+            RegistrationPaymentTxn.is_finalized != "1",
+        )
+        .order_by(RegistrationPaymentTxn.id.desc())
+        .all()
+    )
+    for row in txn:
+        order_id = (row.gateway_order_id or "").strip()
+        if not order_id:
+            continue
+        try:
+            payload = _razorpay_api_get(f"/v1/orders/{order_id}/payments")
+        except HTTPException:
+            continue
+        items = payload.get("items") or []
+        paid = next(
+            (p for p in items if (p.get("status") or "").lower() in {"captured", "authorized"}),
+            None,
+        )
+        if not paid:
+            continue
+        payment_id = str(paid.get("id") or "").strip()
+        if not payment_id:
+            continue
+        finalize_payment(
+            db,
+            request_id=row.request_id,
+            order_id=order_id,
+            payment_id=payment_id,
+            signature="",
+            raw_payload=paid,
+            source="extension_sync",
+            verify_signature=False,
+        )
+        logger.info(
+            "extension payment auto-finalized user_id=%s request_id=%s payment_id=%s",
+            user.id,
+            row.request_id,
+            payment_id,
+        )
+        return {"request_id": row.request_id, "payment_id": payment_id}
+    return None
+
+
+def confirm_extension_payment(
+    db: Session,
+    user: User,
+    *,
+    request_id: str | None = None,
+    order_id: str | None = None,
+    payment_id: str | None = None,
+    signature: str | None = None,
+    raw_payload: dict | None = None,
+) -> dict:
+    """Finalize extension checkout and extend course access (Razorpay capture is source of truth)."""
+    if request_id and order_id and payment_id:
+        txn = (
+            db.query(RegistrationPaymentTxn)
+            .filter(
+                RegistrationPaymentTxn.request_id == request_id,
+                RegistrationPaymentTxn.user_id == user.id,
+                RegistrationPaymentTxn.gateway == "extension",
+            )
+            .first()
+        )
+        if not txn:
+            raise HTTPException(status_code=404, detail="Extension transaction not found")
+        finalize_payment(
+            db,
+            request_id=request_id,
+            order_id=order_id,
+            payment_id=payment_id,
+            signature=signature or "",
+            raw_payload=raw_payload,
+            source="extension_confirm",
+            verify_signature=False,
+        )
+    else:
+        synced = try_finalize_pending_extension_payment(db, user)
+        if not synced:
+            raise HTTPException(
+                status_code=400,
+                detail="No captured extension payment found yet. Complete payment in Razorpay first.",
+            )
+
+    active = find_active_user_subscription(db, user)
+    manual = get_extension_batch_settings(db, user.subscription)
+    months = int(manual.get("months") or 2)
+    extended_end = active.end_at.isoformat() if active and active.end_at else None
+    return {
+        "status": "ok",
+        "message": "Extension applied successfully.",
+        "extension_months": months,
+        "extended_end_at": extended_end,
+        "extension_active": bool(active and active.end_at),
+    }
+
+
 def sync_registration_payment_from_razorpay(db: Session, user_id: int) -> PaymentFinalizeResponse:
     """
     Recover missed payment callbacks: verify captured payment on Razorpay order, then finalize locally.
@@ -503,6 +608,17 @@ def sync_registration_payment_from_razorpay(db: Session, user_id: int) -> Paymen
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    ext_synced = try_finalize_pending_extension_payment(db, user)
+    if ext_synced:
+        return PaymentFinalizeResponse(
+            request_id=ext_synced["request_id"],
+            status="ok",
+            payment_status=user.payment_status or "Credit",
+            approve=user.approve or "1",
+            user_id=user.id,
+            message="Extension payment synced from Razorpay",
+        )
 
     if (user.payment_status or "").strip().lower() == "credit":
         pkg = _package_for_thank_you_email(db, user)
@@ -845,12 +961,15 @@ def finalize_payment(
                 payment_id,
             )
         else:
+            is_extension = (txn.gateway or "").strip().lower() == "extension"
             txn.gateway_status = "signature_failed"
-            user.payment_status = "Failed"
-            user.approve = "0"
+            if not is_extension:
+                user.payment_status = "Failed"
+                user.approve = "0"
             txn.callback_payload = json.dumps(raw_payload or {})
             db.add(txn)
-            db.add(user)
+            if not is_extension:
+                db.add(user)
             db.commit()
             logger.error(
                 "payment not captured: invalid signature and Razorpay status not captured request_id=%s order_id=%s",

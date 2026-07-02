@@ -420,3 +420,19 @@ class ExtensionInitResponse(BaseModel):
     currency: str
     extension_months: int = 2
 
+
+class ExtensionConfirmRequest(BaseModel):
+    request_id: str | None = None
+    order_id: str | None = None
+    payment_id: str | None = None
+    signature: str | None = None
+    raw_payload: dict[str, Any] | None = None
+
+
+class ExtensionConfirmResponse(BaseModel):
+    status: str
+    message: str
+    extension_months: int | None = None
+    extended_end_at: str | None = None
+    extension_active: bool = False
+

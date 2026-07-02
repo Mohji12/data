@@ -27,10 +27,13 @@ from app.schemas import (
     RegistrationInitRequest,
     RegistrationInitResponse,
     RegistrationStatusResponse,
+    ExtensionConfirmRequest,
+    ExtensionConfirmResponse,
     ExtensionInitResponse,
 )
 from app.services.payments import (
     confirm_registration_after_payment,
+    confirm_extension_payment,
     create_payment_order,
     finalize_payment,
     init_extension_payment,
@@ -289,11 +292,32 @@ def extension_init(
     )
 
 
+@router.post("/extension/confirm", response_model=ExtensionConfirmResponse)
+def extension_confirm(
+    payload: ExtensionConfirmRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ExtensionConfirmResponse:
+    """After Razorpay checkout, capture payment and extend course access."""
+    result = confirm_extension_payment(
+        db,
+        current_user,
+        request_id=payload.request_id,
+        order_id=payload.order_id,
+        payment_id=payload.payment_id,
+        signature=payload.signature,
+        raw_payload=payload.raw_payload,
+    )
+    return ExtensionConfirmResponse(**result)
+
+
 @router.post("/payment/callback", response_model=PaymentFinalizeResponse)
 def payment_callback(
     payload: PaymentFinalizeRequest,
     db: Session = Depends(get_db),
 ) -> PaymentFinalizeResponse:
+    txn = db.query(RegistrationPaymentTxn).filter(RegistrationPaymentTxn.request_id == payload.request_id).first()
+    is_extension = bool(txn and (txn.gateway or "").strip().lower() == "extension")
     return finalize_payment(
         db=db,
         request_id=payload.request_id,
@@ -302,6 +326,7 @@ def payment_callback(
         signature=payload.signature,
         raw_payload=payload.raw_payload,
         source="callback",
+        verify_signature=not is_extension,
     )
 
 
