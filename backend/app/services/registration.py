@@ -1337,15 +1337,6 @@ def get_payable_amount(db: Session, payload: PayableAmountRequest) -> PayableAmo
     )
 
 
-def _contact_digits(phone: str | None) -> str:
-    return re.sub(r"\D", "", (phone or "").strip())
-
-
-def _contact_last10(phone: str | None) -> str:
-    digits = _contact_digits(phone)
-    return digits[-10:] if len(digits) >= 10 else digits
-
-
 def _user_exists_by_email(db: Session, email: str) -> bool:
     normalized = (email or "").strip().lower()
     if not normalized:
@@ -1358,39 +1349,18 @@ def _user_exists_by_email(db: Session, email: str) -> bool:
     return row is not None
 
 
-def _user_exists_by_contact(db: Session, contact_number: str) -> bool:
-    last10 = _contact_last10(contact_number)
-    if not last10 or len(last10) < 10:
-        return False
-    digits_expr = func.regexp_replace(User.contact_number, "[^0-9]", "")
-    row = (
-        db.query(User.id)
-        .filter(
-            User.contact_number.isnot(None),
-            func.trim(User.contact_number) != "",
-            func.right(digits_expr, 10) == last10,
-        )
-        .first()
-    )
-    return row is not None
-
-
 def check_registration_identity(db: Session, email: str, contact_number: str) -> dict:
-    """Return whether email/phone are free for a new registration."""
+    """Return whether email is free for a new registration (phone may be reused)."""
+    _ = contact_number  # kept for API compatibility; phone duplicates are allowed
     email_taken = _user_exists_by_email(db, email)
-    phone_taken = _user_exists_by_contact(db, contact_number)
-    if email_taken and phone_taken:
-        message = "This email and mobile number are already registered. Please log in instead."
-    elif email_taken:
+    if email_taken:
         message = "This email is already registered. Please log in or use a different email."
-    elif phone_taken:
-        message = "This mobile number is already registered. Please log in or use a different number."
     else:
         message = None
     return {
-        "available": not email_taken and not phone_taken,
+        "available": not email_taken,
         "email_taken": email_taken,
-        "phone_taken": phone_taken,
+        "phone_taken": False,
         "message": message,
     }
 

@@ -254,7 +254,7 @@ def registration_check_identity(
     payload: RegistrationIdentityCheckRequest,
     db: Session = Depends(get_db),
 ) -> RegistrationIdentityCheckResponse:
-    """Step-1 guard: block duplicate email or mobile before continuing registration."""
+    """Step-1 guard: block duplicate email before continuing registration (phone may repeat)."""
     return RegistrationIdentityCheckResponse(**check_registration_identity(
         db, payload.email, payload.contact_number
     ))

@@ -512,14 +512,14 @@ export default function Register() {
                 }),
               }) as { available?: boolean; message?: string };
               if (!identity?.available) {
-                alert(identity?.message || 'This email or mobile number is already registered. Please log in instead.');
+                alert(identity?.message || 'This email is already registered. Please log in or use a different email.');
                 return;
               }
             } catch (err: unknown) {
               const msg =
                 (err as { detail?: string; message?: string })?.detail ||
                 (err as { message?: string })?.message ||
-                'Could not verify email and mobile number. Please try again.';
+                'Could not verify email. Please try again.';
               alert(msg);
               return;
             } finally {
