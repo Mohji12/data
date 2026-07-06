@@ -62,6 +62,9 @@ def dashboard_summary(
     certificate_enabled, certificate_reason = can_access_certificate(db, current_user)
     certificate_only = is_certificate_only_user(db, current_user) and certificate_enabled
 
+    period_raw = get_subscription_period_for_profile(db, current_user)
+    batch_access = SubscriptionPeriodInfo(**period_raw) if period_raw else None
+
     return DashboardSummary(
         user_id=current_user.id,
         name=current_user.name,
@@ -72,6 +75,7 @@ def dashboard_summary(
         certificate=FeatureAccess(enabled=certificate_enabled, reason=certificate_reason),
         certificate_only=certificate_only,
         extension=get_extension_offer(db, current_user),
+        batch_access=batch_access,
     )
 
 

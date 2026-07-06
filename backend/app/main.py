@@ -35,6 +35,7 @@ from app.routers.admin_whatsapp import router as admin_whatsapp_router
 from app.routers.certificate import router as certificate_router
 from app.routers.events import router as events_router
 from app.routers.admin_events import router as admin_events_router
+from app.routers.admin_extension_requests import router as admin_extension_requests_router
 from app.routers.whatsapp_webhook import router as whatsapp_webhook_router
 
 
@@ -80,6 +81,7 @@ app.include_router(admin_whatsapp_router)
 app.include_router(certificate_router)
 app.include_router(events_router)
 app.include_router(admin_events_router)
+app.include_router(admin_extension_requests_router)
 app.include_router(whatsapp_webhook_router)
 
 # Same URL shape as PHP: files saved under uploads/registration (see uploads.save_registration_document).

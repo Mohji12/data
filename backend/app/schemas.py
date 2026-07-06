@@ -144,15 +144,18 @@ class DashboardSummary(BaseModel):
     certificate: FeatureAccess
     certificate_only: bool = False
     extension: ExtensionAccess
+    batch_access: Optional[SubscriptionPeriodInfo] = None
 
 
 class SubscriptionPeriodInfo(BaseModel):
-    """Active time-bound entitlement for subscription plan_type packages."""
+    """Active time-bound batch/course access for profile and dashboard."""
 
     plan_type: str = "one_time"
     status: Optional[str] = None
     start_at: Optional[datetime] = None
     end_at: Optional[datetime] = None
+    original_end_at: Optional[datetime] = None
+    is_extended: bool = False
     duration_months: Optional[int] = None
     days_remaining: Optional[int] = None
     extension_months: Optional[int] = None
@@ -435,4 +438,58 @@ class ExtensionConfirmResponse(BaseModel):
     extension_months: int | None = None
     extended_end_at: str | None = None
     extension_active: bool = False
+
+
+class ExtensionReportFailedRequest(BaseModel):
+    request_id: str
+    reason: str | None = None
+
+
+class ExtensionReportOfflineRequest(BaseModel):
+    request_id: str
+    offline_reference: str
+    note: str | None = None
+
+
+class ExtensionReportResponse(BaseModel):
+    status: str
+    message: str
+    gateway_status: str
+
+
+class ExtensionRequestItem(BaseModel):
+    id: int
+    request_id: str
+    user_id: int
+    user_name: str | None = None
+    user_email: str | None = None
+    user_contact: str | None = None
+    subscription: str | None = None
+    batch_slug: str | None = None
+    amount: float
+    currency: str
+    gateway_status: str
+    gateway_order_id: str | None = None
+    offline_reference: str | None = None
+    student_note: str | None = None
+    failure_reason: str | None = None
+    admin_note: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class PagedExtensionRequestsResponse(BaseModel):
+    total: int
+    items: list[ExtensionRequestItem]
+
+
+class ExtensionRequestActionPayload(BaseModel):
+    payment_details: str | None = None
+    admin_note: str | None = None
+
+
+class ExtensionRequestActionResponse(BaseModel):
+    status: str
+    message: str
+    extended_end_at: str | None = None
 

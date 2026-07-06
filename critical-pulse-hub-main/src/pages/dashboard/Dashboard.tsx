@@ -1,9 +1,21 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
 import { useOdometer } from '@/hooks/useOdometer';
-import { PlayCircle, ClipboardCheck, BookOpen, ArrowUpRight } from 'lucide-react';
+import { PlayCircle, ClipboardCheck, BookOpen, ArrowUpRight, Calendar } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
+
+function formatBatchDate(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+}
 
 export default function Dashboard() {
   const { user } = useAuthStore();
@@ -24,11 +36,34 @@ export default function Dashboard() {
   if (isLoading) return <div className="p-8 font-mono text-sm text-ink-faint">Loading real-time dashboard...</div>;
   if (error) return <div className="p-8 font-mono text-sm text-red-500">Failed to connect to real-time data API.</div>;
 
+  const batchAccess = summary?.batch_access;
+  const batchEndLabel = batchAccess?.is_extended ? 'Extended access until' : 'Batch access until';
+
   return (
     <div>
       <div className="bg-chalk border-b border-border-soft px-6 lg:px-8 py-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center">
-          <h1 className="font-display font-bold text-3xl text-slate">Good morning, {summary?.name || user?.name || 'Doctor'}.</h1>
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <div>
+            <h1 className="font-display font-bold text-3xl text-slate">Good morning, {summary?.name || user?.name || 'Doctor'}.</h1>
+            {batchAccess?.end_at && (
+              <p className="font-sans text-sm text-ink-muted mt-2 flex items-center gap-2 flex-wrap">
+                <Calendar size={14} className="text-ink-faint shrink-0" />
+                <span>
+                  <strong className="text-slate">{batchEndLabel}:</strong> {formatBatchDate(batchAccess.end_at)}
+                  {batchAccess.is_extended && batchAccess.original_end_at && (
+                    <span className="text-ink-faint">
+                      {' '}(original end: {formatBatchDate(batchAccess.original_end_at)})
+                    </span>
+                  )}
+                  {!batchAccess.is_extended && batchAccess.end_at_if_extended && batchAccess.extension_months && (
+                    <span className="text-mint">
+                      {' '}· after extension: {formatBatchDate(batchAccess.end_at_if_extended)}
+                    </span>
+                  )}
+                </span>
+              </p>
+            )}
+          </div>
         </div>
         
         {summary?.extension?.enabled && (

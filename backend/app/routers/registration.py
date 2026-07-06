@@ -30,6 +30,9 @@ from app.schemas import (
     ExtensionConfirmRequest,
     ExtensionConfirmResponse,
     ExtensionInitResponse,
+    ExtensionReportFailedRequest,
+    ExtensionReportOfflineRequest,
+    ExtensionReportResponse,
 )
 from app.services.payments import (
     confirm_registration_after_payment,
@@ -38,6 +41,8 @@ from app.services.payments import (
     finalize_payment,
     init_extension_payment,
     process_razorpay_webhook,
+    report_extension_offline_payment,
+    report_extension_payment_failed,
     _verify_webhook_signature,
 )
 from app.services.registration import (
@@ -309,6 +314,37 @@ def extension_confirm(
         raw_payload=payload.raw_payload,
     )
     return ExtensionConfirmResponse(**result)
+
+
+@router.post("/extension/report-failed", response_model=ExtensionReportResponse)
+def extension_report_failed(
+    payload: ExtensionReportFailedRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ExtensionReportResponse:
+    result = report_extension_payment_failed(
+        db,
+        current_user,
+        request_id=payload.request_id,
+        reason=payload.reason,
+    )
+    return ExtensionReportResponse(**result)
+
+
+@router.post("/extension/report-offline", response_model=ExtensionReportResponse)
+def extension_report_offline(
+    payload: ExtensionReportOfflineRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ExtensionReportResponse:
+    result = report_extension_offline_payment(
+        db,
+        current_user,
+        request_id=payload.request_id,
+        offline_reference=payload.offline_reference,
+        note=payload.note,
+    )
+    return ExtensionReportResponse(**result)
 
 
 @router.post("/payment/callback", response_model=PaymentFinalizeResponse)

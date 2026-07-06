@@ -67,6 +67,7 @@ const AdminAuditorium = lazy(() => import('@/pages/admin/AdminAuditorium'));
 const AdminVideoQuestions = lazy(() => import('@/pages/admin/AdminVideoQuestions'));
 const AdminWhatsApp = lazy(() => import('./pages/admin/AdminWhatsApp.tsx'));
 const AdminExtensions = lazy(() => import('@/pages/admin/AdminExtensions'));
+const AdminExtensionRequests = lazy(() => import('@/pages/admin/AdminExtensionRequests'));
 const AdminEventRegistrations = lazy(() => import('@/pages/admin/AdminEventRegistrations'));
 
 import { useAuthStore } from '@/store/authStore';
@@ -154,6 +155,7 @@ const App = () => {
             <Route path="payments" element={<AdminPayments />} />
             <Route path="packages" element={<AdminPackages />} />
             <Route path="extensions" element={<AdminExtensions />} />
+            <Route path="extension-requests" element={<AdminExtensionRequests />} />
             <Route path="events" element={<AdminEventRegistrations />} />
             <Route path="content/videos" element={<AdminVideos />} />
             <Route path="content/folders" element={<AdminFolders />} />

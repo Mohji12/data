@@ -8,6 +8,8 @@ type SubscriptionPeriodInfo = {
   status?: string | null;
   start_at?: string | null;
   end_at?: string | null;
+  original_end_at?: string | null;
+  is_extended?: boolean;
   duration_months?: number | null;
   days_remaining?: number | null;
   extension_months?: number | null;
@@ -35,18 +37,15 @@ type DashboardProfile = {
   subscription_period?: SubscriptionPeriodInfo | null;
 };
 
-function formatSubscriptionDate(iso: string | null | undefined): string {
+function formatBatchDate(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('en-IN', {
+  return d.toLocaleDateString('en-IN', {
     timeZone: 'Asia/Kolkata',
-    day: '2-digit',
-    month: 'short',
+    day: 'numeric',
+    month: 'long',
     year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
   });
 }
 
@@ -147,7 +146,7 @@ export default function Profile() {
   }
 
   const period = data?.subscription_period;
-  const showPeriod = period?.plan_type === 'subscription';
+  const showPeriod = Boolean(period?.end_at || period?.end_at_if_extended || period?.original_end_at);
 
   return (
     <div className="p-6 lg:p-8">
@@ -166,23 +165,33 @@ export default function Profile() {
         {showPeriod && (
           <div className="mb-8 p-5 bg-chalk-warm border border-border-soft rounded-sm">
             <h2 className="font-mono text-[11px] text-ink-faint uppercase tracking-[0.12em] mb-4">
-              Subscription access period
+              Batch access period
             </h2>
-            {period?.status === 'pending' ? (
+            {period?.status === 'pending' && !period?.end_at ? (
               <p className="font-sans text-sm text-ink-muted">
-                Your subscription period will appear here after payment is confirmed.
+                Your batch access dates will appear here after payment is confirmed.
               </p>
             ) : (
               <dl className="grid grid-cols-1 sm:grid-cols-2 gap-4 font-sans text-sm">
+                {period?.start_at && (
+                  <div>
+                    <dt className="font-mono text-[10px] text-ink-faint uppercase tracking-wider mb-1">Access starts</dt>
+                    <dd className="text-ink font-medium">{formatBatchDate(period.start_at)}</dd>
+                  </div>
+                )}
                 <div>
-                  <dt className="font-mono text-[10px] text-ink-faint uppercase tracking-wider mb-1">Starts</dt>
-                  <dd className="text-ink font-medium">{formatSubscriptionDate(period?.start_at)}</dd>
+                  <dt className="font-mono text-[10px] text-ink-faint uppercase tracking-wider mb-1">
+                    {period?.is_extended ? 'Extended access until' : 'Batch access until'}
+                  </dt>
+                  <dd className="text-ink font-medium">{formatBatchDate(period?.end_at)}</dd>
                 </div>
-                <div>
-                  <dt className="font-mono text-[10px] text-ink-faint uppercase tracking-wider mb-1">Ends</dt>
-                  <dd className="text-ink font-medium">{formatSubscriptionDate(period?.end_at)}</dd>
-                </div>
-                {period?.duration_months != null && period.duration_months > 0 && (
+                {period?.is_extended && period?.original_end_at && (
+                  <div>
+                    <dt className="font-mono text-[10px] text-ink-faint uppercase tracking-wider mb-1">Original batch end</dt>
+                    <dd className="text-ink-muted">{formatBatchDate(period.original_end_at)}</dd>
+                  </div>
+                )}
+                {period?.plan_type === 'subscription' && period?.duration_months != null && period.duration_months > 0 && (
                   <div>
                     <dt className="font-mono text-[10px] text-ink-faint uppercase tracking-wider mb-1">Plan duration</dt>
                     <dd className="text-ink">{period.duration_months} months</dd>
@@ -206,21 +215,21 @@ export default function Profile() {
                     </dd>
                   </div>
                 )}
-                {period?.extension_months != null && period?.end_at_if_extended && (
+                {!period?.is_extended && period?.extension_months != null && period?.end_at_if_extended && (
                   <div className="sm:col-span-2 pt-2 border-t border-border-soft">
                     <dt className="font-mono text-[10px] text-ink-faint uppercase tracking-wider mb-1">
-                      If you extend by {period.extension_months} months
+                      After {period.extension_months}-month extension
                     </dt>
                     <dd className="text-mint font-medium">
-                      New end date: {formatSubscriptionDate(period.end_at_if_extended)}
+                      Access until: {formatBatchDate(period.end_at_if_extended)}
                     </dd>
                   </div>
                 )}
               </dl>
             )}
-            {period?.status === 'expired' && (
+            {period?.status === 'expired' && !period?.is_extended && (
               <p className="mt-3 font-sans text-xs text-red-600">
-                Your subscription has ended. Use Extend Subscription on the dashboard if offered.
+                Your batch access has ended. Use Extend Subscription on the dashboard if offered.
               </p>
             )}
           </div>
@@ -282,6 +291,28 @@ export default function Profile() {
               <label className="font-mono text-[11px] text-ink-faint uppercase tracking-[0.12em] mb-2 block">Batch</label>
               <input value={data?.subscription || ''} disabled className="w-full bg-chalk-stone border border-border-soft rounded-sm py-3 px-4 font-sans text-sm text-ink-muted" />
             </div>
+            {period?.end_at && (
+              <div>
+                <label className="font-mono text-[11px] text-ink-faint uppercase tracking-[0.12em] mb-2 block">
+                  {period.is_extended ? 'Extended access until' : 'Batch access until'}
+                </label>
+                <input
+                  value={formatBatchDate(period.end_at)}
+                  disabled
+                  className="w-full bg-chalk-stone border border-border-soft rounded-sm py-3 px-4 font-sans text-sm text-ink-muted"
+                />
+              </div>
+            )}
+            {period?.is_extended && period?.original_end_at && (
+              <div>
+                <label className="font-mono text-[11px] text-ink-faint uppercase tracking-[0.12em] mb-2 block">Original batch end</label>
+                <input
+                  value={formatBatchDate(period.original_end_at)}
+                  disabled
+                  className="w-full bg-chalk-stone border border-border-soft rounded-sm py-3 px-4 font-sans text-sm text-ink-muted"
+                />
+              </div>
+            )}
           </div>
           <button type="submit" disabled={saveMut.isPending} className="magnetic bg-slate text-chalk rounded-sm px-6 py-3 font-sans font-semibold text-sm hover:bg-slate-light transition-all disabled:opacity-60">
             {saveMut.isPending ? 'Saving...' : 'Save Changes'}

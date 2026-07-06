@@ -412,51 +412,124 @@ def can_access_mock_test(db: Session, user: User) -> tuple[bool, str | None]:
 
 
 def get_subscription_period_for_profile(db: Session, user: User) -> dict | None:
-    """Subscription window for profile UI; None when plan is not time-bound."""
+    """Batch/course access window for profile and dashboard (one_time + subscription, incl. extension)."""
     pkg = db.query(Package).filter(Package.id == user.package_id).first() if user.package_id else None
     plan_type = (pkg.plan_type or "one_time").strip().lower() if pkg else "one_time"
-    if plan_type != "subscription":
+    manual = get_extension_batch_settings(db, user.subscription)
+    extension_batch_configured = (manual.get("enabled") or "").strip() == "1"
+    has_extended = _user_has_extension_payment(db, user)
+    now = datetime.utcnow()
+
+    active_sub = find_active_user_subscription(db, user)
+    sub_row = active_sub or _latest_user_subscription(db, user)
+
+    pkg_start_dt: datetime | None = None
+    pkg_end_dt: datetime | None = None
+    if pkg and plan_type == "one_time":
+        start_d = _one_time_course_start_date(pkg)
+        end_d = _one_time_course_end_date(pkg)
+        if start_d:
+            pkg_start_dt = datetime.combine(start_d, datetime.min.time())
+        if end_d:
+            pkg_end_dt = datetime.combine(end_d, datetime.max.time()).replace(microsecond=0)
+
+    official_batch_end = _extension_batch_end_at(manual, sub_row if not has_extended else None)
+    if not official_batch_end and pkg_end_dt:
+        official_batch_end = pkg_end_dt
+    if not official_batch_end and sub_row and sub_row.end_at and not has_extended:
+        official_batch_end = sub_row.end_at
+
+    if plan_type == "subscription" and not sub_row and not pkg:
         return None
 
-    now = datetime.utcnow()
-    active = find_active_user_subscription(db, user)
-    if not active:
-        expired = (
-            db.query(UserSubscription)
-            .filter(UserSubscription.user_id == user.id)
-            .order_by(UserSubscription.end_at.desc())
-            .first()
-        )
-        if not expired:
-            return {
-                "plan_type": "subscription",
-                "status": "pending",
-                "start_at": None,
-                "end_at": None,
-                "duration_months": int(pkg.duration_months or 0) if pkg and pkg.duration_months else None,
-                "days_remaining": None,
-                "extension_months": None,
-                "end_at_if_extended": None,
-            }
-        active = expired
-        status = "expired"
-    else:
-        status = "active" if active.start_at <= now <= active.end_at else "expired"
+    if plan_type == "subscription" and not sub_row:
+        return {
+            "plan_type": "subscription",
+            "status": "pending",
+            "start_at": None,
+            "end_at": None,
+            "original_end_at": None,
+            "is_extended": False,
+            "duration_months": int(pkg.duration_months or 0) if pkg and pkg.duration_months else None,
+            "days_remaining": None,
+            "extension_months": None,
+            "end_at_if_extended": None,
+        }
 
-    days_remaining = (active.end_at.date() - now.date()).days if active.end_at else None
-    duration = int(active.duration_months or 0) or (int(pkg.duration_months or 0) if pkg else 0) or None
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+
+    if has_extended and sub_row and sub_row.end_at:
+        end_at = sub_row.end_at
+        start_at = sub_row.start_at
+    elif plan_type == "subscription" and sub_row:
+        end_at = sub_row.end_at
+        start_at = sub_row.start_at
+    elif has_active_subscription(db, user) and sub_row and sub_row.end_at:
+        end_at = sub_row.end_at
+        start_at = sub_row.start_at
+    else:
+        end_at = official_batch_end or pkg_end_dt
+        start_at = pkg_start_dt or user.payment_date or user.created_at
+
+    if not end_at and not official_batch_end:
+        if not extension_batch_configured and plan_type != "subscription":
+            return None
+
+    if not end_at:
+        end_at = official_batch_end
+
+    if not end_at and plan_type == "subscription":
+        return {
+            "plan_type": "subscription",
+            "status": "pending",
+            "start_at": start_at,
+            "end_at": None,
+            "original_end_at": None,
+            "is_extended": False,
+            "duration_months": int(pkg.duration_months or 0) if pkg and pkg.duration_months else None,
+            "days_remaining": None,
+            "extension_months": None,
+            "end_at_if_extended": None,
+        }
+
+    if sub_row and sub_row.end_at and now > sub_row.end_at and not has_extended and plan_type == "subscription":
+        status = "expired"
+    elif start_at and now < start_at:
+        status = "pending"
+    elif end_at and now > end_at:
+        status = "expired"
+    elif active_sub and active_sub.start_at <= now <= active_sub.end_at:
+        status = "active"
+    elif has_extended and end_at and now <= end_at:
+        status = "active"
+    else:
+        status = "active" if end_at and now <= end_at else "expired"
+
+    days_remaining = (end_at.date() - now.date()).days if end_at else None
+    duration = None
+    if sub_row and sub_row.duration_months:
+        duration = int(sub_row.duration_months)
+    elif pkg and pkg.duration_months:
+        duration = int(pkg.duration_months)
+
+    original_end_at = official_batch_end if has_extended else None
 
     offer = get_extension_offer(db, user)
     ext_months = int(offer.get("extension_months") or 0) if offer.get("enabled") else None
     end_if_extended = None
-    if ext_months and active.end_at:
-        end_if_extended = _add_months(active.end_at, ext_months)
+    if ext_months and not has_extended:
+        projection_base = official_batch_end or end_at
+        if projection_base:
+            end_if_extended = _add_months(projection_base, ext_months)
 
     return {
-        "plan_type": "subscription",
+        "plan_type": plan_type,
         "status": status,
-        "start_at": active.start_at,
-        "end_at": active.end_at,
+        "start_at": start_at,
+        "end_at": end_at,
+        "original_end_at": original_end_at,
+        "is_extended": has_extended,
         "duration_months": duration,
         "days_remaining": days_remaining,
         "extension_months": ext_months,

@@ -26,6 +26,7 @@ import {
   CircleHelp,
   Send,
   Mail,
+  Clock,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
@@ -55,6 +56,7 @@ const navItems = [
       { label: 'Payments', to: '/admin/payments', icon: CreditCard },
       { label: 'Packages', to: '/admin/packages', icon: Package },
       { label: 'Extensions', to: '/admin/extensions', icon: Layers },
+      { label: 'Extension requests', to: '/admin/extension-requests', icon: Clock },
       { label: 'Coupons', to: '/admin/coupons', icon: Ticket },
       { label: 'Event registrations', to: '/admin/events', icon: CalendarDays },
     ],

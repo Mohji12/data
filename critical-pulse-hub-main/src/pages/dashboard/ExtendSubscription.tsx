@@ -35,6 +35,12 @@ export default function ExtendSubscription() {
   const [offerLoading, setOfferLoading] = useState(true);
   const [offer, setOffer] = useState<ExtensionOffer | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [showOfflineForm, setShowOfflineForm] = useState(false);
+  const [offlineReference, setOfflineReference] = useState('');
+  const [offlineNote, setOfflineNote] = useState('');
+  const [offlineSubmitting, setOfflineSubmitting] = useState(false);
+  const [offlineSuccess, setOfflineSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     apiClient('/dashboard/extension-offer')
@@ -45,17 +51,58 @@ export default function ExtendSubscription() {
 
   const isForeign = offer?.currency_name === 'USD';
   const displayAmount = offer?.estimated_amount ?? 0;
-  const displayCurrency = offer?.currency_name || 'INR';
   const paymentAmountINR = offer?.payment_amount_inr ?? displayAmount;
+
+  const reportPaymentFailed = async (requestId: string, reason?: string) => {
+    try {
+      await apiClient('/registration/extension/report-failed', {
+        method: 'POST',
+        body: JSON.stringify({ request_id: requestId, reason: reason || undefined }),
+      });
+      setShowOfflineForm(true);
+    } catch {
+      setShowOfflineForm(true);
+    }
+  };
+
+  const handleOfflineSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeRequestId || !offlineReference.trim()) return;
+    setOfflineSubmitting(true);
+    setError(null);
+    try {
+      const res = (await apiClient('/registration/extension/report-offline', {
+        method: 'POST',
+        body: JSON.stringify({
+          request_id: activeRequestId,
+          offline_reference: offlineReference.trim(),
+          note: offlineNote.trim() || undefined,
+        }),
+      })) as { message?: string };
+      setOfflineSuccess(res?.message || 'Submitted for admin review.');
+      setShowOfflineForm(false);
+    } catch (err: unknown) {
+      const msg =
+        (err as { detail?: string; message?: string })?.detail ||
+        (err as { message?: string })?.message ||
+        'Could not submit offline payment details.';
+      setError(msg);
+    } finally {
+      setOfflineSubmitting(false);
+    }
+  };
 
   const handleExtend = async () => {
     setLoading(true);
     setError(null);
+    setOfflineSuccess(null);
+    setShowOfflineForm(false);
     try {
       const init = await apiClient('/registration/extension/init', {
         method: 'POST',
       });
       const requestId = init.request_id as string;
+      setActiveRequestId(requestId);
       const order = await apiClient('/registration/payment/order', {
         method: 'POST',
         body: JSON.stringify({ request_id: requestId }),
@@ -121,7 +168,11 @@ export default function ExtendSubscription() {
             }
           },
           modal: {
-            ondismiss: () => setLoading(false),
+            ondismiss: () => {
+              void reportPaymentFailed(requestId, 'Checkout closed without payment');
+              setError('Payment was not completed. You can submit offline payment details below.');
+              setLoading(false);
+            },
           },
           prefill: {
             name: user?.name || '',
@@ -130,16 +181,17 @@ export default function ExtendSubscription() {
           theme: { color: '#00C897' },
         };
         const rzp = new (window as any).Razorpay(options);
-        rzp.on('payment.failed', (resp: any) => {
+        rzp.on('payment.failed', (resp: { error?: { description?: string; reason?: string } }) => {
           const desc = resp?.error?.description || resp?.error?.reason || 'Payment failed';
+          void reportPaymentFailed(requestId, desc);
           setError(`Payment was not completed: ${desc}`);
           setLoading(false);
         });
         rzp.open();
       };
       document.body.appendChild(script);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to initiate extension payment.');
+    } catch (e: unknown) {
+      setError((e as { message?: string })?.message || 'Failed to initiate extension payment.');
       setLoading(false);
     }
   };
@@ -186,7 +238,6 @@ export default function ExtendSubscription() {
         </p>
       )}
 
-      {/* Pricing Card */}
       <div className="bg-chalk border border-border-soft rounded-sm p-5 mb-6 space-y-3 shadow-sm">
         <h3 className="font-mono text-[10px] text-ink-faint uppercase tracking-wider">Pricing Summary</h3>
 
@@ -233,12 +284,15 @@ export default function ExtendSubscription() {
       </div>
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 border border-red-100 rounded-sm px-4 py-3">{error}</div>}
+      {offlineSuccess && (
+        <div className="mb-4 text-sm text-mint bg-mint/10 border border-mint/20 rounded-sm px-4 py-3">{offlineSuccess}</div>
+      )}
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 mb-6">
         <button
           type="button"
           onClick={() => void handleExtend()}
-          disabled={loading}
+          disabled={loading || offlineSubmitting}
           className="magnetic bg-slate text-chalk rounded-sm px-6 py-3 font-sans font-semibold text-sm hover:bg-slate-light disabled:opacity-50"
         >
           {loading ? 'Processing…' : `Pay ₹${paymentAmountINR.toLocaleString()} & Extend`}
@@ -247,6 +301,51 @@ export default function ExtendSubscription() {
           Cancel
         </Link>
       </div>
+
+      {showOfflineForm && !offlineSuccess && (
+        <div className="bg-chalk-warm border border-border-soft rounded-sm p-5 space-y-4">
+          <div>
+            <h2 className="font-sans font-semibold text-slate text-sm">Paid offline instead?</h2>
+            <p className="font-sans text-xs text-ink-muted mt-1">
+              If your online payment failed but you transferred the amount via bank/UPI, submit your transaction reference for admin approval.
+            </p>
+          </div>
+          <form className="space-y-3" onSubmit={(e) => void handleOfflineSubmit(e)}>
+            <div>
+              <label className="block font-mono text-[10px] text-ink-faint uppercase tracking-wider mb-1">
+                Transaction reference / UTR
+              </label>
+              <input
+                type="text"
+                required
+                value={offlineReference}
+                onChange={(e) => setOfflineReference(e.target.value)}
+                className="w-full bg-chalk border border-border-soft rounded-sm py-2 px-3 text-sm outline-none focus:border-mint/50"
+                placeholder="e.g. UTR or bank reference number"
+              />
+            </div>
+            <div>
+              <label className="block font-mono text-[10px] text-ink-faint uppercase tracking-wider mb-1">
+                Note (optional)
+              </label>
+              <textarea
+                value={offlineNote}
+                onChange={(e) => setOfflineNote(e.target.value)}
+                rows={2}
+                className="w-full bg-chalk border border-border-soft rounded-sm py-2 px-3 text-sm outline-none focus:border-mint/50 resize-none"
+                placeholder="Payment date, bank name, or other details"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={offlineSubmitting || !activeRequestId || !offlineReference.trim()}
+              className="bg-mint text-slate rounded-sm px-5 py-2 font-sans text-sm font-semibold disabled:opacity-50"
+            >
+              {offlineSubmitting ? 'Submitting…' : 'Submit for admin review'}
+            </button>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

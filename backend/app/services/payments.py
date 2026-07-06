@@ -24,6 +24,7 @@ from app.services.email_templates import (
 )
 from app.services.mailer import send_html_email
 from app.services.access import (
+    _user_has_extension_payment,
     batch_slug,
     find_active_user_subscription,
     get_extension_batch_settings,
@@ -384,6 +385,222 @@ def _send_registration_thank_you_email(db: Session, user: User, pkg: Package | N
         return False
 
 
+def _parse_txn_callback_payload(txn: RegistrationPaymentTxn) -> dict:
+    raw = (txn.callback_payload or "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def _merge_txn_callback_payload(txn: RegistrationPaymentTxn, updates: dict) -> dict:
+    data = _parse_txn_callback_payload(txn)
+    for key, value in updates.items():
+        if value is not None:
+            data[key] = value
+    txn.callback_payload = json.dumps(data)
+    return data
+
+
+def extension_txn_payload_fields(txn: RegistrationPaymentTxn) -> dict[str, str | None]:
+    data = _parse_txn_callback_payload(txn)
+    return {
+        "offline_reference": (data.get("offline_reference") or "").strip() or None,
+        "student_note": (data.get("student_note") or "").strip() or None,
+        "failure_reason": (data.get("failure_reason") or "").strip() or None,
+        "admin_note": (data.get("admin_note") or "").strip() or None,
+    }
+
+
+def _get_pending_extension_txn(db: Session, user: User, request_id: str) -> RegistrationPaymentTxn:
+    rid = (request_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=422, detail="request_id is required")
+    txn = (
+        db.query(RegistrationPaymentTxn)
+        .filter(
+            RegistrationPaymentTxn.request_id == rid,
+            RegistrationPaymentTxn.user_id == user.id,
+            RegistrationPaymentTxn.gateway == "extension",
+        )
+        .first()
+    )
+    if not txn:
+        raise HTTPException(status_code=404, detail="Extension transaction not found")
+    if (txn.is_finalized or "").strip() == "1":
+        raise HTTPException(status_code=400, detail="This extension payment is already finalized.")
+    status = (txn.gateway_status or "").strip().lower()
+    if status == "rejected":
+        raise HTTPException(status_code=400, detail="This extension request was rejected. Start a new extension payment.")
+    return txn
+
+
+def report_extension_payment_failed(
+    db: Session,
+    user: User,
+    *,
+    request_id: str,
+    reason: str | None = None,
+) -> dict:
+    txn = _get_pending_extension_txn(db, user, request_id)
+    txn.gateway_status = "payment_failed"
+    _merge_txn_callback_payload(txn, {"failure_reason": (reason or "").strip() or None})
+    db.add(txn)
+    db.commit()
+    return {
+        "status": "ok",
+        "message": "Payment failure recorded.",
+        "gateway_status": txn.gateway_status,
+    }
+
+
+def report_extension_offline_payment(
+    db: Session,
+    user: User,
+    *,
+    request_id: str,
+    offline_reference: str,
+    note: str | None = None,
+) -> dict:
+    ref = (offline_reference or "").strip()
+    if not ref:
+        raise HTTPException(status_code=422, detail="offline_reference is required")
+    txn = _get_pending_extension_txn(db, user, request_id)
+    txn.gateway_status = "pending_offline"
+    _merge_txn_callback_payload(
+        txn,
+        {
+            "offline_reference": ref,
+            "student_note": (note or "").strip() or None,
+        },
+    )
+    db.add(txn)
+    db.commit()
+    return {
+        "status": "ok",
+        "message": "Offline payment details submitted for admin review.",
+        "gateway_status": txn.gateway_status,
+    }
+
+
+def apply_offline_extension_credit(
+    db: Session,
+    txn: RegistrationPaymentTxn,
+    *,
+    payment_details: str | None = None,
+    admin_note: str | None = None,
+) -> dict:
+    if (txn.gateway or "").strip().lower() != "extension":
+        raise HTTPException(status_code=400, detail="Not an extension transaction")
+    if (txn.is_finalized or "").strip() == "1":
+        raise HTTPException(status_code=400, detail="Extension payment already finalized")
+    status = (txn.gateway_status or "").strip().lower()
+    if status == "rejected":
+        raise HTTPException(status_code=400, detail="Cannot approve a rejected extension request")
+
+    user = db.query(User).filter(User.id == txn.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if _user_has_extension_payment(db, user):
+        raise HTTPException(status_code=400, detail="User already has an approved extension payment")
+
+    now = datetime.utcnow()
+    payment_id = f"offline_ext_{user.id}_{int(now.timestamp())}"
+    payload = {
+        "source": "admin_offline_extension",
+        "details": payment_details or "",
+        "admin_note": admin_note or "",
+        **_parse_txn_callback_payload(txn),
+    }
+    _apply_registration_payment_success(
+        db,
+        txn=txn,
+        user=user,
+        order_id=(txn.gateway_order_id or txn.request_id),
+        payment_id=payment_id,
+        signature="",
+        raw_payload=payload,
+        source="admin_offline_extension",
+        payment_type="Offline",
+    )
+
+    active = find_active_user_subscription(db, user)
+    extended_end = active.end_at.isoformat() if active and active.end_at else None
+    return {
+        "status": "ok",
+        "message": "Extension approved and applied.",
+        "extended_end_at": extended_end,
+    }
+
+
+def reject_extension_request(
+    db: Session,
+    txn: RegistrationPaymentTxn,
+    *,
+    admin_note: str | None = None,
+) -> dict:
+    if (txn.gateway or "").strip().lower() != "extension":
+        raise HTTPException(status_code=400, detail="Not an extension transaction")
+    if (txn.is_finalized or "").strip() == "1":
+        raise HTTPException(status_code=400, detail="Extension payment already finalized")
+    txn.gateway_status = "rejected"
+    _merge_txn_callback_payload(txn, {"admin_note": (admin_note or "").strip() or None})
+    db.add(txn)
+    db.commit()
+    return {"status": "ok", "message": "Extension request rejected."}
+
+
+def try_finalize_extension_txn(db: Session, txn: RegistrationPaymentTxn) -> dict | None:
+    """Try to finalize one extension txn from Razorpay capture (admin sync)."""
+    if (txn.gateway or "").strip().lower() != "extension":
+        raise HTTPException(status_code=400, detail="Not an extension transaction")
+    if (txn.is_finalized or "").strip() == "1":
+        return {"request_id": txn.request_id, "payment_id": txn.gateway_payment_id or ""}
+
+    order_id = (txn.gateway_order_id or "").strip()
+    if not order_id:
+        raise HTTPException(status_code=400, detail="No Razorpay order id on this request")
+
+    user = db.query(User).filter(User.id == txn.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    try:
+        payload = _razorpay_api_get(f"/v1/orders/{order_id}/payments")
+    except HTTPException as exc:
+        raise HTTPException(status_code=400, detail="Could not verify payment with Razorpay") from exc
+
+    items = payload.get("items") or []
+    paid = next(
+        (p for p in items if (p.get("status") or "").lower() in {"captured", "authorized"}),
+        None,
+    )
+    if not paid:
+        raise HTTPException(
+            status_code=400,
+            detail="Razorpay has no captured payment for this order yet.",
+        )
+
+    payment_id = str(paid.get("id") or "").strip()
+    if not payment_id:
+        raise HTTPException(status_code=502, detail="Razorpay returned a payment without an id")
+
+    finalize_payment(
+        db,
+        request_id=txn.request_id,
+        order_id=order_id,
+        payment_id=payment_id,
+        signature="",
+        raw_payload=paid,
+        source="extension_admin_sync",
+        verify_signature=False,
+    )
+    return {"request_id": txn.request_id, "payment_id": payment_id}
+
+
 def _apply_registration_payment_success(
     db: Session,
     *,
@@ -729,6 +946,7 @@ def apply_offline_registration_credit(
         .filter(
             RegistrationPaymentTxn.user_id == user.id,
             RegistrationPaymentTxn.is_finalized != "1",
+            RegistrationPaymentTxn.gateway != "extension",
         )
         .order_by(RegistrationPaymentTxn.id.desc())
         .first()
