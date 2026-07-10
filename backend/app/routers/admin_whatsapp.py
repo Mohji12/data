@@ -21,6 +21,7 @@ from app.services.whatsapp import (
     send_bulk_template,
     send_bulk_text,
     upload_image_to_meta,
+    upload_template_header_media,
 )
 
 router = APIRouter(prefix="/admin/whatsapp", tags=["admin-whatsapp"], dependencies=[Depends(get_current_admin)])
@@ -270,6 +271,24 @@ def _template_send_params(template_name: str, body_params: list[str]) -> list[st
     return cleaned or None
 
 
+def _template_header_kwargs(
+    template_name: str,
+    language_code: str,
+    *,
+    image_link: str | None = None,
+    uploaded_media_id: str | None = None,
+) -> dict[str, str]:
+    """Resolve IMAGE header for Meta templates (approved sample or admin upload)."""
+    if uploaded_media_id:
+        return {"image_header_media_id": uploaded_media_id}
+    if image_link:
+        return {"image_header_link": image_link}
+    try:
+        return {"image_header_media_id": upload_template_header_media(template_name, language_code)}
+    except ValueError:
+        return {}
+
+
 @router.post("/bulk-send", dependencies=[Depends(require_admin_type("techadmin"))])
 def bulk_send_whatsapp(
     payload: WhatsAppBulkSendPayload,
@@ -310,7 +329,12 @@ def bulk_send_whatsapp(
                     tpl,
                     lang,
                     _template_send_params(tpl, body_params),
-                    image_header_link=cold_image,
+                    **_template_header_kwargs(
+                        tpl,
+                        lang,
+                        image_link=cold_image,
+                        uploaded_media_id=media_id if payload.image_filename else None,
+                    ),
                 )
             )
         if warm_phones:
@@ -341,7 +365,12 @@ def bulk_send_whatsapp(
             (payload.template_name or "").strip(),
             payload.template_language,
             payload.template_body_params or None,
-            image_header_link=image_link,
+            **_template_header_kwargs(
+                (payload.template_name or "").strip(),
+                payload.template_language,
+                image_link=image_link,
+                uploaded_media_id=media_id if payload.image_filename else None,
+            ),
         )
         dispatch_label = f"template={payload.template_name}"
     elif payload.send_mode == "custom":
@@ -377,7 +406,12 @@ def bulk_send_whatsapp(
             tpl,
             lang,
             _template_send_params(tpl, body_params),
-            image_header_link=image_link,
+            **_template_header_kwargs(
+                tpl,
+                lang,
+                image_link=image_link,
+                uploaded_media_id=media_id if payload.image_filename else None,
+            ),
         )
         dispatch_label = f"custom template={tpl}"
     elif payload.image_filename:

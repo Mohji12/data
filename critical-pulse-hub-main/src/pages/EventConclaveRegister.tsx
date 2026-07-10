@@ -14,6 +14,7 @@ const API_BASE = `/events/${EVENT_SLUG}`;
 type Category = 'clinician' | 'student';
 
 type FeeCell = {
+  fee_label?: string;
   base_fee_inr: number;
   gst_percent: number;
   gst_amount_inr: number;
@@ -23,28 +24,24 @@ type FeeCell = {
 type EventConfig = {
   active: boolean;
   registration_open: boolean;
-  current_tier: string | null;
-  current_tier_label: string | null;
-  fee_schedule: Record<string, Record<string, FeeCell>>;
+  fee_label?: string;
+  registration_last_day?: string;
+  fees: Record<string, FeeCell>;
   contact_phone?: string;
   contact_name?: string;
   brochure_url?: string | null;
 };
 
 type PayableResponse = FeeCell & {
-  tier?: string;
-  tier_label?: string;
   category?: string;
+  fee_label?: string;
   fee_inr?: number;
 };
 
-const TIER_ORDER = ['early_bird', 'regular', 'spot'] as const;
-
-const TIER_HEADINGS: Record<(typeof TIER_ORDER)[number], string> = {
-  early_bird: 'Early Bird (up to 8 Jul 2026)',
-  regular: 'Regular (9–10 Jul 2026)',
-  spot: 'Spot (11–12 Jul 2026)',
-};
+const CATEGORY_COLUMNS = [
+  { key: 'student', label: 'Student (incl. 18% GST)' },
+  { key: 'clinician', label: 'Practicing Clinician (incl. 18% GST)' },
+] as const;
 
 const inputClass =
   'w-full bg-chalk border border-border-soft rounded-sm py-3 px-4 font-sans text-sm text-ink focus:border-mint/50 focus:ring-1 focus:ring-mint/15 outline-none';
@@ -251,7 +248,6 @@ export default function EventConclaveRegister() {
   const gstPercent = payable?.gst_percent ?? 18;
   const gstAmount = payable?.gst_amount_inr ?? 0;
   const totalFee = payable?.total_fee_inr ?? payable?.fee_inr ?? 0;
-  const currentTier = config.current_tier;
   const brochureUrl = resolvePublicUploadUrl(config.brochure_url);
 
   return (
@@ -269,11 +265,6 @@ export default function EventConclaveRegister() {
             <span className="block mt-2">KMC CREDIT HOURS AVAILABLE</span>
           </h1>
           <p className="font-sans text-lg text-ink-secondary mt-2">11th and 12th July 2026</p>
-          {config.current_tier_label && (
-            <p className="font-mono text-[11px] text-mint mt-3 uppercase tracking-wide">
-              Current fee window: {config.current_tier_label}
-            </p>
-          )}
         </header>
 
         {brochureUrl && (
@@ -310,57 +301,50 @@ export default function EventConclaveRegister() {
               <thead>
                 <tr className="border-b border-border-soft text-[11px] uppercase tracking-wide text-ink-faint">
                   <th className="py-2 pr-3">Period</th>
-                  <th className="py-2 pr-3">Student (incl. 18% GST)</th>
-                  <th className="py-2">Practicing Clinician (incl. 18% GST)</th>
+                  {CATEGORY_COLUMNS.map(({ key, label }) => (
+                    <th key={key} className="py-2 pr-3 last:pr-0">
+                      {label}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {TIER_ORDER.map((tier) => {
-                  const row = config.fee_schedule?.[tier];
-                  const student = row?.student;
-                  const clinician = row?.clinician;
-                  const active = tier === currentTier;
-                  return (
-                    <tr
-                      key={tier}
-                      className={`border-b border-border-soft ${active ? 'bg-mint-pale/60' : ''}`}
-                    >
-                      <td className="py-3 pr-3 align-top">
-                        <span className="font-medium text-slate">{TIER_HEADINGS[tier]}</span>
-                        {active && (
-                          <span className="ml-2 inline-block text-[10px] font-mono uppercase tracking-wide text-mint">
-                            Active now
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3 pr-3 text-ink-secondary">
-                        {student ? (
+                <tr className="border-b border-border-soft bg-mint-pale/40">
+                  <td className="py-3 pr-3 align-top font-medium text-slate">
+                    {config.fee_label || 'Early Bird (up to 12 Jul 2026)'}
+                  </td>
+                  {CATEGORY_COLUMNS.map(({ key }) => {
+                    const row = config.fees?.[key];
+                    const active = key === form.category;
+                    return (
+                      <td
+                        key={key}
+                        className={`py-3 pr-3 last:pr-0 text-ink-secondary ${active ? 'ring-1 ring-mint/30 rounded-sm' : ''}`}
+                      >
+                        {row ? (
                           <>
-                            ₹ {formatInr(student.base_fee_inr)} + ₹ {formatInr(student.gst_amount_inr)} GST
+                            ₹ {formatInr(row.base_fee_inr)} + ₹ {formatInr(row.gst_amount_inr)} GST
                             <br />
-                            <span className="font-semibold text-slate">₹ {formatInr(student.total_fee_inr)}</span>
+                            <span className="font-semibold text-slate">₹ {formatInr(row.total_fee_inr)}</span>
+                            {active && (
+                              <span className="ml-2 inline-block text-[10px] font-mono uppercase tracking-wide text-mint">
+                                Your rate
+                              </span>
+                            )}
                           </>
                         ) : (
                           '—'
                         )}
                       </td>
-                      <td className="py-3 text-ink-secondary">
-                        {clinician ? (
-                          <>
-                            ₹ {formatInr(clinician.base_fee_inr)} + ₹ {formatInr(clinician.gst_amount_inr)} GST
-                            <br />
-                            <span className="font-semibold text-slate">₹ {formatInr(clinician.total_fee_inr)}</span>
-                          </>
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
+                    );
+                  })}
+                </tr>
               </tbody>
             </table>
             <p className="font-sans text-xs text-ink-muted mt-4">
+              Same early-bird fee applies for online and on-spot registration through 12 July 2026.
+            </p>
+            <p className="font-sans text-xs text-ink-muted mt-2">
               Student: valid student ID or proof must be furnished on the day of the conference.
             </p>
           </section>
@@ -456,8 +440,10 @@ export default function EventConclaveRegister() {
 
           <section className="bg-chalk border border-border-soft rounded-sm p-6">
             <h2 className="font-display font-bold text-lg text-slate mb-2">Your registration fee</h2>
-            {payable?.tier_label && (
-              <p className="font-sans text-xs text-ink-muted mb-3">{payable.tier_label}</p>
+            {(payable?.fee_label || config.fee_label) && (
+              <p className="font-sans text-xs text-ink-muted mb-3">
+                {payable?.fee_label || config.fee_label}
+              </p>
             )}
             {payableLoading ? (
               <p className="font-sans text-sm text-ink-muted mb-4">Calculating fee…</p>

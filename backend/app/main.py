@@ -39,6 +39,29 @@ from app.routers.admin_extension_requests import router as admin_extension_reque
 from app.routers.whatsapp_webhook import router as whatsapp_webhook_router
 
 
+def _ensure_event_registration_fee_columns() -> None:
+    """Add fee breakdown columns to existing event_registration tables."""
+    columns = {
+        "base_fee_inr": "DOUBLE DEFAULT 0",
+        "gst_percent": "DOUBLE DEFAULT 18",
+        "gst_amount_inr": "DOUBLE DEFAULT 0",
+        "fee_label": "VARCHAR(64) DEFAULT NULL",
+    }
+    with engine.begin() as conn:
+        existing = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'event_registration'"
+                )
+            )
+        }
+        for name, ddl in columns.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE event_registration ADD COLUMN {name} {ddl}"))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -48,6 +71,7 @@ async def lifespan(app: FastAPI):
     if settings.auto_create_event_tables:
         EventRegistration.__table__.create(bind=engine, checkfirst=True)
         EventPaymentTxn.__table__.create(bind=engine, checkfirst=True)
+        _ensure_event_registration_fee_columns()
     if settings.auto_create_whatsapp_webhook_table:
         WhatsAppWebhookEvent.__table__.create(bind=engine, checkfirst=True)
     yield

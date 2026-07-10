@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import re
 import time
 import uuid
@@ -81,14 +82,23 @@ def _meta_template_payload(
     language_code: str,
     body_params: list[str] | None = None,
     image_header_link: str | None = None,
+    image_header_media_id: str | None = None,
 ) -> dict[str, Any]:
     template: dict[str, Any] = {
         "name": template_name,
         "language": {"code": language_code},
     }
     components: list[dict[str, Any]] = []
+    media_id = (image_header_media_id or "").strip()
     link = (image_header_link or "").strip()
-    if link:
+    if media_id:
+        components.append(
+            {
+                "type": "header",
+                "parameters": [{"type": "image", "image": {"id": media_id}}],
+            }
+        )
+    elif link:
         components.append(
             {
                 "type": "header",
@@ -197,6 +207,7 @@ def send_whatsapp_template(
     language_code: str,
     body_params: list[str] | None = None,
     image_header_link: str | None = None,
+    image_header_media_id: str | None = None,
 ) -> SendResult:
     return _post_meta_message(
         _meta_template_payload(
@@ -205,6 +216,7 @@ def send_whatsapp_template(
             language_code,
             body_params,
             image_header_link=image_header_link,
+            image_header_media_id=image_header_media_id,
         ),
         phone,
     )
@@ -318,6 +330,7 @@ def send_bulk_template(
     language_code: str,
     body_params: list[str] | None = None,
     image_header_link: str | None = None,
+    image_header_media_id: str | None = None,
 ) -> dict[str, Any]:
     return _send_bulk(
         phones,
@@ -327,6 +340,7 @@ def send_bulk_template(
             language_code,
             body_params,
             image_header_link=image_header_link,
+            image_header_media_id=image_header_media_id,
         ),
     )
 
@@ -347,3 +361,65 @@ def send_bulk_image(
             caption=caption,
         ),
     )
+
+
+def _graph_api_base() -> str:
+    settings = get_settings()
+    ver = (os.getenv("WHATSAPP_GRAPH_API_VERSION") or "").strip()
+    if ver:
+        return f"https://graph.facebook.com/{ver.lstrip('/')}"
+    return settings.whatsapp_api_base
+
+
+def fetch_template_header_image_url(template_name: str, language_code: str = "en") -> str | None:
+    """Return example header image URL from an approved Meta template (IMAGE header)."""
+    settings = get_settings()
+    waba = (os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID") or "").strip()
+    if not settings.whatsapp_api_key or not waba:
+        return None
+    name = (template_name or "").strip()
+    if not name:
+        return None
+    url = (
+        f"{_graph_api_base()}/{waba}/message_templates"
+        f"?name={name}&language={language_code}&limit=1"
+    )
+    req = request.Request(url, headers=_meta_headers(), method="GET")
+    try:
+        with request.urlopen(req, timeout=settings.whatsapp_send_timeout_sec) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except error.HTTPError:
+        return None
+    rows = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or not rows:
+        return None
+    components = rows[0].get("components") if isinstance(rows[0], dict) else None
+    if not isinstance(components, list):
+        return None
+    for comp in components:
+        if (comp.get("type") or "").upper() != "HEADER":
+            continue
+        if (comp.get("format") or "").upper() != "IMAGE":
+            continue
+        handles = (comp.get("example") or {}).get("header_handle") or []
+        if isinstance(handles, list) and handles:
+            return str(handles[0]).strip() or None
+    return None
+
+
+def upload_template_header_media(template_name: str, language_code: str = "en") -> str:
+    """Download approved template sample header and upload to Meta; returns media id."""
+    image_url = fetch_template_header_image_url(template_name, language_code)
+    if not image_url:
+        raise ValueError(f"No IMAGE header found on template {template_name!r}")
+    settings = get_settings()
+    req = request.Request(image_url, method="GET")
+    try:
+        with request.urlopen(req, timeout=max(30, settings.whatsapp_send_timeout_sec)) as resp:
+            raw = resp.read()
+    except error.HTTPError as exc:
+        raise ValueError(f"Could not download template header image: {exc}") from exc
+    tmp = Path(__file__).resolve().parent.parent.parent / "uploads" / "whatsapp" / "_template_header_tmp.jpg"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_bytes(raw)
+    return upload_image_to_meta(tmp)

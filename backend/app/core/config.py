@@ -38,6 +38,12 @@ class Settings:
             "EVENT_ICU_D_CONCLAVE_SLUG", "icu-id-conclave-2026"
         ).strip()
         self.event_icu_d_conclave_fee_inr: float = float(os.getenv("EVENT_ICU_D_CONCLAVE_FEE_INR", "3200"))
+        self.event_icu_d_conclave_fee_student_inr: float = float(
+            os.getenv("EVENT_ICU_D_CONCLAVE_FEE_STUDENT_INR", "2700")
+        )
+        self.event_icu_d_conclave_fee_clinician_inr: float = float(
+            os.getenv("EVENT_ICU_D_CONCLAVE_FEE_CLINICIAN_INR", os.getenv("EVENT_ICU_D_CONCLAVE_FEE_INR", "3200"))
+        )
         self.event_icu_d_conclave_gst_percent: float = float(
             os.getenv("EVENT_ICU_D_CONCLAVE_GST_PERCENT", "18")
         )

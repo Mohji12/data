@@ -577,8 +577,22 @@ def password_reset_otp_template(name: str, otp: str, ttl_minutes: int) -> str:
     return _legacy_php_layout(content)
 
 
-def event_registration_confirmation_template(*, registration_number: str) -> str:
+def event_registration_confirmation_template(
+    *,
+    registration_number: str,
+    amount_inr: float | None = None,
+    fee_label: str = "Early Bird",
+) -> str:
     safe_reg = escape((registration_number or "").strip())
+    safe_label = escape((fee_label or "Early Bird").strip())
+    amount_line = ""
+    if amount_inr is not None and float(amount_inr) > 0:
+        amount_line = f"""
+        <p style="font-family: 'Quicksand', sans-serif; font-size: 15px;">
+            <strong>Registration fee ({safe_label}):</strong>
+            ₹ {float(amount_inr):,.2f} INR (inclusive of GST)
+        </p>
+        """
     venue_url = "https://maps.google.com/?q=Icon+Grand+Hotel+by+Bhagini+Bengaluru"
     venue_label = escape("Icon Grand Hotel by Bhagini, Bengaluru")
     content = f"""
@@ -593,6 +607,7 @@ def event_registration_confirmation_template(*, registration_number: str) -> str
         <p style="font-family: 'Quicksand', sans-serif; font-size: 15px; margin: 24px 0;">
             Your registration number — <strong style="font-size: 18px; color: #1f6798;">{safe_reg}</strong>
         </p>
+        {amount_line}
         <p style="font-family: 'Quicksand', sans-serif; font-size: 15px;">
             <strong>Venue:</strong>{' '}
             <a href="{venue_url}" style="color: #1f6798; text-decoration: underline;" target="_blank" rel="noopener noreferrer">

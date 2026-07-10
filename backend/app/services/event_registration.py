@@ -15,14 +15,15 @@ from app.core.config import get_settings
 from app.models import Country, EventPaymentTxn, EventRegistration, Option
 from app.services.email_templates import event_registration_confirmation_template
 from app.services.event_conclave_fees import (
-    TIER_LABELS,
-    amounts_for_current_tier,
-    build_fee_schedule_table,
+    EARLY_BIRD_LABEL,
+    build_fee_table,
     compute_event_fee_breakdown,
+    early_bird_period_label,
+    ensure_early_bird_fees_in_db,
     event_promo_codes,
     is_valid_event_promo,
     registration_open_for_date,
-    resolve_event_fee_tier,
+    REGISTRATION_LAST_DAY,
 )
 from app.services.mailer import send_html_email
 
@@ -65,9 +66,11 @@ def _is_valid_event_promo(promo_code: str | None) -> bool:
 def _fees_for_category(
     category: str,
     promo_code: str | None = None,
+    *,
+    db: Session | None = None,
 ) -> dict[str, Any]:
     try:
-        return compute_event_fee_breakdown(category, promo_code=promo_code)
+        return compute_event_fee_breakdown(category, promo_code=promo_code, db=db)
     except ValueError as exc:
         if str(exc) == "registration_closed":
             raise HTTPException(
@@ -124,20 +127,21 @@ def resolve_event_brochure_filename(db: Session | None = None) -> str | None:
 def get_event_public_config(db: Session | None = None) -> dict[str, Any]:
     settings = get_settings()
     slug = icu_d_conclave_slug()
-    tier = resolve_event_fee_tier()
+    if db is not None:
+        ensure_early_bird_fees_in_db(db)
     reg_open = registration_open_for_date() and bool(settings.event_icu_d_conclave_active)
-    amounts = amounts_for_current_tier() if tier else {}
-    preview = amounts.get("clinician") or {}
+    fees = build_fee_table(db)
+    preview = fees.get("clinician") or {}
+    fee_label = str(preview.get("fee_label") or early_bird_period_label())
     brochure_file = resolve_event_brochure_filename(db)
     return {
         "event_slug": slug,
         "title": EVENT_TITLE,
         "dates": EVENT_DATES,
-        "fee_schedule": build_fee_schedule_table(),
-        "current_tier": tier,
-        "current_tier_label": TIER_LABELS[tier] if tier else None,
+        "fee_label": fee_label,
+        "registration_last_day": REGISTRATION_LAST_DAY.isoformat(),
+        "fees": fees,
         "registration_open": reg_open,
-        "amounts_for_tier": amounts,
         "base_fee_inr": preview.get("base_fee_inr", 0),
         "gst_percent": preview.get("gst_percent", 18),
         "gst_amount_inr": preview.get("gst_amount_inr", 0),
@@ -187,7 +191,7 @@ def _resolve_country_name(db: Session, country_id: int | None) -> str:
     return (row.name or "").strip() if row else ""
 
 
-def _validate_init_payload(data: dict[str, Any]) -> dict[str, Any]:
+def _validate_init_payload(data: dict[str, Any], db: Session) -> dict[str, Any]:
     settings = get_settings()
     if not settings.event_icu_d_conclave_active:
         raise HTTPException(status_code=403, detail="Event registration is currently closed.")
@@ -206,7 +210,7 @@ def _validate_init_payload(data: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Select a valid category.")
 
     promo_code = str(data.get("promo_code") or "").strip()
-    fees = _fees_for_category(category, promo_code)
+    fees = _fees_for_category(category, promo_code, db=db)
     if promo_code and fees.get("promo_invalid"):
         raise HTTPException(status_code=400, detail="Invalid promo code.")
 
@@ -257,16 +261,30 @@ def _validate_init_payload(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _apply_fee_fields(reg: EventRegistration, fees: dict[str, Any]) -> None:
+    reg.amount_inr = float(fees.get("total_fee_inr") or fees.get("fee_inr") or 0)
+    reg.base_fee_inr = float(fees.get("base_fee_inr") or 0)
+    reg.gst_percent = float(fees.get("gst_percent") or 18)
+    reg.gst_amount_inr = float(fees.get("gst_amount_inr") or 0)
+    reg.fee_label = str(fees.get("fee_label") or EARLY_BIRD_LABEL)
+
+
 def _complete_free_event_registration(
     db: Session,
     *,
     reg: EventRegistration,
     txn: EventPaymentTxn,
     promo_code: str,
+    fees: dict[str, Any] | None = None,
 ) -> bool:
     now = datetime.utcnow()
     code = promo_code.strip().upper()
+    waived = fees or {}
     reg.amount_inr = 0.0
+    reg.base_fee_inr = float(waived.get("base_fee_inr") or reg.base_fee_inr or 0)
+    reg.gst_percent = float(waived.get("gst_percent") or reg.gst_percent or 18)
+    reg.gst_amount_inr = 0.0
+    reg.fee_label = str(waived.get("fee_label") or reg.fee_label or EARLY_BIRD_LABEL)
     reg.payment_status = "Credit"
     reg.payment_type = "Promo"
     reg.payment_id = code
@@ -308,7 +326,7 @@ def _init_response_from_registration(
         "promo_applied": bool(fees.get("promo_applied")),
         **{
             k: fees[k]
-            for k in ("base_fee_inr", "gst_percent", "gst_amount_inr", "total_fee_inr", "tier", "tier_label")
+            for k in ("base_fee_inr", "gst_percent", "gst_amount_inr", "total_fee_inr", "fee_label")
             if k in fees
         },
     }
@@ -316,7 +334,8 @@ def _init_response_from_registration(
 
 def initialize_event_registration(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     slug = icu_d_conclave_slug()
-    validated = _validate_init_payload(payload)
+    ensure_early_bird_fees_in_db(db)
+    validated = _validate_init_payload(payload, db)
 
     paid = (
         db.query(EventRegistration)
@@ -355,9 +374,9 @@ def initialize_event_registration(db: Session, payload: dict[str, Any]) -> dict[
         )
         if txn:
             cat = (validated.get("category") or pending.category or "clinician").strip().lower()
-            fees = _fees_for_category(cat, str(validated.get("promo_code") or ""))
+            fees = _fees_for_category(cat, str(validated.get("promo_code") or ""), db=db)
             pending.category = cat
-            pending.amount_inr = float(fees.get("total_fee_inr") or 0)
+            _apply_fee_fields(pending, fees)
             txn.amount = float(fees.get("total_fee_inr") or 0)
             db.add(pending)
             db.add(txn)
@@ -374,6 +393,7 @@ def initialize_event_registration(db: Session, payload: dict[str, Any]) -> dict[
                     reg=pending,
                     txn=txn,
                     promo_code=str(validated.get("promo_code") or ""),
+                    fees=fees,
                 )
                 return _init_response_from_registration(
                     registration_id=pending.id,
@@ -416,11 +436,11 @@ def initialize_event_registration(db: Session, payload: dict[str, Any]) -> dict[
         council_registration_number=validated["council_registration_number"],
         declaration_accepted="1",
         payment_status="Pending",
-        amount_inr=validated["fee_inr"],
         payment_type="Online",
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
+    _apply_fee_fields(row, validated)
     db.add(row)
     db.flush()
 
@@ -445,6 +465,7 @@ def initialize_event_registration(db: Session, payload: dict[str, Any]) -> dict[
             reg=row,
             txn=txn,
             promo_code=str(validated.get("promo_code") or ""),
+            fees=validated,
         )
         return _init_response_from_registration(
             registration_id=row.id,
@@ -505,6 +526,8 @@ def try_send_event_confirmation_email(
         return False
     html = event_registration_confirmation_template(
         registration_number=registration.registration_number or "",
+        amount_inr=float(registration.amount_inr or 0),
+        fee_label=str(registration.fee_label or early_bird_period_label()),
     )
     subject = EVENT_CONFIRMATION_EMAIL_SUBJECT
     try:

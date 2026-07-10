@@ -55,9 +55,8 @@ class EventPayableResponse(BaseModel):
     gst_amount_inr: float
     total_fee_inr: float
     fee_inr: float
-    tier: Optional[str] = None
-    tier_label: Optional[str] = None
     category: Optional[str] = None
+    fee_label: Optional[str] = None
     promo_applied: bool = False
     promo_invalid: bool = False
 
