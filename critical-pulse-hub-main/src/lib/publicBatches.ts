@@ -17,12 +17,27 @@ export const registrationExcludedSlugs = new Set([
   'edic-10',
   'batch-10-edic-1',
   'edic-1',
+  // Registration closed
+  'comprehensive-course-1',
+  'comprehensive-1',
+  'comprehensive-course-2',
+  'comprehensive-2',
+  'cp-7',
+  'cp-8',
+  'practical-series-batch-3',
+  'ccm-practical-series-batch-3',
+  'ccm-3',
+  'ccm-batch-3',
 ]);
 
 const registrationExcludedNames = new Set([
   'batch 15',
   'ccm batch 2',
   'batch edic 10',
+  'comprehensive course 1',
+  'comprehensive course 2',
+  'practical series batch 3',
+  'ccm batch 3',
 ]);
 
 export function isRegistrationExcludedBatch(row: {

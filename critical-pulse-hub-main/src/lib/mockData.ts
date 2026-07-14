@@ -4,8 +4,6 @@ export const courses = [
   { id: 1, name: 'Critical Care Medicine — Batch 15', duration: '5 months', start: 'January 2026', fee: 35000, enrolled: 127, slug: 'batch-15' },
   { id: 2, name: 'EDIC Part I & II Preparation', duration: '3 months', start: 'February 2026', fee: 18000, enrolled: 89, slug: 'edic-1' },
   { id: 3, name: 'CCM Practical Series Batch 2', duration: '2 months', start: 'March 2026', fee: 15000, enrolled: 64, slug: 'ccm-practical' },
-  { id: 4, name: 'Comprehensive Course 1', duration: '6 months', start: 'Rolling', fee: 45000, enrolled: 201, slug: 'comprehensive-1' },
-  { id: 5, name: 'Comprehensive Course 2', duration: '6 months', start: 'Rolling', fee: 45000, enrolled: 156, slug: 'comprehensive-2' },
 ];
 
 /**
@@ -26,24 +24,9 @@ export const marketingBatches = [
     slugCandidates: ['ccm-2', 'ccm-practical', 'ccm-batch-2'],
   },
   {
-    label: 'CCM Batch 3',
-    pillTo: '/register/ccm-practical-series-batch-3',
-    slugCandidates: ['ccm-3', 'ccm-practical-series-batch-3', 'ccm-batch-3', 'practical-series-batch-3'],
-  },
-  {
     label: 'Batch 15',
     pillTo: '/register/batch-15',
     slugCandidates: ['batch-15'],
-  },
-  {
-    label: 'BATCH 9-CC 1',
-    pillTo: '/register/comprehensive-course-1',
-    slugCandidates: ['batch-9-cc-1', 'comprehensive-course-1', 'comprehensive-1', 'cp-7'],
-  },
-  {
-    label: 'BATCH 9-CC 2',
-    pillTo: '/register/comprehensive-course-2',
-    slugCandidates: ['batch-9-cc-2', 'comprehensive-course-2', 'comprehensive-2', 'cp-8'],
   },
   {
     label: 'BATCH 16-MCCM',

@@ -117,10 +117,14 @@ const App = () => {
           <Route path="/register/batch-10-edic-1" element={<Navigate to="/courses" replace />} />
           <Route path="/register/edic-10" element={<Navigate to="/courses" replace />} />
           <Route path="/register/batch-edic-10" element={<Navigate to="/courses" replace />} />
-          <Route path="/register/comprehensive-course-1" element={<RegistrationFeePage batchSlug="comprehensive-course-1" />} />
-          <Route path="/register/comprehensive-1" element={<RegistrationFeePage batchSlug="comprehensive-1" />} />
-          <Route path="/register/comprehensive-course-2" element={<RegistrationFeePage batchSlug="comprehensive-course-2" />} />
-          <Route path="/register/comprehensive-2" element={<RegistrationFeePage batchSlug="comprehensive-2" />} />
+          <Route path="/register/comprehensive-course-1" element={<Navigate to="/courses" replace />} />
+          <Route path="/register/comprehensive-1" element={<Navigate to="/courses" replace />} />
+          <Route path="/register/comprehensive-course-2" element={<Navigate to="/courses" replace />} />
+          <Route path="/register/comprehensive-2" element={<Navigate to="/courses" replace />} />
+          <Route path="/register/ccm-practical-series-batch-3" element={<Navigate to="/courses" replace />} />
+          <Route path="/register/ccm-3" element={<Navigate to="/courses" replace />} />
+          <Route path="/register/ccm-batch-3" element={<Navigate to="/courses" replace />} />
+          <Route path="/register/practical-series-batch-3" element={<Navigate to="/courses" replace />} />
           <Route path="/register/:batchSlug" element={<RegistrationFeePage />} />
           <Route path="/register" element={<Register />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
