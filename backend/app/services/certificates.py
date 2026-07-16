@@ -115,17 +115,18 @@ def _apply_placeholders(text: str, subscription: str | None) -> str:
     return (text or "").replace("{batch_name}", sub).strip()
 
 
-def _batch_label_text(
-    subscription: str | None,
+def _batch_line_text(
+    *,
+    completion_date_text: str | None,
     certificate_batch_label: str | None,
+    subscription: str | None,
 ) -> str:
+    """Prefer course completion date; never fall back to the template's static batch text."""
+    date_line = (completion_date_text or "").strip()
+    if date_line:
+        return date_line
     label = _apply_placeholders(certificate_batch_label or "", subscription)
-    if label:
-        return label
-    sub = (subscription or "").strip()
-    if sub:
-        return sub
-    return "Master Classes in Critical Care Medicine"
+    return label
 
 
 def _template_candidates(subscription: str | None) -> list[str]:
@@ -295,6 +296,7 @@ def render_certificate_image(
     certificate_program_line: str | None = None,
     certificate_show_date: bool = False,
     certificate_name_size: str | int | None = None,
+    certificate_completion_date_text: str | None = None,
 ) -> Image.Image:
     template_path, name_only = _resolve_template_path(subscription)
     if not template_path.is_file():
@@ -304,7 +306,11 @@ def render_certificate_image(
     layout = _layout_for_template(template_path, name_only)
     draw = ImageDraw.Draw(image)
     display_name = _normalize_display_name(full_name)
-    batch_line = _batch_label_text(subscription, certificate_batch_label)
+    batch_line = _batch_line_text(
+        completion_date_text=certificate_completion_date_text,
+        certificate_batch_label=certificate_batch_label,
+        subscription=subscription,
+    )
     course_line = _apply_placeholders(certificate_course_line or _DEFAULT_COURSE_LINE, subscription)
     program_line = _apply_placeholders(certificate_program_line or _DEFAULT_PROGRAM_LINE, subscription)
 
@@ -324,8 +330,17 @@ def render_certificate_image(
             _paint_region(draw, image, layout.course, course_line)
         if layout.program and program_line:
             _paint_region(draw, image, layout.program, program_line)
-        if layout.batch and batch_line:
-            _paint_region(draw, image, layout.batch, batch_line)
+        if layout.batch:
+            # Always cover the template's baked-in batch line (e.g. "Third Batch - July to December 2021").
+            if batch_line:
+                _paint_region(draw, image, layout.batch, batch_line)
+            else:
+                cover = layout.batch.cover_box
+                bg = _sample_background(
+                    image,
+                    (cover[0], max(0, cover[1] - 16), cover[0] + 20, max(0, cover[1] - 4)),
+                )
+                draw.rectangle(cover, fill=bg)
 
         if certificate_show_date and (certificate_date_text or "").strip():
             date_font = _load_font(11)
@@ -362,6 +377,7 @@ def build_certificate_pdf(
     certificate_program_line: str | None = None,
     certificate_show_date: bool = False,
     certificate_name_size: str | int | None = None,
+    certificate_completion_date_text: str | None = None,
 ) -> bytes:
     image = render_certificate_image(
         full_name=full_name,
@@ -372,5 +388,6 @@ def build_certificate_pdf(
         certificate_program_line=certificate_program_line,
         certificate_show_date=certificate_show_date,
         certificate_name_size=certificate_name_size,
+        certificate_completion_date_text=certificate_completion_date_text,
     )
     return _image_to_pdf_bytes(image)

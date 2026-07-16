@@ -407,15 +407,18 @@ export default function AdminSettings() {
                 <p className="font-sans text-[10px] text-ink-faint mt-1">Default 20. Range 12–48.</p>
               </div>
               <div>
-                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Certificate batch line</label>
+                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Certificate batch line (optional fallback)</label>
                 <input
                   type="text"
                   value={certBatchLabel}
                   disabled={!isTech}
                   onChange={(e) => setCertBatchLabel(e.target.value)}
-                  placeholder="e.g. Batch 14 - July to December 2025"
+                  placeholder="Leave empty — course completion date is shown instead"
                   className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
                 />
+                <p className="font-sans text-[10px] text-ink-faint mt-1">
+                  Static batch text (e.g. &quot;Third Batch - July to December 2021&quot;) is removed. The course completion date is printed here.
+                </p>
               </div>
               <div>
                 <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Course completion line</label>
@@ -449,7 +452,7 @@ export default function AdminSettings() {
                 Show issue date on certificate
               </label>
               <div>
-                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Certificate date (optional)</label>
+                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Course completion date</label>
                 <input
                   type="date"
                   value={certBatchDate}
@@ -458,7 +461,7 @@ export default function AdminSettings() {
                   className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
                 />
                 <p className="font-sans text-[10px] text-ink-faint mt-1">
-                  Leave empty to use today&apos;s date when &quot;Show issue date&quot; is enabled.
+                  Printed on the certificate (e.g. &quot;20 July 2026&quot;). If empty, the batch package/extension end date is used.
                 </p>
               </div>
               {isTech && (

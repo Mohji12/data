@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import date, datetime
 import re
+import time
 from typing import Any
 
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.models import Country, Option, Package, User, UserPackagePayment, UserSubscription
@@ -21,9 +23,34 @@ def _csv_tokens(value: str | None) -> set[str]:
     return {part.strip().lower() for part in value.split(",") if part.strip()}
 
 
+_option_cache: dict[str, tuple[str, float]] = {}
+_OPTION_CACHE_TTL_SEC = 60.0
+
+
 def get_option_value(db: Session, option_name: str) -> str:
-    row = db.query(Option).filter(Option.option_name == option_name).first()
-    return (row.option_value or "").strip() if row else ""
+    """Read site option with short TTL cache and retry on transient DB drops."""
+    now = time.monotonic()
+    cached = _option_cache.get(option_name)
+    if cached is not None:
+        value, expires_at = cached
+        if now < expires_at:
+            return value
+        _option_cache.pop(option_name, None)
+
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            row = db.query(Option).filter(Option.option_name == option_name).first()
+            value = (row.option_value or "").strip() if row else ""
+            _option_cache[option_name] = (value, now + _OPTION_CACHE_TTL_SEC)
+            return value
+        except OperationalError as exc:
+            last_exc = exc
+            db.rollback()
+            if attempt < 2:
+                time.sleep(0.15 * (attempt + 1))
+    assert last_exc is not None
+    raise last_exc
 
 
 def subscription_allowed(option_value: str, subscription: str | None) -> bool:
@@ -96,6 +123,13 @@ def extension_option_key(kind: str, batch_name: str | None) -> str:
     return f"extension_{kind}::{slug}"
 
 
+def batch_closure_option_key(kind: str, batch_name: str | None) -> str:
+    slug = batch_slug(batch_name)
+    if not slug:
+        return ""
+    return f"batch_{kind}::{slug}"
+
+
 def get_certificate_batch_settings(db: Session, batch_name: str | None) -> dict[str, str]:
     enabled_key = certificate_option_key("enabled", batch_name)
     label_key = certificate_option_key("batch_label", batch_name)
@@ -113,6 +147,29 @@ def get_certificate_batch_settings(db: Session, batch_name: str | None) -> dict[
         "show_date": get_option_value(db, show_date_key) if show_date_key else "",
         "name_size": get_option_value(db, name_size_key) if name_size_key else "",
     }
+
+
+def resolve_certificate_completion_date(db: Session, user: User) -> date | None:
+    """Official course completion date for certificate printing (per user/batch)."""
+    settings = get_certificate_batch_settings(db, user.subscription)
+    fixed = parse_iso_date(settings.get("fixed_date"))
+    if fixed:
+        return fixed
+    official = _official_batch_end_date(db, user)
+    if official:
+        return official
+    if user.package_id:
+        pkg = db.query(Package).filter(Package.id == user.package_id).first()
+        end = _one_time_course_end_date(pkg)
+        if end:
+            return end
+    return None
+
+
+def format_certificate_date(value: date | None) -> str:
+    if not value:
+        return ""
+    return f"{value.day} {value.strftime('%B %Y')}"
 
 
 def get_extension_batch_settings(db: Session, batch_name: str | None) -> dict[str, str]:
@@ -162,6 +219,39 @@ def parse_iso_date(value: str | None) -> date | None:
         return datetime.fromisoformat(raw).date()
     except ValueError:
         return None
+
+
+def _official_batch_end_date(db: Session, user: User) -> date | None:
+    """Official course end: earliest of extension base_date (admin) and package one-time end."""
+    manual = get_extension_batch_settings(db, user.subscription)
+    base = parse_iso_date(manual.get("base_date"))
+    pkg_end: date | None = None
+    if user.package_id:
+        pkg = db.query(Package).filter(Package.id == user.package_id).first()
+        pkg_end = _one_time_course_end_date(pkg)
+    if base and pkg_end:
+        return min(base, pkg_end)
+    return base or pkg_end
+
+
+def _batch_access_closed_flag(db: Session, user: User) -> bool:
+    key = batch_closure_option_key("access_closed", user.subscription)
+    return bool(key) and bool_option(get_option_value(db, key))
+
+
+def _batch_post_course_mode(db: Session, user: User) -> bool:
+    """True when the batch course is closed for standard (non-extension) users."""
+    if _batch_access_closed_flag(db, user):
+        return True
+    official_end = _official_batch_end_date(db, user)
+    return bool(official_end and date.today() > official_end)
+
+
+def _has_active_extension_access(db: Session, user: User) -> bool:
+    """Paid 2-month extension with an active subscription window."""
+    return _user_has_extension_payment(db, user) and has_active_subscription(
+        db, user, user.subscription
+    )
 
 
 def _user_has_extension_payment(db: Session, user: User) -> bool:
@@ -296,14 +386,18 @@ def _one_time_course_start_date(pkg: Package | None) -> date | None:
 
 
 def ensure_one_time_batch_access(db: Session, user: User) -> tuple[bool, str | None]:
-    # Paid extension creates user_subscriptions — that window overrides one-time package dates.
+    # Paid 2-month extension: active subscription window overrides batch closure for video/mock.
+    if _has_active_extension_access(db, user):
+        return True, None
+    if _batch_post_course_mode(db, user):
+        return False, "Your batch access period has ended."
     if has_active_subscription(db, user, user.subscription):
         return True, None
     if not user.package_id:
         return True, None
     pkg = db.query(Package).filter(Package.id == user.package_id).first()
     start = _one_time_course_start_date(pkg)
-    end = _one_time_course_end_date(pkg)
+    end = _official_batch_end_date(db, user) or _one_time_course_end_date(pkg)
     if not end:
         return True, None
     today = date.today()
@@ -336,10 +430,20 @@ def ensure_subscription_entitlement(db: Session, user: User, batch_name: str | N
 
 def is_certificate_only_user(db: Session, user: User) -> bool:
     """Users who may log in only to download their completion certificate."""
-    return subscription_allowed(
+    # Extension users keep full course access until their extended window ends.
+    if _has_active_extension_access(db, user):
+        return False
+    if subscription_allowed(
         get_option_value(db, "certificate_only_access"),
         user.subscription,
-    )
+    ):
+        return True
+    # Post-course users without extension: certificate-only dashboard (video/mock gated elsewhere).
+    if _batch_post_course_mode(db, user) and not _user_has_extension_payment(db, user):
+        batch_settings = get_certificate_batch_settings(db, user.subscription)
+        if (batch_settings.get("enabled") or "").strip() == "1":
+            return True
+    return False
 
 
 def can_access_certificate(db: Session, user: User) -> tuple[bool, str | None]:
@@ -356,6 +460,20 @@ def can_access_certificate(db: Session, user: User) -> tuple[bool, str | None]:
     if (user.approve or "").strip() != "1":
         return False, "Account not approved."
     if is_certificate_only_user(db, user):
+        return True, None
+    # Extension users keep video/mock during extended access; certificate only after it ends.
+    if _has_active_extension_access(db, user):
+        return False, "Certificate will be available after your extended course access ends."
+    manual = get_extension_batch_settings(db, user.subscription)
+    batch_has_post_course_rules = _batch_access_closed_flag(db, user) or bool(
+        parse_iso_date(manual.get("base_date"))
+    )
+    if batch_has_post_course_rules and not _batch_post_course_mode(db, user):
+        return False, "Certificate will be available after course completion."
+    # After official course closure, allow certificate even if extension subscription rows expired.
+    if _batch_post_course_mode(db, user) and not has_active_subscription(
+        db, user, user.subscription
+    ):
         return True, None
     ent_ok, ent_reason = ensure_subscription_entitlement(db, user)
     if not ent_ok:

@@ -19,6 +19,7 @@ dist-ssr/
 # Archives / misc
 backend.zip
 backend/dumps/
+backups/
 *.log
 
 # OS / IDE

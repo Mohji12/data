@@ -13,7 +13,13 @@ engine = create_engine(
     settings.sqlalchemy_database_uri,
     pool_pre_ping=True,
     pool_recycle=280,
-    connect_args={"connect_timeout": 15},
+    pool_size=5,
+    max_overflow=10,
+    connect_args={
+        "connect_timeout": 15,
+        "read_timeout": 30,
+        "write_timeout": 30,
+    },
     # echo=True, # Log SQL queries
 )
 

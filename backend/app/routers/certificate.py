@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import User
 from app.security import get_current_user
-from app.services.access import bool_option, can_access_certificate, get_certificate_batch_settings
+from app.services.access import (
+    bool_option,
+    can_access_certificate,
+    format_certificate_date,
+    get_certificate_batch_settings,
+    resolve_certificate_completion_date,
+)
 from app.services.certificates import build_certificate_pdf
 
 router = APIRouter(prefix="/certificate", tags=["certificate"])
@@ -28,18 +32,23 @@ def download_certificate(
         full_name = current_user.email
     batch_settings = get_certificate_batch_settings(db, current_user.subscription)
     show_date = bool_option(batch_settings.get("show_date"))
-    fixed_date = (batch_settings.get("fixed_date") or "").strip()
-    date_text = fixed_date or (datetime.utcnow().date().isoformat() if show_date else "")
+    completion_date = resolve_certificate_completion_date(db, current_user)
+    completion_text = format_certificate_date(completion_date)
+    # Center line: course completion date (covers template "Third Batch..." text).
+    # Bottom-right issue date uses the same completion date when show_date is on.
+    date_text = completion_text if show_date and completion_text else ""
 
     pdf_bytes = build_certificate_pdf(
         full_name=full_name,
         subscription=current_user.subscription,
-        certificate_batch_label=batch_settings.get("batch_label") or current_user.subscription,
+        # Do not print static batch labels like "Third Batch - July to December 2021".
+        certificate_batch_label=None,
         certificate_date_text=date_text,
         certificate_course_line=batch_settings.get("course_line") or None,
         certificate_program_line=batch_settings.get("program_line") or None,
-        certificate_show_date=show_date,
+        certificate_show_date=show_date and bool(date_text),
         certificate_name_size=batch_settings.get("name_size") or None,
+        certificate_completion_date_text=completion_text or None,
     )
     safe_name = (full_name or "Learner").replace(" ", "_")
     filename = f"{safe_name}_certificate.pdf"
