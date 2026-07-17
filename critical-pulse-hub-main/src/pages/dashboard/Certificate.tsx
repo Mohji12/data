@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Award, Download, LogOut } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Award, Download, LogOut, BookOpen } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { apiClient, apiDownload } from '@/lib/apiClient';
 import { useAuthStore } from '@/store/authStore';
 
@@ -19,6 +19,13 @@ export default function Certificate() {
 
   const canDownload = !!summary?.certificate?.enabled;
   const certificateOnly = !!summary?.certificate_only;
+  const canExtend = !!summary?.extension?.enabled;
+  const extensionHeadline =
+    typeof summary?.extension?.headline === 'string' ? summary.extension.headline : null;
+  const extendedUntil =
+    typeof summary?.extension?.extended_end_date === 'string'
+      ? summary.extension.extended_end_date
+      : null;
 
   const handleDownload = async () => {
     setError(null);
@@ -45,12 +52,31 @@ export default function Certificate() {
         </h1>
         <p className="font-sans text-sm text-ink-muted mt-2">
           {certificateOnly
-            ? 'Your course access has ended. You can download your completion certificate below.'
+            ? 'Your course access has ended. You can download your completion certificate below, or extend access to reopen videos and mock tests.'
             : 'Download your course completion certificate as a PDF.'}
         </p>
       </div>
 
-      <div className="p-6 lg:p-8 max-w-2xl">
+      <div className="p-6 lg:p-8 max-w-2xl space-y-6">
+        {certificateOnly && canExtend && (
+          <div className="bg-mint-pale/40 border border-mint/30 rounded-sm p-6">
+            <div className="font-display font-bold text-lg text-slate">Continue learning with extension</div>
+            <p className="font-sans text-sm text-ink-muted mt-2">
+              {extensionHeadline ||
+                (extendedUntil
+                  ? `Extend your access to reopen the video library and mock tests until ${extendedUntil}.`
+                  : 'Extend your access to reopen the video library and mock tests.')}
+            </p>
+            <Link
+              to="/dashboard/extend-subscription"
+              className="magnetic inline-flex items-center gap-2 mt-4 bg-slate text-chalk rounded-sm px-5 py-3 font-sans text-sm font-semibold hover:bg-slate-light"
+            >
+              <BookOpen size={16} />
+              Extend subscription
+            </Link>
+          </div>
+        )}
+
         <div className="bg-chalk border border-border-soft rounded-sm p-8">
           <div className="flex items-start gap-4">
             <div className="w-12 h-12 rounded-sm bg-mint-pale border border-mint/30 flex items-center justify-center shrink-0">

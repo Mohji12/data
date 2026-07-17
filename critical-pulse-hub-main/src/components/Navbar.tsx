@@ -7,7 +7,6 @@ import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
 import {
-  filterPublicBatches,
   filterRegistrationCatalogBatches,
   getPublicBatchDisplayName,
   type RegistrationCatalogRow,
@@ -38,14 +37,13 @@ export default function Navbar() {
     queryKey: ['registrationCatalogHome'],
     queryFn: () => apiClient('/registration/catalog?include_inactive=true'),
   });
-  const publicCatalog = filterPublicBatches(catalog || []);
   const registrationCatalog = filterRegistrationCatalogBatches(catalog || []);
   const batchOptions = registrationCatalog.map((b) => ({
     label: getPublicBatchDisplayName(b),
     to: `/register/${encodeURIComponent(b.batch_slug)}`,
     launch_ready: Boolean(b.launch_ready),
   }));
-  const brochureCourses = publicCatalog;
+  const brochureCourses = registrationCatalog;
 
   useEffect(() => {
     const handler = () => setScrolled(window.scrollY > 60);

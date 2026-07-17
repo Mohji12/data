@@ -637,12 +637,15 @@ def _apply_registration_payment_success(
 
     pkg = db.query(Package).filter(Package.id == txn.package_id).first()
     if is_extension:
+        from app.services.access import resolve_extension_access_end_at
+
         manual = get_extension_batch_settings(db, user.subscription)
         extend_months = int(manual.get("months") or 2)
         base_day = parse_iso_date(manual.get("base_date"))
         extension_base = (
             datetime.combine(base_day, datetime.max.time()).replace(microsecond=0) if base_day else None
         )
+        extension_end = resolve_extension_access_end_at(manual, extension_base, extend_months)
         extend_active_subscription(
             db,
             user_id=user.id,
@@ -650,6 +653,7 @@ def _apply_registration_payment_success(
             extend_months=extend_months,
             activated_at=now,
             extension_base_date=extension_base,
+            extension_end_at=extension_end,
             package_id=txn.package_id or user.package_id,
         )
     elif pkg:

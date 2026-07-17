@@ -302,6 +302,24 @@ def _extension_batch_end_at(
     return None
 
 
+def resolve_extension_access_end_at(
+    manual: dict[str, str],
+    batch_end: datetime | None,
+    months: int,
+) -> datetime | None:
+    """Cohort access end after extension payment.
+
+    Batch 15 (and similar) use extension_end_date as the fixed access end (e.g. 15 Sep 2026).
+    Fall back to base/course end + months when no fixed end is configured.
+    """
+    fixed = parse_iso_date(manual.get("end_date"))
+    if fixed:
+        return datetime.combine(fixed, datetime.max.time()).replace(microsecond=0)
+    if batch_end:
+        return _add_months(batch_end, int(months or 2))
+    return None
+
+
 def _format_extension_headline(
     batch_name: str,
     batch_end: datetime | None,
@@ -637,9 +655,12 @@ def get_subscription_period_for_profile(db: Session, user: User) -> dict | None:
     ext_months = int(offer.get("extension_months") or 0) if offer.get("enabled") else None
     end_if_extended = None
     if ext_months and not has_extended:
-        projection_base = official_batch_end or end_at
-        if projection_base:
-            end_if_extended = _add_months(projection_base, ext_months)
+        # Prefer fixed cohort end (e.g. Batch 15 → 15 Sep 2026) when configured.
+        end_if_extended = resolve_extension_access_end_at(manual, official_batch_end or end_at, ext_months)
+        if not end_if_extended:
+            projection_base = official_batch_end or end_at
+            if projection_base:
+                end_if_extended = _add_months(projection_base, ext_months)
 
     return {
         "plan_type": plan_type,
@@ -711,7 +732,7 @@ def get_extension_offer(db: Session, user: User) -> dict:
                 m_gst_pct = float(manual.get("gst_percentage") or 0)
                 m_gst_amt = float(manual.get("gst_amount") or 0)
                 if m_amt > 0:
-                    extended_end = _add_months(batch_end, m_months) if batch_end else None
+                    extended_end = resolve_extension_access_end_at(manual, batch_end, m_months)
                     result["enabled"] = True
                     result["extension_months"] = m_months
                     result["currency_name"] = "INR"

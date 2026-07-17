@@ -30,7 +30,8 @@ export default function StudentLayout() {
   const canCertificate = !!summary?.certificate?.enabled;
   const certificateOnly = !!summary?.certificate_only;
 
-  const restrictedPaths = ['/dashboard/videos', '/dashboard/quiz', '/dashboard/profile', '/dashboard/payments', '/dashboard/extend-subscription'];
+  // Certificate-only users may still buy extension to reopen video/mock access.
+  const restrictedPaths = ['/dashboard/videos', '/dashboard/quiz', '/dashboard/profile', '/dashboard/payments'];
   if (certificateOnly && restrictedPaths.some((p) => location.pathname === p || location.pathname.startsWith(`${p}/`))) {
     return <Navigate to="/dashboard/certificate" replace />;
   }
@@ -38,8 +39,12 @@ export default function StudentLayout() {
     return <Navigate to="/dashboard/certificate" replace />;
   }
 
+  const certificateOnlyItems = [
+    { label: 'Certificate', to: '/dashboard/certificate', icon: Award },
+    ...(canExtend ? [{ label: 'Extend Subscription', to: '/dashboard/extend-subscription', icon: BookOpen }] : []),
+  ];
   const learnItems = certificateOnly
-    ? [{ label: 'Certificate', to: '/dashboard/certificate', icon: Award }]
+    ? certificateOnlyItems
     : [
         { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
         { label: 'Video Library', to: '/dashboard/videos', icon: PlayCircle },
@@ -48,7 +53,10 @@ export default function StudentLayout() {
         ...(canCertificate ? [{ label: 'Certificate', to: '/dashboard/certificate', icon: Award }] : []),
       ];
   const mobileNav = certificateOnly
-    ? [{ label: 'Certificate', to: '/dashboard/certificate', icon: Award }]
+    ? [
+        { label: 'Cert', to: '/dashboard/certificate', icon: Award },
+        ...(canExtend ? [{ label: 'Extend', to: '/dashboard/extend-subscription', icon: BookOpen }] : []),
+      ]
     : [
         { label: 'Home', to: '/dashboard', icon: Home },
         { label: 'Videos', to: '/dashboard/videos', icon: PlayCircle },

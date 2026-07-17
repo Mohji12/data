@@ -1051,6 +1051,7 @@ def extend_active_subscription(
     extend_months: int,
     activated_at: datetime,
     extension_base_date: datetime | None = None,
+    extension_end_at: datetime | None = None,
     package_id: int | None = None,
 ) -> UserSubscription:
     active = (
@@ -1064,7 +1065,9 @@ def extend_active_subscription(
         .first()
     )
     months = int(extend_months or 0)
-    if extension_base_date:
+    if extension_end_at:
+        new_end = extension_end_at
+    elif extension_base_date:
         new_end = _add_months(extension_base_date, months)
     elif active and active.end_at:
         base = active.end_at if active.end_at > activated_at else activated_at
