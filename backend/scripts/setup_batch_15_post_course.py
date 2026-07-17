@@ -34,7 +34,7 @@ from app.services.access import (  # noqa: E402
 )
 
 BATCH_NAME = "Batch 15"
-OFFICIAL_END = "2026-07-20"
+OFFICIAL_END = "2026-07-15"
 CERT_LABEL = "Batch 15"
 COURSE_LINE = "Online Master Classes in Critical Care Medicine"
 PROGRAM_LINE = "Dr Harish's Master Classes in Critical Care Medicine"

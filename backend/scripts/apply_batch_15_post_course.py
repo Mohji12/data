@@ -26,10 +26,10 @@ def main() -> None:
     db = SessionLocal()
     try:
         upsert(db, "batch_access_closed::batch-15", "1")
-        upsert(db, "extension_base_date::batch-15", "2026-07-20")
+        upsert(db, "extension_base_date::batch-15", "2026-07-15")
         upsert(db, "certificate_enabled::batch-15", "1")
         upsert(db, "certificate_batch_label::batch-15", "Batch 15")
-        upsert(db, "certificate_fixed_date::batch-15", "2026-07-20")
+        upsert(db, "certificate_fixed_date::batch-15", "2026-07-15")
         upsert(
             db,
             "certificate_course_line::batch-15",

@@ -350,9 +350,13 @@ def _format_extension_headline(
     label = (batch_name or "Your batch").strip()
     if end_label and ext_label:
         return (
-            f"{label} officially ends on {end_label}; click here to continue your access "
-            f"{months} more months (until {ext_label}). {price}."
+            f"{label} officially ended on {end_label}. Pay now to unlock video library and mock tests "
+            f"immediately until {ext_label}. {price}."
         )
+    if ext_label:
+        return (
+            f"Pay now to unlock video library and mock tests immediately until {ext_label}. {price}."
+        ).strip()
     return f"Extend your access by {months} months. {price}.".strip()
 
 

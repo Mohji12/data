@@ -29,7 +29,9 @@ from app.services.access import (
     find_active_user_subscription,
     get_extension_batch_settings,
     get_extension_offer,
+    has_active_subscription,
     parse_iso_date,
+    resolve_extension_access_end_at,
 )
 from app.services.registration import activate_user_subscription, extend_active_subscription
 from app.schemas import PaymentFinalizeResponse, PaymentOrderResponse
@@ -637,8 +639,6 @@ def _apply_registration_payment_success(
 
     pkg = db.query(Package).filter(Package.id == txn.package_id).first()
     if is_extension:
-        from app.services.access import resolve_extension_access_end_at
-
         manual = get_extension_batch_settings(db, user.subscription)
         extend_months = int(manual.get("months") or 2)
         base_day = parse_iso_date(manual.get("base_date"))
@@ -778,7 +778,7 @@ def confirm_extension_payment(
     signature: str | None = None,
     raw_payload: dict | None = None,
 ) -> dict:
-    """Finalize extension checkout and extend course access (Razorpay capture is source of truth)."""
+    """Finalize extension checkout and extend course access immediately after payment."""
     if request_id and order_id and payment_id:
         txn = (
             db.query(RegistrationPaymentTxn)
@@ -791,16 +791,22 @@ def confirm_extension_payment(
         )
         if not txn:
             raise HTTPException(status_code=404, detail="Extension transaction not found")
-        finalize_payment(
-            db,
-            request_id=request_id,
-            order_id=order_id,
-            payment_id=payment_id,
-            signature=signature or "",
-            raw_payload=raw_payload,
-            source="extension_confirm",
-            verify_signature=False,
-        )
+        # Prefer checkout HMAC so access unlocks immediately; fall back to Razorpay capture sync.
+        try:
+            finalize_payment(
+                db,
+                request_id=request_id,
+                order_id=order_id,
+                payment_id=payment_id,
+                signature=signature or "",
+                raw_payload=raw_payload,
+                source="extension_confirm",
+                verify_signature=bool((signature or "").strip()),
+            )
+        except HTTPException:
+            synced = try_finalize_pending_extension_payment(db, user)
+            if not synced:
+                raise
     else:
         synced = try_finalize_pending_extension_payment(db, user)
         if not synced:
@@ -809,7 +815,32 @@ def confirm_extension_payment(
                 detail="No captured extension payment found yet. Complete payment in Razorpay first.",
             )
 
+    db.expire_all()
+    db.refresh(user)
     active = find_active_user_subscription(db, user)
+    if not active or not has_active_subscription(db, user, user.subscription):
+        # Ensure subscription window exists even if an earlier finalize path skipped it.
+        manual = get_extension_batch_settings(db, user.subscription)
+        extend_months = int(manual.get("months") or 2)
+        base_day = parse_iso_date(manual.get("base_date"))
+        extension_base = (
+            datetime.combine(base_day, datetime.max.time()).replace(microsecond=0) if base_day else None
+        )
+        extension_end = resolve_extension_access_end_at(manual, extension_base, extend_months)
+        extend_active_subscription(
+            db,
+            user_id=user.id,
+            batch_slug=batch_slug(user.subscription),
+            extend_months=extend_months,
+            activated_at=datetime.utcnow(),
+            extension_base_date=extension_base,
+            extension_end_at=extension_end,
+            package_id=user.package_id,
+        )
+        db.commit()
+        db.expire_all()
+        active = find_active_user_subscription(db, user)
+
     manual = get_extension_batch_settings(db, user.subscription)
     months = int(manual.get("months") or 2)
     extended_end = active.end_at.isoformat() if active and active.end_at else None
@@ -818,7 +849,7 @@ def confirm_extension_payment(
         "message": "Extension applied successfully.",
         "extension_months": months,
         "extended_end_at": extended_end,
-        "extension_active": bool(active and active.end_at),
+        "extension_active": bool(active and active.end_at and has_active_subscription(db, user, user.subscription)),
     }
 
 
@@ -1160,7 +1191,8 @@ def finalize_payment(
         raise HTTPException(status_code=404, detail="User not found")
 
     if txn.is_finalized == "1":
-        if (user.payment_status or "").strip().lower() == "credit":
+        is_extension = (txn.gateway or "").strip().lower() == "extension"
+        if (user.payment_status or "").strip().lower() == "credit" and not is_extension:
             pkg = _package_for_thank_you_email(db, user, txn)
             try_send_registration_thank_you_email(db, user, pkg)
         return PaymentFinalizeResponse(
@@ -1172,8 +1204,11 @@ def finalize_payment(
             message="Payment already finalized",
         )
 
-    signature_ok = (not verify_signature) or _verify_signature(order_id, payment_id, signature)
-    captured_on_gateway = _razorpay_payment_is_captured(order_id, payment_id)
+    signature_ok = bool((signature or "").strip()) and _verify_signature(order_id, payment_id, signature)
+    # Valid checkout HMAC is enough to apply immediately (avoid waiting on Razorpay API lag).
+    captured_on_gateway = False
+    if not signature_ok:
+        captured_on_gateway = _razorpay_payment_is_captured(order_id, payment_id)
 
     if verify_signature and not signature_ok:
         if captured_on_gateway:
@@ -1203,7 +1238,7 @@ def finalize_payment(
                 detail="Invalid payment signature. Payment was not confirmed as captured on Razorpay.",
             )
 
-    if not verify_signature and not captured_on_gateway:
+    if not signature_ok and not captured_on_gateway:
         raise HTTPException(
             status_code=400,
             detail="Payment is not captured on Razorpay yet. Try again after payment completes.",

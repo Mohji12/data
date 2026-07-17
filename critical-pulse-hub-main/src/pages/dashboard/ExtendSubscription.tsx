@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import { useAuthStore } from '@/store/authStore';
 
@@ -29,7 +30,7 @@ function formatDisplayDate(iso: string | undefined): string {
 }
 
 export default function ExtendSubscription() {
-  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { user } = useAuthStore();
   const [loading, setLoading] = useState(false);
   const [offerLoading, setOfferLoading] = useState(true);
@@ -140,21 +141,26 @@ export default function ExtendSubscription() {
               const confirmed = (await apiClient('/registration/extension/confirm', {
                 method: 'POST',
                 body: JSON.stringify(paymentPayload),
-              })) as { message?: string; extended_end_at?: string };
+              })) as { message?: string; extended_end_at?: string; extension_active?: boolean };
               const until = confirmed?.extended_end_at
                 ? formatDisplayDate(confirmed.extended_end_at)
                 : null;
+              await queryClient.invalidateQueries({ queryKey: ['dashboardSummary'] });
+              await queryClient.invalidateQueries({ queryKey: ['dashboardSummaryNav'] });
               alert(
                 until
                   ? `Payment successful. Your access is extended until ${until}.`
                   : confirmed?.message || 'Payment successful. Your access has been extended.',
               );
-              navigate('/dashboard');
+              // Full reload so certificate-only mode unlocks videos/mock immediately.
+              window.location.assign('/dashboard');
             } catch (e: unknown) {
               try {
                 await apiClient('/registration/extension/confirm', { method: 'POST', body: '{}' });
+                await queryClient.invalidateQueries({ queryKey: ['dashboardSummary'] });
+                await queryClient.invalidateQueries({ queryKey: ['dashboardSummaryNav'] });
                 alert('Payment captured. Your access has been extended.');
-                navigate('/dashboard');
+                window.location.assign('/dashboard');
               } catch (syncErr: unknown) {
                 const msg =
                   (syncErr as { detail?: string; message?: string })?.detail ||
@@ -220,21 +226,15 @@ export default function ExtendSubscription() {
           Extend your current subscription by <strong>{offer.extension_months} months</strong>.
         </p>
       )}
-      {(offer.batch_end_date || offer.extended_end_date) && (
+      {offer.extended_end_date && (
         <p className="font-sans text-sm text-ink-muted mb-6">
-          You can pay now. Extended access runs from{' '}
-          <strong>{formatDisplayDate(offer.batch_end_date)}</strong>
-          {offer.extended_end_date ? (
-            <>
-              {' '}until <strong>{formatDisplayDate(offer.extended_end_date)}</strong>
-            </>
-          ) : null}
-          .
+          After payment, video library and mock tests unlock <strong>immediately</strong> and stay
+          available until <strong>{formatDisplayDate(offer.extended_end_date)}</strong>.
         </p>
       )}
-      {!offer.batch_end_date && !offer.extended_end_date && (
+      {!offer.extended_end_date && (
         <p className="font-sans text-sm text-ink-muted mb-6">
-          Payment is available now. Your access will be extended by {offer.extension_months} months from the official batch end date.
+          Payment is available now. Your access unlocks immediately after successful payment.
         </p>
       )}
 

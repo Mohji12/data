@@ -32,7 +32,7 @@ def _user(**kwargs):
 def _options(**overrides):
     base = {
         "batch_access_closed::batch-15": "1",
-        "extension_base_date::batch-15": "2026-07-20",
+        "extension_base_date::batch-15": "2026-07-15",
         "display_download_certificate": "1",
         "access_download_certificate": BATCH,
         "certificate_enabled::batch-15": "1",
