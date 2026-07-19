@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field, ValidationError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -11,7 +12,13 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db import get_db
 from app.models import LoginActivity, User
-from app.security import create_access_token, create_session_id, get_current_user
+from app.security import (
+    create_access_token,
+    create_session_id,
+    decode_access_token_for_refresh,
+    assert_active_user_session,
+    get_current_user,
+)
 from app.services.batch_access import ensure_user_batch_active
 from app.services.password_crypto import password_matches_stored, php_password_for_db
 from app.services.password_reset_otp import request_password_reset_otp, reset_password_with_otp
@@ -19,6 +26,7 @@ from app.services.password_reset_otp import request_password_reset_otp, reset_pa
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+_bearer = HTTPBearer(auto_error=False)
 
 
 def _payment_is_credit(payment_status: object) -> bool:
@@ -226,10 +234,50 @@ class SessionCheckResponse(BaseModel):
     valid: bool = True
 
 
+class SessionRefreshResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
 @router.get("/session/check", response_model=SessionCheckResponse)
 def session_check(_current_user: User = Depends(get_current_user)) -> SessionCheckResponse:
     """Lightweight poll — get_current_user already validates login_token vs JWT sid."""
     return SessionCheckResponse(valid=True)
+
+
+@router.post("/session/refresh", response_model=SessionRefreshResponse)
+def session_refresh(
+    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: Session = Depends(get_db),
+) -> SessionRefreshResponse:
+    """Issue a fresh JWT for the same device session.
+
+    Accepts a recently expired token (grace window) so a long mock exam can keep
+    saving answers without forcing a full re-login mid-test.
+    """
+    if not creds:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authorization token",
+        )
+    settings = get_settings()
+    grace = max(0, int(settings.api_token_refresh_grace_hours)) * 3600
+    payload = decode_access_token_for_refresh(creds.credentials, grace_seconds=grace)
+    user_id = int(payload.get("uid", 0))
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User session not found",
+        )
+    assert_active_user_session(user, payload)
+    ensure_user_batch_active(db, user)
+    token = create_access_token(
+        user_id=user.id,
+        email=user.email or str(payload.get("email") or ""),
+        session_id=str(payload.get("sid") or user.login_token or ""),
+    )
+    return SessionRefreshResponse(access_token=token)
 
 
 class ForgotPasswordOtpRequest(BaseModel):

@@ -52,7 +52,8 @@ def create_access_token(user_id: int, email: str, session_id: str) -> str:
     return f"{body}.{_b64url_encode(sig)}"
 
 
-def decode_access_token(token: str) -> dict[str, Any]:
+def _parse_access_token_payload(token: str) -> dict[str, Any]:
+    """Verify signature and return payload. Does not enforce expiry."""
     settings = get_settings()
     try:
         body, sig = token.split(".", 1)
@@ -70,8 +71,30 @@ def decode_access_token(token: str) -> dict[str, Any]:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
         ) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+    return payload
 
+
+def decode_access_token(token: str) -> dict[str, Any]:
+    payload = _parse_access_token_payload(token)
     if int(payload.get("exp", 0)) < int(time.time()):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+    return payload
+
+
+def decode_access_token_for_refresh(token: str, *, grace_seconds: int) -> dict[str, Any]:
+    """Allow recently expired tokens so an active exam session can renew the JWT."""
+    payload = _parse_access_token_payload(token)
+    exp = int(payload.get("exp", 0))
+    now = int(time.time())
+    if exp + max(0, grace_seconds) < now:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",

@@ -1,10 +1,46 @@
 import { getApiBaseUrl } from '@/lib/apiBase';
-import { getAuthBearerToken } from '@/lib/authToken';
+import {
+  ADMIN_TOKEN_KEY,
+  STUDENT_TOKEN_KEY,
+  getAuthBearerToken,
+  isExpiredTokenError,
+  setStudentToken,
+} from '@/lib/authToken';
 import { isSessionInvalidError, notifySessionInvalidated } from '@/lib/sessionEvents';
 
-export async function apiClient(endpoint: string, options: RequestInit = {}) {
+type ApiClientOptions = RequestInit & { _retried?: boolean };
+
+async function tryRefreshStudentToken(): Promise<boolean> {
+  // Do not refresh while an admin session is active in this tab.
+  if (sessionStorage.getItem(ADMIN_TOKEN_KEY)) return false;
+  const current = localStorage.getItem(STUDENT_TOKEN_KEY);
+  if (!current) return false;
+
+  try {
+    const response = await fetch(`${getApiBaseUrl()}/auth/session/refresh`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${current}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!response.ok) return false;
+    const data = (await response.json()) as { access_token?: string };
+    if (!data?.access_token) return false;
+    setStudentToken(data.access_token);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function refreshStudentSession(): Promise<boolean> {
+  return tryRefreshStudentToken();
+}
+
+export async function apiClient(endpoint: string, options: ApiClientOptions = {}) {
   const token = getAuthBearerToken();
-  
+
   const headers = new Headers(options.headers || {});
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
@@ -13,8 +49,9 @@ export async function apiClient(endpoint: string, options: RequestInit = {}) {
     headers.set('Content-Type', 'application/json');
   }
 
+  const { _retried, ...fetchOptions } = options;
   const response = await fetch(`${getApiBaseUrl()}${endpoint}`, {
-    ...options,
+    ...fetchOptions,
     headers,
   });
 
@@ -24,11 +61,22 @@ export async function apiClient(endpoint: string, options: RequestInit = {}) {
       const errorData = await response.json();
       // FastAPI usually returns errors under "detail"
       errorMessage = errorData.detail || errorData.message || errorMessage;
-    } catch (e) {
+    } catch {
       errorMessage = `HTTP error ${response.status}`;
     }
     if (response.status === 401 && isSessionInvalidError(errorMessage)) {
       notifySessionInvalidated();
+    } else if (
+      response.status === 401 &&
+      !_retried &&
+      isExpiredTokenError(errorMessage) &&
+      !endpoint.includes('/auth/session/refresh') &&
+      !endpoint.includes('/auth/login')
+    ) {
+      const refreshed = await tryRefreshStudentToken();
+      if (refreshed) {
+        return apiClient(endpoint, { ...options, _retried: true });
+      }
     }
     throw new Error(typeof errorMessage === 'string' ? errorMessage : JSON.stringify(errorMessage));
   }
@@ -36,7 +84,7 @@ export async function apiClient(endpoint: string, options: RequestInit = {}) {
   if (response.status === 204) {
     return null;
   }
-  
+
   return response.json();
 }
 
@@ -59,6 +107,12 @@ export async function apiDownload(
       errorMessage = errorData.detail || errorData.message || errorMessage;
     } catch {
       errorMessage = `HTTP error ${response.status}`;
+    }
+    if (response.status === 401 && isExpiredTokenError(errorMessage)) {
+      const refreshed = await tryRefreshStudentToken();
+      if (refreshed) {
+        return apiDownload(endpoint, filename);
+      }
     }
     throw new Error(typeof errorMessage === 'string' ? errorMessage : JSON.stringify(errorMessage));
   }

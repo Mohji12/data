@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
-import { apiClient } from '@/lib/apiClient';
+import { apiClient, refreshStudentSession } from '@/lib/apiClient';
+import { isExpiredTokenError } from '@/lib/authToken';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Check, Loader2 } from 'lucide-react';
 
@@ -37,6 +38,19 @@ export default function QuizExam() {
   const deadlineRef = useRef<number | null>(null);
   const timedOutRef = useRef(false);
   const saveChainsRef = useRef<Map<number, Promise<void>>>(new Map());
+  const failedSaveIdsRef = useRef<Set<number>>(new Set());
+  const finishInFlightRef = useRef(false);
+  const currentIdxRef = useRef(1);
+  const selectedAnswersRef = useRef<string[]>([]);
+  const flushPendingSavesRef = useRef<() => Promise<void>>(async () => {});
+  const saveAnswerRef = useRef<
+    (
+      questionId: number,
+      displayId: number,
+      answers: string[],
+      options?: { await?: boolean },
+    ) => Promise<void>
+  >(async () => {});
 
   const bundleKey = ['examAllQuestions', id, user?.id] as const;
 
@@ -76,25 +90,40 @@ export default function QuizExam() {
   const shouldPersistAnswer = (answers: string[], prior?: string[] | null) =>
     answers.length > 0 || (prior?.length ?? 0) > 0;
 
+  const flushPendingSaves = useCallback(async () => {
+    const pending = [...saveChainsRef.current.values()];
+    if (!pending.length) return;
+    await Promise.allSettled(pending);
+  }, []);
+
   const saveAnswer = useCallback(
     (questionId: number, displayId: number, answers: string[], options?: { await?: boolean }) => {
       updateLocalAnswer(questionId, answers);
       const prev = saveChainsRef.current.get(questionId) ?? Promise.resolve();
       const request = prev
         .catch(() => {})
-        .then(() =>
-          apiClient(`/exams/${id}/answer`, {
-            method: 'POST',
-            body: JSON.stringify({
-              user_id: user?.id,
-              question_id: questionId,
-              display_question_id: displayId,
-              answers,
-              is_last_question: false,
-            }),
-          }),
-        )
-        .then(() => undefined);
+        .then(async () => {
+          const body = JSON.stringify({
+            user_id: user?.id,
+            question_id: questionId,
+            display_question_id: displayId,
+            answers,
+            is_last_question: false,
+          });
+          try {
+            await apiClient(`/exams/${id}/answer`, { method: 'POST', body });
+            failedSaveIdsRef.current.delete(questionId);
+          } catch (firstErr) {
+            // One retry — transient network blips should not drop answers.
+            try {
+              await apiClient(`/exams/${id}/answer`, { method: 'POST', body });
+              failedSaveIdsRef.current.delete(questionId);
+            } catch {
+              failedSaveIdsRef.current.add(questionId);
+              throw firstErr;
+            }
+          }
+        });
       saveChainsRef.current.set(questionId, request);
       if (options?.await) return request;
       void request.catch(() => {});
@@ -142,6 +171,11 @@ export default function QuizExam() {
   const total = questions.length;
   const currentQ = questions[currentIdx - 1] ?? null;
 
+  currentIdxRef.current = currentIdx;
+  selectedAnswersRef.current = selectedAnswers;
+  flushPendingSavesRef.current = flushPendingSaves;
+  saveAnswerRef.current = saveAnswer;
+
   // Sync timer from bundle only when it has positive time (never reset a running clock to 0).
   useEffect(() => {
     if (examBundle?.remaining_seconds && examBundle.remaining_seconds > 0) {
@@ -159,17 +193,43 @@ export default function QuizExam() {
       setTimeRemaining(left);
       if (left === 0 && !timedOutRef.current) {
         timedOutRef.current = true;
+        if (finishInFlightRef.current) return;
+        finishInFlightRef.current = true;
         setIsFinishing(true);
-        void apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' })
-          .catch(() => {})
-          .finally(() => navigate(`/dashboard/quiz/${id}/result`));
+        void (async () => {
+          try {
+            const bundle = queryClient.getQueryData<ExamBundle>(bundleKey);
+            const idx = currentIdxRef.current;
+            const selected = selectedAnswersRef.current;
+            const q = bundle?.questions?.[idx - 1];
+            if (q && shouldPersistAnswer(selected, q.user_answer)) {
+              await saveAnswerRef.current(q.id, idx, selected, { await: true });
+            }
+            await flushPendingSavesRef.current();
+            await apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' });
+          } catch {
+            // Still land on result — attempt may already be closed by server time check.
+          } finally {
+            navigate(`/dashboard/quiz/${id}/result`);
+          }
+        })();
       }
     };
 
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, [examReady, id, user?.id, navigate]);
+  }, [examReady, id, user?.id, navigate, queryClient, bundleKey]);
+
+  // Keep the auth token alive for the full exam duration.
+  useEffect(() => {
+    if (!examReady) return;
+    void refreshStudentSession();
+    const intervalId = window.setInterval(() => {
+      void refreshStudentSession();
+    }, 10 * 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [examReady]);
 
   // Pause the attempt when leaving so remaining time is preserved server-side.
   useEffect(() => {
@@ -211,11 +271,25 @@ export default function QuizExam() {
   };
 
   const finishExamAndNavigate = useCallback(async () => {
-    if (isFinishing) return;
+    if (isFinishing || finishInFlightRef.current) return;
+    finishInFlightRef.current = true;
     setIsFinishing(true);
     try {
+      await refreshStudentSession();
       if (currentQ && shouldPersistAnswer(selectedAnswers, currentQ.user_answer)) {
         await saveAnswer(currentQ.id, currentIdx, selectedAnswers, { await: true });
+      }
+      await flushPendingSaves();
+      if (failedSaveIdsRef.current.size > 0) {
+        const failed = failedSaveIdsRef.current.size;
+        const proceed = confirm(
+          `${failed} answer(s) could not be saved to the server. Finish anyway? Click Cancel to stay and retry.`,
+        );
+        if (!proceed) {
+          finishInFlightRef.current = false;
+          setIsFinishing(false);
+          return;
+        }
       }
       await apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' });
       navigate(`/dashboard/quiz/${id}/result`);
@@ -225,10 +299,39 @@ export default function QuizExam() {
         navigate(`/dashboard/quiz/${id}/result`);
         return;
       }
+      if (isExpiredTokenError(e)) {
+        const refreshed = await refreshStudentSession();
+        if (refreshed) {
+          try {
+            await apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' });
+            navigate(`/dashboard/quiz/${id}/result`);
+            return;
+          } catch {
+            // fall through to alert
+          }
+        }
+        finishInFlightRef.current = false;
+        setIsFinishing(false);
+        alert(
+          'Your login session expired while submitting the exam. Please log in again, open this test, and click Finish once more. Your saved answers are kept on the server.',
+        );
+        return;
+      }
+      finishInFlightRef.current = false;
       setIsFinishing(false);
       alert(msg);
     }
-  }, [isFinishing, currentQ, selectedAnswers, currentIdx, saveAnswer, id, user?.id, navigate]);
+  }, [
+    isFinishing,
+    currentQ,
+    selectedAnswers,
+    currentIdx,
+    saveAnswer,
+    flushPendingSaves,
+    id,
+    user?.id,
+    navigate,
+  ]);
 
   const handleFinish = () => {
     if (isFinishing) return;

@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { apiClient } from '@/lib/apiClient';
+import { apiClient, refreshStudentSession } from '@/lib/apiClient';
+import { isExpiredTokenError } from '@/lib/authToken';
 import { SESSION_INVALIDATED_EVENT, isSessionInvalidError } from '@/lib/sessionEvents';
 import { useAuthStore } from '@/store/authStore';
 
@@ -37,6 +38,11 @@ export function useSingleDeviceSession() {
               ? error.message
               : 'You signed in on another device. Signing out…',
           );
+          return;
+        }
+        // Renew quietly — do not kick the student out during a mock exam for TTL expiry.
+        if (isExpiredTokenError(error)) {
+          await refreshStudentSession();
         }
       }
     };

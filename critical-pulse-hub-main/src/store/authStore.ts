@@ -1,8 +1,11 @@
 import { create } from 'zustand';
 import { apiClient } from '@/lib/apiClient';
-
-const STUDENT_TOKEN_KEY = 'access_token';
-const ADMIN_TOKEN_KEY = 'admin_access_token';
+import {
+  ADMIN_TOKEN_KEY,
+  STUDENT_TOKEN_KEY,
+  clearAdminToken,
+  clearStudentToken,
+} from '@/lib/authToken';
 
 export interface User {
   id: string;
@@ -84,6 +87,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       body: JSON.stringify({ username: username.trim(), password }),
     });
     if (adminRes.access_token) {
+      clearStudentToken();
       sessionStorage.setItem(ADMIN_TOKEN_KEY, adminRes.access_token);
     }
     set({
@@ -102,6 +106,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       });
 
       if (response.access_token) {
+        clearAdminToken();
         localStorage.setItem(STUDENT_TOKEN_KEY, response.access_token);
       }
 
@@ -160,8 +165,8 @@ export const useAuthStore = create<AuthState>((set) => ({
         /* ignore — token may already be invalid */
       }
     }
-    sessionStorage.removeItem(ADMIN_TOKEN_KEY);
-    localStorage.removeItem(STUDENT_TOKEN_KEY);
+    clearAdminToken();
+    clearStudentToken();
     set({ user: null, isAuthenticated: false, initialized: true });
   },
 
@@ -180,7 +185,7 @@ export const useAuthStore = create<AuthState>((set) => ({
           set({ isAuthenticated: true, user: adminUser, initialized: true });
           return;
         }
-        sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+        clearAdminToken();
         set({ user: null, isAuthenticated: false, initialized: true });
         return;
       }
@@ -192,12 +197,12 @@ export const useAuthStore = create<AuthState>((set) => ({
           return;
         }
       }
-      localStorage.removeItem(STUDENT_TOKEN_KEY);
+      clearStudentToken();
       set({ user: null, isAuthenticated: false, initialized: true });
     } catch (e) {
       console.error('Session invalid', e);
-      sessionStorage.removeItem(ADMIN_TOKEN_KEY);
-      localStorage.removeItem(STUDENT_TOKEN_KEY);
+      clearAdminToken();
+      clearStudentToken();
       set({ user: null, isAuthenticated: false, initialized: true });
     }
   },

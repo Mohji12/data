@@ -65,6 +65,10 @@ class Settings:
             "critical-care-classes-fastapi-secret",
         )
         self.api_token_ttl_hours: int = int(os.getenv("API_TOKEN_TTL_HOURS", "24"))
+        # How long after JWT exp a refresh is still allowed (covers long mock exams).
+        self.api_token_refresh_grace_hours: int = int(
+            os.getenv("API_TOKEN_REFRESH_GRACE_HOURS", "12")
+        )
         # Comma-separated browser origins allowed for cross-origin API calls (frontend host).
         _cors = os.getenv("CORS_ORIGINS", "").strip()
         if _cors:
