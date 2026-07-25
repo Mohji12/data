@@ -37,22 +37,61 @@ export default function QuizExam() {
   const examStartedRef = useRef(false);
   const deadlineRef = useRef<number | null>(null);
   const timedOutRef = useRef(false);
-  const saveChainsRef = useRef<Map<number, Promise<void>>>(new Map());
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const failedSaveIdsRef = useRef<Set<number>>(new Set());
   const finishInFlightRef = useRef(false);
   const currentIdxRef = useRef(1);
   const selectedAnswersRef = useRef<string[]>([]);
-  const flushPendingSavesRef = useRef<() => Promise<void>>(async () => {});
-  const saveAnswerRef = useRef<
-    (
-      questionId: number,
-      displayId: number,
-      answers: string[],
-      options?: { await?: boolean },
-    ) => Promise<void>
-  >(async () => {});
+  const localAnswersRef = useRef<Record<number, string[]>>({});
+  const flushAllAnswersRef = useRef<() => Promise<number>>(async () => 0);
+  const mergedLocalRef = useRef(false);
 
   const bundleKey = ['examAllQuestions', id, user?.id] as const;
+  const localStoreKey =
+    user?.id && id ? `examLocalAnswers:${id}:${user.id}` : null;
+
+  const readLocalStore = useCallback((): Record<number, string[]> => {
+    if (!localStoreKey) return {};
+    try {
+      const raw = localStorage.getItem(localStoreKey);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as Record<string, string[]>;
+      const out: Record<number, string[]> = {};
+      for (const [k, v] of Object.entries(parsed || {})) {
+        const qid = Number(k);
+        if (!Number.isFinite(qid) || !Array.isArray(v) || !v.length) continue;
+        out[qid] = v.map((a) => String(a).toUpperCase());
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }, [localStoreKey]);
+
+  const writeLocalStore = useCallback(
+    (map: Record<number, string[]>) => {
+      if (!localStoreKey) return;
+      try {
+        const payload: Record<string, string[]> = {};
+        for (const [qid, answers] of Object.entries(map)) {
+          if (answers?.length) payload[String(qid)] = answers;
+        }
+        localStorage.setItem(localStoreKey, JSON.stringify(payload));
+      } catch {
+        // ignore quota / private mode
+      }
+    },
+    [localStoreKey],
+  );
+
+  const clearLocalStore = useCallback(() => {
+    if (!localStoreKey) return;
+    try {
+      localStorage.removeItem(localStoreKey);
+    } catch {
+      // ignore
+    }
+  }, [localStoreKey]);
 
   const syncExamDeadline = useCallback((seconds: number, force = false) => {
     if (seconds <= 0) return;
@@ -74,37 +113,70 @@ export default function QuizExam() {
 
   const updateLocalAnswer = useCallback(
     (questionId: number, answers: string[]) => {
+      const normalized = answers.map((a) => a.toUpperCase());
+      if (normalized.length) {
+        localAnswersRef.current[questionId] = normalized;
+      } else {
+        delete localAnswersRef.current[questionId];
+      }
+      writeLocalStore(localAnswersRef.current);
       queryClient.setQueryData<ExamBundle>(bundleKey, (old) => {
         if (!old) return old;
         return {
           ...old,
           questions: old.questions.map((q) =>
-            q.id === questionId ? { ...q, user_answer: answers.length ? answers : null } : q,
+            q.id === questionId ? { ...q, user_answer: normalized.length ? normalized : null } : q,
           ),
         };
       });
     },
-    [queryClient, bundleKey],
+    [queryClient, bundleKey, writeLocalStore],
   );
 
   const shouldPersistAnswer = (answers: string[], prior?: string[] | null) =>
     answers.length > 0 || (prior?.length ?? 0) > 0;
 
-  const flushPendingSaves = useCallback(async () => {
-    const pending = [...saveChainsRef.current.values()];
-    if (!pending.length) return;
-    await Promise.allSettled(pending);
-  }, []);
+  const flushAllAnswers = useCallback(async () => {
+    const bundle = queryClient.getQueryData<ExamBundle>(bundleKey);
+    const fromBundle: Record<number, string[]> = {};
+    for (const q of bundle?.questions ?? []) {
+      if (q.user_answer?.length) {
+        fromBundle[q.id] = q.user_answer.map((a) => a.toUpperCase());
+      }
+    }
+    const merged = { ...fromBundle, ...localAnswersRef.current };
+    localAnswersRef.current = merged;
+    writeLocalStore(merged);
+
+    const answers = Object.entries(merged)
+      .filter(([, vals]) => vals.length > 0)
+      .map(([questionId, vals]) => ({
+        question_id: Number(questionId),
+        answers: vals,
+      }));
+
+    if (!answers.length) return 0;
+
+    await refreshStudentSession();
+    const res = await apiClient(`/exams/${id}/answers/bulk`, {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: Number(user?.id),
+        answers,
+      }),
+    });
+    failedSaveIdsRef.current.clear();
+    return Number(res?.saved || answers.length);
+  }, [bundleKey, id, queryClient, user?.id, writeLocalStore]);
 
   const saveAnswer = useCallback(
     (questionId: number, displayId: number, answers: string[], options?: { await?: boolean }) => {
       updateLocalAnswer(questionId, answers);
-      const prev = saveChainsRef.current.get(questionId) ?? Promise.resolve();
-      const request = prev
+      const request = saveQueueRef.current
         .catch(() => {})
         .then(async () => {
           const body = JSON.stringify({
-            user_id: user?.id,
+            user_id: Number(user?.id),
             question_id: questionId,
             display_question_id: displayId,
             answers,
@@ -114,7 +186,6 @@ export default function QuizExam() {
             await apiClient(`/exams/${id}/answer`, { method: 'POST', body });
             failedSaveIdsRef.current.delete(questionId);
           } catch (firstErr) {
-            // One retry — transient network blips should not drop answers.
             try {
               await apiClient(`/exams/${id}/answer`, { method: 'POST', body });
               failedSaveIdsRef.current.delete(questionId);
@@ -124,7 +195,10 @@ export default function QuizExam() {
             }
           }
         });
-      saveChainsRef.current.set(questionId, request);
+      saveQueueRef.current = request.then(
+        () => undefined,
+        () => undefined,
+      );
       if (options?.await) return request;
       void request.catch(() => {});
       return Promise.resolve();
@@ -170,11 +244,32 @@ export default function QuizExam() {
   const questions = examBundle?.questions ?? [];
   const total = questions.length;
   const currentQ = questions[currentIdx - 1] ?? null;
+  const answeredCount = questions.filter((q) => (q.user_answer?.length ?? 0) > 0).length;
 
   currentIdxRef.current = currentIdx;
   selectedAnswersRef.current = selectedAnswers;
-  flushPendingSavesRef.current = flushPendingSaves;
-  saveAnswerRef.current = saveAnswer;
+  flushAllAnswersRef.current = flushAllAnswers;
+
+  // Merge browser-backed answers into the exam bundle (covers failed/offline POSTs).
+  useEffect(() => {
+    if (!examBundle?.questions?.length || mergedLocalRef.current) return;
+    mergedLocalRef.current = true;
+    const stored = readLocalStore();
+    localAnswersRef.current = { ...stored };
+    if (!Object.keys(stored).length) return;
+    queryClient.setQueryData<ExamBundle>(bundleKey, (old) => {
+      if (!old) return old;
+      return {
+        ...old,
+        questions: old.questions.map((q) => {
+          const local = stored[q.id];
+          if (!local?.length) return q;
+          if ((q.user_answer?.length ?? 0) > 0) return q;
+          return { ...q, user_answer: local };
+        }),
+      };
+    });
+  }, [examBundle, bundleKey, queryClient, readLocalStore]);
 
   // Sync timer from bundle only when it has positive time (never reset a running clock to 0).
   useEffect(() => {
@@ -203,10 +298,11 @@ export default function QuizExam() {
             const selected = selectedAnswersRef.current;
             const q = bundle?.questions?.[idx - 1];
             if (q && shouldPersistAnswer(selected, q.user_answer)) {
-              await saveAnswerRef.current(q.id, idx, selected, { await: true });
+              updateLocalAnswer(q.id, selected);
             }
-            await flushPendingSavesRef.current();
+            await flushAllAnswersRef.current();
             await apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' });
+            clearLocalStore();
           } catch {
             // Still land on result — attempt may already be closed by server time check.
           } finally {
@@ -219,7 +315,7 @@ export default function QuizExam() {
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, [examReady, id, user?.id, navigate, queryClient, bundleKey]);
+  }, [examReady, id, user?.id, navigate, queryClient, bundleKey, updateLocalAnswer, clearLocalStore]);
 
   // Keep the auth token alive for the full exam duration.
   useEffect(() => {
@@ -277,13 +373,15 @@ export default function QuizExam() {
     try {
       await refreshStudentSession();
       if (currentQ && shouldPersistAnswer(selectedAnswers, currentQ.user_answer)) {
-        await saveAnswer(currentQ.id, currentIdx, selectedAnswers, { await: true });
+        updateLocalAnswer(currentQ.id, selectedAnswers);
       }
-      await flushPendingSaves();
-      if (failedSaveIdsRef.current.size > 0) {
-        const failed = failedSaveIdsRef.current.size;
+      // Wait for any in-flight single saves, then push the full local map once.
+      await saveQueueRef.current.catch(() => {});
+      const saved = await flushAllAnswers();
+      const localCount = Object.values(localAnswersRef.current).filter((a) => a.length).length;
+      if (saved < localCount) {
         const proceed = confirm(
-          `${failed} answer(s) could not be saved to the server. Finish anyway? Click Cancel to stay and retry.`,
+          `Only ${saved} of ${localCount} answers reached the server. Finish anyway? Click Cancel to stay and retry.`,
         );
         if (!proceed) {
           finishInFlightRef.current = false;
@@ -292,10 +390,16 @@ export default function QuizExam() {
         }
       }
       await apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' });
+      clearLocalStore();
       navigate(`/dashboard/quiz/${id}/result`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Could not finish exam';
       if (msg.includes('No active exam attempt') || msg.includes('Exam time is over')) {
+        try {
+          await flushAllAnswers();
+        } catch {
+          // best effort
+        }
         navigate(`/dashboard/quiz/${id}/result`);
         return;
       }
@@ -303,7 +407,9 @@ export default function QuizExam() {
         const refreshed = await refreshStudentSession();
         if (refreshed) {
           try {
+            await flushAllAnswers();
             await apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' });
+            clearLocalStore();
             navigate(`/dashboard/quiz/${id}/result`);
             return;
           } catch {
@@ -313,7 +419,7 @@ export default function QuizExam() {
         finishInFlightRef.current = false;
         setIsFinishing(false);
         alert(
-          'Your login session expired while submitting the exam. Please log in again, open this test, and click Finish once more. Your saved answers are kept on the server.',
+          'Your login session expired while submitting the exam. Please log in again, reopen this test, and click Finish. Your answers are kept in this browser until then.',
         );
         return;
       }
@@ -325,9 +431,9 @@ export default function QuizExam() {
     isFinishing,
     currentQ,
     selectedAnswers,
-    currentIdx,
-    saveAnswer,
-    flushPendingSaves,
+    updateLocalAnswer,
+    flushAllAnswers,
+    clearLocalStore,
     id,
     user?.id,
     navigate,
@@ -335,7 +441,12 @@ export default function QuizExam() {
 
   const handleFinish = () => {
     if (isFinishing) return;
-    if (!confirm('Are you sure you want to finish the exam?')) return;
+    const unanswered = Math.max(0, total - answeredCount);
+    const msg =
+      unanswered > 0
+        ? `You have answered ${answeredCount} of ${total} questions (${unanswered} unanswered).\n\nFinish and submit for scoring?`
+        : `You have answered all ${total} questions.\n\nFinish and submit for scoring?`;
+    if (!confirm(msg)) return;
     void finishExamAndNavigate();
   };
 
@@ -498,7 +609,9 @@ export default function QuizExam() {
         <div className="hidden xl:flex w-[400px] bg-chalk-warm border-l border-border-soft flex-col">
           <div className="flex items-center justify-between px-6 py-5 border-b border-border-soft bg-chalk">
             <span className="font-mono text-[11px] text-slate font-bold tracking-widest uppercase">Palette</span>
-            <span className="font-mono text-[9px] text-ink-faint">{total || '--'} Topics</span>
+            <span className="font-mono text-[9px] text-ink-faint">
+              {answeredCount}/{total || '--'} answered
+            </span>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4">

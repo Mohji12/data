@@ -61,6 +61,22 @@ class AnswerSubmitRequest(BaseModel):
     is_last_question: bool = False
 
 
+class BulkAnswerItem(BaseModel):
+    question_id: int
+    answers: list[str] = []
+
+
+class BulkAnswersRequest(BaseModel):
+    user_id: int
+    answers: list[BulkAnswerItem]
+
+
+class BulkAnswersResponse(BaseModel):
+    saved: int
+    skipped: int
+    total_user_marks: float
+
+
 class AnswerSubmitResponse(BaseModel):
     finish_exam: bool
     total_user_marks: float

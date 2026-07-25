@@ -18,6 +18,8 @@ from app.schemas import (
     AnswerSubmitRequest,
     AnswerSubmitResponse,
     AttemptState,
+    BulkAnswersRequest,
+    BulkAnswersResponse,
     ExamDetail,
     ExamSummary,
     QuestionOption,
@@ -203,6 +205,54 @@ def _answer_stats_for_attempt(
         or 0
     )
     return int(total_answered), int(total_correct), int(total_wrong)
+
+
+def _persist_one_answer(
+    db: Session,
+    *,
+    user_id: int,
+    exam_id: int,
+    user_exam_id: int,
+    question: Question,
+    answers: Optional[List[str]],
+) -> bool:
+    """Upsert one question answer for an attempt. Returns True if a non-empty answer was saved."""
+    marking_type = (
+        db.query(MarkingType).filter(MarkingType.id == question.marking_type_id).first()
+    )
+    if not marking_type:
+        raise HTTPException(status_code=400, detail=f"Marking type not configured for question {question.id}")
+
+    submitted_answer: Optional[str] = None
+    if answers:
+        submitted_answer = ",".join(sorted(a.strip().upper() for a in answers if a and a.strip()))
+
+    is_correct, marks, negative_mark = calculate_marks(
+        question=question,
+        marking_type=marking_type,
+        submitted_answer=submitted_answer,
+    )
+
+    _delete_answers_for_question(db, user_id, exam_id, user_exam_id, question.id)
+    db.flush()
+
+    if not submitted_answer:
+        return False
+
+    db.add(
+        UserAnswer(
+            user_id=user_id,
+            exam_id=exam_id,
+            user_exam_id=user_exam_id,
+            question_id=question.id,
+            answer=submitted_answer,
+            is_correct_answer="1" if is_correct else "0",
+            is_attempt_question="1",
+            marks=marks,
+            negative_mark=negative_mark,
+        )
+    )
+    return True
 
 
 def _build_attempt_state(
@@ -617,40 +667,14 @@ def submit_answer(
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
 
-    marking_type = (
-        db.query(MarkingType).filter(MarkingType.id == question.marking_type_id).first()
-    )
-    if not marking_type:
-        raise HTTPException(status_code=400, detail="Marking type not configured")
-
-    submitted_answer: Optional[str] = None
-    if payload.answers:
-        submitted_answer = ",".join(sorted(a.strip().upper() for a in payload.answers if a.strip()))
-
-    is_correct, marks, negative_mark = calculate_marks(
+    _persist_one_answer(
+        db,
+        user_id=payload.user_id,
+        exam_id=exam.id,
+        user_exam_id=ue.id,
         question=question,
-        marking_type=marking_type,
-        submitted_answer=submitted_answer,
+        answers=payload.answers,
     )
-
-    _delete_answers_for_question(
-        db, payload.user_id, exam.id, ue.id, question.id
-    )
-    db.flush()
-
-    if submitted_answer:
-        ua = UserAnswer(
-            user_id=payload.user_id,
-            exam_id=exam.id,
-            user_exam_id=ue.id,
-            question_id=question.id,
-            answer=submitted_answer,
-            is_correct_answer="1" if is_correct else "0",
-            is_attempt_question="1",
-            marks=marks,
-            negative_mark=negative_mark,
-        )
-        db.add(ua)
     db.commit()
 
     # Recalculate total marks
@@ -708,6 +732,76 @@ def submit_answer(
         total_user_marks=float(total_marks or 0.0),
         attempt=attempt_state,
         question=next_question_payload,
+    )
+
+
+@router.post("/{exam_id}/answers/bulk", response_model=BulkAnswersResponse)
+def submit_answers_bulk(
+    exam_id: int,
+    payload: BulkAnswersRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BulkAnswersResponse:
+    """Save many answers in one request — used before finish so none are lost."""
+    _ensure_exam_access(db, current_user)
+    if payload.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Cannot access another user's exam data")
+    exam = _get_exam_or_404(db, exam_id)
+    attempts = _list_user_exam_attempts(db, exam.id, payload.user_id)
+    ue = _find_active_attempt(attempts)
+    if not ue:
+        raise HTTPException(status_code=400, detail="No active exam attempt")
+
+    if get_remaining_seconds(ue) <= 0 and ue.is_finish_exam == "1":
+        raise HTTPException(status_code=400, detail="Exam time is over")
+
+    question_ids = parse_id_list(ue.exam_question_id or "")
+    allowed = set(question_ids)
+    if not allowed:
+        raise HTTPException(status_code=400, detail="Exam has no questions")
+
+    # Deduplicate by question_id — last item wins.
+    by_qid: dict[int, list[str]] = {}
+    for item in payload.answers:
+        by_qid[int(item.question_id)] = list(item.answers or [])
+
+    qids = [qid for qid in by_qid.keys() if qid in allowed]
+    questions = (
+        db.query(Question).filter(Question.id.in_(qids)).all() if qids else []
+    )
+    qmap = {q.id: q for q in questions}
+
+    saved = 0
+    skipped = 0
+    for qid, answers in by_qid.items():
+        if qid not in allowed:
+            skipped += 1
+            continue
+        question = qmap.get(qid)
+        if not question:
+            skipped += 1
+            continue
+        if _persist_one_answer(
+            db,
+            user_id=payload.user_id,
+            exam_id=exam.id,
+            user_exam_id=ue.id,
+            question=question,
+            answers=answers,
+        ):
+            saved += 1
+        else:
+            skipped += 1
+
+    db.commit()
+    total_marks = _sum_marks_for_attempt(db, payload.user_id, exam.id, ue.id)
+    ue.marks = float(total_marks or 0.0)
+    db.commit()
+
+    return BulkAnswersResponse(
+        saved=saved,
+        skipped=skipped,
+        total_user_marks=float(total_marks or 0.0),
     )
 
 
@@ -787,12 +881,13 @@ def list_attempt_results(
         total_answered, total_correct, total_wrong = _answer_stats_for_attempt(
             db, user_id, exam_id, ue.id
         )
+        computed_marks = _sum_marks_for_attempt(db, user_id, exam_id, ue.id)
         out.append(
             AttemptSummary(
                 attempt_no=idx,
                 user_exam_id=ue.id,
                 is_finished=ue.is_finish_exam == "1",
-                marks=float(ue.marks or 0.0),
+                marks=float(computed_marks if computed_marks is not None else (ue.marks or 0.0)),
                 start_date=ue.start_date,
                 end_date=ue.end_date,
                 total_answered=int(total_answered or 0),

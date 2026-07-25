@@ -78,11 +78,16 @@ export default function QuizResult() {
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <span className="font-display font-black text-6xl text-mint leading-none">{score}</span>
-            <span className="font-mono text-[13px] text-ink-faint">Marks</span>
+            <span className="font-mono text-[13px] text-ink-faint">
+              / {result.total_questions} Marks
+            </span>
           </div>
         </div>
         <h2 className="font-display font-bold text-3xl text-slate mb-4">Exam Completed: {result.exam_title}</h2>
-        <p className="font-mono text-[11px] text-ink-faint mb-4 uppercase tracking-wider">Attempt {result.attempt_no || 1}</p>
+        <p className="font-mono text-[11px] text-ink-faint mb-2 uppercase tracking-wider">Attempt {result.attempt_no || 1}</p>
+        <p className="font-sans text-sm text-ink-secondary mb-4">
+          {result.total_correct} correct · {result.total_wrong} incorrect · {result.total_answered}/{result.total_questions} answered
+        </p>
         <div className="inline-flex items-center gap-2 bg-mint-pale border border-mint/30 rounded-sm px-5 py-2 font-mono text-[11px] text-slate">
           ✓ RECORDED SUCCESSFULLY
         </div>
