@@ -370,6 +370,16 @@ export default function QuizExam() {
     if (isFinishing || finishInFlightRef.current) return;
     finishInFlightRef.current = true;
     setIsFinishing(true);
+
+    const goToResult = () => {
+      clearLocalStore();
+      navigate(`/dashboard/quiz/${id}/result`);
+    };
+
+    const postFinish = async () => {
+      await apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' });
+    };
+
     try {
       await refreshStudentSession();
       if (currentQ && shouldPersistAnswer(selectedAnswers, currentQ.user_answer)) {
@@ -377,30 +387,56 @@ export default function QuizExam() {
       }
       // Wait for any in-flight single saves, then push the full local map once.
       await saveQueueRef.current.catch(() => {});
-      const saved = await flushAllAnswers();
-      const localCount = Object.values(localAnswersRef.current).filter((a) => a.length).length;
-      if (saved < localCount) {
-        const proceed = confirm(
-          `Only ${saved} of ${localCount} answers reached the server. Finish anyway? Click Cancel to stay and retry.`,
-        );
-        if (!proceed) {
-          finishInFlightRef.current = false;
-          setIsFinishing(false);
-          return;
+      let bulkSaved = false;
+      try {
+        const saved = await flushAllAnswers();
+        bulkSaved = true;
+        const localCount = Object.values(localAnswersRef.current).filter((a) => a.length).length;
+        if (saved < localCount) {
+          const proceed = confirm(
+            `Only ${saved} of ${localCount} answers reached the server. Finish anyway? Click Cancel to stay and retry.`,
+          );
+          if (!proceed) {
+            finishInFlightRef.current = false;
+            setIsFinishing(false);
+            return;
+          }
+        }
+      } catch (bulkErr) {
+        // Continue to finish if answers were already saved during the exam.
+        console.warn('bulk save failed during finish', bulkErr);
+      }
+
+      try {
+        await postFinish();
+      } catch (finishErr) {
+        const finishMsg = finishErr instanceof Error ? finishErr.message : '';
+        // Network blips after answers are saved — retry, then open result anyway.
+        if (finishMsg.toLowerCase().includes('failed to fetch') || isExpiredTokenError(finishErr)) {
+          await refreshStudentSession();
+          try {
+            await postFinish();
+          } catch {
+            if (bulkSaved || Object.keys(localAnswersRef.current).length > 0) {
+              goToResult();
+              return;
+            }
+            throw finishErr;
+          }
+        } else {
+          throw finishErr;
         }
       }
-      await apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' });
-      clearLocalStore();
-      navigate(`/dashboard/quiz/${id}/result`);
+      goToResult();
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Could not finish exam';
       if (msg.includes('No active exam attempt') || msg.includes('Exam time is over')) {
-        try {
-          await flushAllAnswers();
-        } catch {
-          // best effort
-        }
-        navigate(`/dashboard/quiz/${id}/result`);
+        goToResult();
+        return;
+      }
+      if (msg.toLowerCase().includes('failed to fetch')) {
+        // Answers may already be on the server — open result page.
+        goToResult();
         return;
       }
       if (isExpiredTokenError(e)) {
@@ -408,9 +444,8 @@ export default function QuizExam() {
         if (refreshed) {
           try {
             await flushAllAnswers();
-            await apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' });
-            clearLocalStore();
-            navigate(`/dashboard/quiz/${id}/result`);
+            await postFinish();
+            goToResult();
             return;
           } catch {
             // fall through to alert

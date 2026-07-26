@@ -975,12 +975,24 @@ def finish_exam(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ResultSummary:
+    """Mark attempt finished and return score summary only.
+
+    Full question reviews are loaded by GET /result — keeping finish lightweight
+    avoids large JSON responses that browsers often surface as "Failed to fetch".
+    """
     _ensure_exam_access(db, current_user)
     user_id = _resolve_user_id(current_user, user_id)
     exam = _get_exam_or_404(db, exam_id)
     attempts = _list_user_exam_attempts(db, exam.id, user_id)
     ue = _find_active_attempt(attempts)
     if not ue:
+        # Idempotent: if already finished, return that attempt's summary.
+        if attempts and attempts[-1].is_finish_exam == "1":
+            ue = attempts[-1]
+            attempt_no = _attempt_number(attempts, ue)
+            return _build_result_summary_for_attempt(
+                db, exam, ue, attempt_no, user_id
+            )
         raise HTTPException(status_code=400, detail="No active exam attempt")
     attempt_no = _attempt_number(attempts, ue)
 
@@ -999,43 +1011,6 @@ def finish_exam(
     if not question_ids:
         question_ids = build_exam_question_list(db, exam)
 
-    # Fetch all questions for the review
-    questions = db.query(Question).filter(Question.id.in_(question_ids)).all()
-    # Sort them according to question_ids order
-    questions_map = {q.id: q for q in questions}
-    sorted_questions = [questions_map[qid] for qid in question_ids if qid in questions_map]
-
-    user_answers = _latest_answers_for_attempt(db, user_id, exam.id, ue.id)
-    ua_map = {ua.question_id: ua for ua in user_answers}
-
-    reviews: List[QuestionReview] = []
-    for q in sorted_questions:
-        ua = ua_map.get(q.id)
-        
-        # Build options
-        options: List[QuestionOption] = []
-        for key in ["A", "B", "C", "D", "E"]:
-            field_name = f"option_{key.lower()}"
-            text_val = getattr(q, field_name)
-            if text_val:
-                options.append(QuestionOption(key=key, text=text_val))
-
-        user_answer_list = [v.strip().upper() for v in ua.answer.split(",") if v.strip()] if ua and ua.answer else []
-        correct_answer_list = [v.strip().upper() for v in q.answer.split(",") if v.strip()] if q.answer else []
-
-        reviews.append(
-            QuestionReview(
-                id=q.id,
-                text=q.question,
-                options=options,
-                user_answer=user_answer_list if user_answer_list else None,
-                correct_answer=correct_answer_list,
-                is_correct=ua.is_correct_answer == "1" if ua else False,
-                marks=float(ua.marks or 0.0) if ua else 0.0,
-                negative_mark=float(ua.negative_mark or 0.0) if ua else 0.0,
-            )
-        )
-
     return ResultSummary(
         exam_id=exam.id,
         user_id=user_id,
@@ -1046,6 +1021,6 @@ def finish_exam(
         total_correct=int(total_correct or 0),
         total_wrong=int(total_wrong or 0),
         total_marks=float(total_marks or 0.0),
-        reviews=reviews,
+        reviews=[],
     )
 
