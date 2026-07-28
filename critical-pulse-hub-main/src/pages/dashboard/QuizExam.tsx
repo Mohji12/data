@@ -376,53 +376,70 @@ export default function QuizExam() {
       navigate(`/dashboard/quiz/${id}/result`);
     };
 
+    const withTimeout = async <T,>(promise: Promise<T>, ms: number): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          promise,
+          new Promise<T>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Request timed out')), ms);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+
     const postFinish = async () => {
-      await apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' });
+      await withTimeout(
+        apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' }),
+        20000,
+      );
     };
 
     try {
       await refreshStudentSession();
       if (currentQ && shouldPersistAnswer(selectedAnswers, currentQ.user_answer)) {
         updateLocalAnswer(currentQ.id, selectedAnswers);
+        // Persist current question only — full bulk of 100 answers is too slow mid-finish.
+        await withTimeout(
+          saveAnswer(currentQ.id, currentIdx, selectedAnswers, { await: true }),
+          15000,
+        ).catch(() => {});
       }
-      // Wait for any in-flight single saves, then push the full local map once.
-      await saveQueueRef.current.catch(() => {});
-      let bulkSaved = false;
+      await withTimeout(saveQueueRef.current.catch(() => {}), 15000).catch(() => {});
+
+      // Best-effort sync of any failed/local-only answers, but never block finish for long.
+      // Answers are already saved one-by-one while the student works through the exam.
       try {
-        const saved = await flushAllAnswers();
-        bulkSaved = true;
-        const localCount = Object.values(localAnswersRef.current).filter((a) => a.length).length;
-        if (saved < localCount) {
-          const proceed = confirm(
-            `Only ${saved} of ${localCount} answers reached the server. Finish anyway? Click Cancel to stay and retry.`,
-          );
-          if (!proceed) {
-            finishInFlightRef.current = false;
-            setIsFinishing(false);
-            return;
-          }
-        }
+        await withTimeout(flushAllAnswers(), 25000);
       } catch (bulkErr) {
-        // Continue to finish if answers were already saved during the exam.
-        console.warn('bulk save failed during finish', bulkErr);
+        console.warn('bulk save skipped/failed during early finish', bulkErr);
       }
 
       try {
         await postFinish();
       } catch (finishErr) {
         const finishMsg = finishErr instanceof Error ? finishErr.message : '';
-        // Network blips after answers are saved — retry, then open result anyway.
-        if (finishMsg.toLowerCase().includes('failed to fetch') || isExpiredTokenError(finishErr)) {
+        if (
+          finishMsg.toLowerCase().includes('failed to fetch') ||
+          finishMsg.toLowerCase().includes('timed out') ||
+          isExpiredTokenError(finishErr)
+        ) {
           await refreshStudentSession();
           try {
             await postFinish();
           } catch {
-            if (bulkSaved || Object.keys(localAnswersRef.current).length > 0) {
-              goToResult();
-              return;
-            }
-            throw finishErr;
+            // Answers are already on the server — open result page anyway.
+            goToResult();
+            return;
           }
+        } else if (
+          finishMsg.includes('No active exam attempt') ||
+          finishMsg.includes('Exam time is over')
+        ) {
+          goToResult();
+          return;
         } else {
           throw finishErr;
         }
@@ -430,12 +447,12 @@ export default function QuizExam() {
       goToResult();
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Could not finish exam';
-      if (msg.includes('No active exam attempt') || msg.includes('Exam time is over')) {
-        goToResult();
-        return;
-      }
-      if (msg.toLowerCase().includes('failed to fetch')) {
-        // Answers may already be on the server — open result page.
+      if (
+        msg.includes('No active exam attempt') ||
+        msg.includes('Exam time is over') ||
+        msg.toLowerCase().includes('failed to fetch') ||
+        msg.toLowerCase().includes('timed out')
+      ) {
         goToResult();
         return;
       }
@@ -443,18 +460,18 @@ export default function QuizExam() {
         const refreshed = await refreshStudentSession();
         if (refreshed) {
           try {
-            await flushAllAnswers();
             await postFinish();
             goToResult();
             return;
           } catch {
-            // fall through to alert
+            goToResult();
+            return;
           }
         }
         finishInFlightRef.current = false;
         setIsFinishing(false);
         alert(
-          'Your login session expired while submitting the exam. Please log in again, reopen this test, and click Finish. Your answers are kept in this browser until then.',
+          'Your login session expired while submitting the exam. Please log in again and open Results — your answers are already saved.',
         );
         return;
       }
@@ -466,7 +483,9 @@ export default function QuizExam() {
     isFinishing,
     currentQ,
     selectedAnswers,
+    currentIdx,
     updateLocalAnswer,
+    saveAnswer,
     flushAllAnswers,
     clearLocalStore,
     id,

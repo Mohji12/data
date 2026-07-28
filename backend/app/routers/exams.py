@@ -207,6 +207,13 @@ def _answer_stats_for_attempt(
     return int(total_answered), int(total_correct), int(total_wrong)
 
 
+def _normalize_submitted_answers(answers: Optional[List[str]]) -> Optional[str]:
+    if not answers:
+        return None
+    joined = ",".join(sorted(a.strip().upper() for a in answers if a and a.strip()))
+    return joined or None
+
+
 def _persist_one_answer(
     db: Session,
     *,
@@ -215,17 +222,25 @@ def _persist_one_answer(
     user_exam_id: int,
     question: Question,
     answers: Optional[List[str]],
+    existing: Optional[UserAnswer] = None,
 ) -> bool:
     """Upsert one question answer for an attempt. Returns True if a non-empty answer was saved."""
+    submitted_answer = _normalize_submitted_answers(answers)
+
+    # Skip rewrite when the same answer is already stored (keeps early-finish bulk fast).
+    if (
+        existing is not None
+        and submitted_answer
+        and (existing.answer or "").strip() == submitted_answer
+        and existing.is_attempt_question == "1"
+    ):
+        return True
+
     marking_type = (
         db.query(MarkingType).filter(MarkingType.id == question.marking_type_id).first()
     )
     if not marking_type:
         raise HTTPException(status_code=400, detail=f"Marking type not configured for question {question.id}")
-
-    submitted_answer: Optional[str] = None
-    if answers:
-        submitted_answer = ",".join(sorted(a.strip().upper() for a in answers if a and a.strip()))
 
     is_correct, marks, negative_mark = calculate_marks(
         question=question,
@@ -771,8 +786,28 @@ def submit_answers_bulk(
     )
     qmap = {q.id: q for q in questions}
 
+    existing_rows = (
+        db.query(UserAnswer)
+        .filter(
+            UserAnswer.user_id == payload.user_id,
+            UserAnswer.exam_id == exam.id,
+            UserAnswer.user_exam_id == ue.id,
+            UserAnswer.question_id.in_(qids) if qids else False,
+        )
+        .all()
+        if qids
+        else []
+    )
+    # Latest row per question wins if duplicates exist.
+    existing_by_qid: dict[int, UserAnswer] = {}
+    for row in existing_rows:
+        prev = existing_by_qid.get(row.question_id)
+        if prev is None or int(row.id or 0) > int(prev.id or 0):
+            existing_by_qid[row.question_id] = row
+
     saved = 0
     skipped = 0
+    changed = 0
     for qid, answers in by_qid.items():
         if qid not in allowed:
             skipped += 1
@@ -781,6 +816,8 @@ def submit_answers_bulk(
         if not question:
             skipped += 1
             continue
+        existing = existing_by_qid.get(qid)
+        before_answer = (existing.answer or "").strip() if existing else ""
         if _persist_one_answer(
             db,
             user_id=payload.user_id,
@@ -788,15 +825,27 @@ def submit_answers_bulk(
             user_exam_id=ue.id,
             question=question,
             answers=answers,
+            existing=existing,
         ):
             saved += 1
+            after = _normalize_submitted_answers(answers) or ""
+            if after != before_answer:
+                changed += 1
         else:
             skipped += 1
 
     db.commit()
-    total_marks = _sum_marks_for_attempt(db, payload.user_id, exam.id, ue.id)
-    ue.marks = float(total_marks or 0.0)
-    db.commit()
+    # Only recompute marks when something actually changed — early finish is then near-instant.
+    if changed:
+        total_marks = _sum_marks_for_attempt(db, payload.user_id, exam.id, ue.id)
+        ue.marks = float(total_marks or 0.0)
+        db.commit()
+    else:
+        total_marks = float(ue.marks or 0.0)
+        if total_marks == 0.0 and saved:
+            total_marks = _sum_marks_for_attempt(db, payload.user_id, exam.id, ue.id)
+            ue.marks = float(total_marks or 0.0)
+            db.commit()
 
     return BulkAnswersResponse(
         saved=saved,
