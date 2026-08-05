@@ -300,8 +300,15 @@ export default function QuizExam() {
             if (q && shouldPersistAnswer(selected, q.user_answer)) {
               updateLocalAnswer(q.id, selected);
             }
-            await flushAllAnswersRef.current();
-            await apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' });
+            // Cap wait — answers are already saved question-by-question during the exam.
+            await Promise.race([
+              flushAllAnswersRef.current().catch(() => 0),
+              new Promise((r) => setTimeout(r, 20000)),
+            ]);
+            await Promise.race([
+              apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' }),
+              new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000)),
+            ]).catch(() => {});
             clearLocalStore();
           } catch {
             // Still land on result — attempt may already be closed by server time check.

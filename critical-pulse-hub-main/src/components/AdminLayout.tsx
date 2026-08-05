@@ -39,7 +39,7 @@ const navItems = [
   {
     label: 'COMMUNICATION',
     items: [
-      { label: 'WhatsApp', to: '/admin/communication/whatsapp', icon: Send },
+      { label: 'WhatsApp Bulk', to: 'https://wapp.sakshisoftware.in/', icon: Send },
       { label: 'Bulk Mail', to: 'https://staging.d5w312h4wy6nw.amplifyapp.com/', icon: Mail },
     ],
   },
@@ -125,8 +125,6 @@ export default function AdminLayout() {
             <a
               key={item.to}
               href={item.to}
-              target="_blank"
-              rel="noopener noreferrer"
               onClick={onNavigate}
               className="flex items-center gap-3 py-2.5 px-4 mx-3 rounded transition-all duration-200 text-sm font-sans text-chalk/50 hover:text-chalk hover:bg-white/[0.05]"
             >

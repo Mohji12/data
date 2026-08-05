@@ -65,10 +65,22 @@ const AdminMockTestAttempts = lazy(() => import('@/pages/admin/AdminMockTestAtte
 const AdminTestimonials = lazy(() => import('@/pages/admin/AdminTestimonials'));
 const AdminAuditorium = lazy(() => import('@/pages/admin/AdminAuditorium'));
 const AdminVideoQuestions = lazy(() => import('@/pages/admin/AdminVideoQuestions'));
-const AdminWhatsApp = lazy(() => import('./pages/admin/AdminWhatsApp.tsx'));
 const AdminExtensions = lazy(() => import('@/pages/admin/AdminExtensions'));
 const AdminExtensionRequests = lazy(() => import('@/pages/admin/AdminExtensionRequests'));
 const AdminEventRegistrations = lazy(() => import('@/pages/admin/AdminEventRegistrations'));
+
+const WHATSAPP_BULK_URL = 'https://wapp.sakshisoftware.in/';
+
+function WhatsAppBulkRedirect() {
+  useEffect(() => {
+    window.location.replace(WHATSAPP_BULK_URL);
+  }, []);
+  return (
+    <div className="p-8 font-sans text-sm text-ink-faint">
+      Redirecting to WhatsApp Bulk…
+    </div>
+  );
+}
 
 import { useAuthStore } from '@/store/authStore';
 import ContentProtection from '@/components/ContentProtection';
@@ -176,7 +188,7 @@ const App = () => {
             <Route path="auditorium" element={<AdminAuditorium />} />
             <Route path="settings" element={<AdminSettings />} />
             <Route path="login-activity" element={<AdminLoginActivity />} />
-            <Route path="communication/whatsapp" element={<AdminWhatsApp />} />
+            <Route path="communication/whatsapp" element={<WhatsAppBulkRedirect />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>

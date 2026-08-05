@@ -339,7 +339,7 @@ def main() -> int:
                 return 1
             result = finish.json()
             step(
-                "Finish exam / result payload",
+                "Finish exam / slim score payload",
                 True,
                 {
                     "attempt_no": result.get("attempt_no"),
@@ -348,23 +348,55 @@ def main() -> int:
                     "total_correct": result.get("total_correct"),
                     "total_wrong": result.get("total_wrong"),
                     "total_marks": result.get("total_marks"),
-                    "reviews": len(result.get("reviews") or []),
+                    "reviews_in_finish": len(result.get("reviews") or []),
+                },
+            )
+
+            # Full detailed review is loaded by GET /result (finish stays lightweight).
+            detail = client.get(
+                f"/exams/{EXAM_ID}/result?user_id={user.id}&attempt_no={result.get('attempt_no') or 1}",
+                headers=headers,
+            )
+            if detail.status_code >= 400:
+                step("GET result (detailed review)", False, f"{detail.status_code} {detail.text[:400]}")
+                _write_report(report)
+                return 1
+            full = detail.json()
+            step(
+                "GET result (detailed review)",
+                True,
+                {
+                    "total_answered": full.get("total_answered"),
+                    "total_correct": full.get("total_correct"),
+                    "total_wrong": full.get("total_wrong"),
+                    "total_marks": full.get("total_marks"),
+                    "reviews": len(full.get("reviews") or []),
                 },
             )
 
             # Assertions for the report
             checks = [
-                ("total_questions == 100", int(result.get("total_questions") or 0) == 100),
-                ("total_answered == 100", int(result.get("total_answered") or 0) == 100),
+                ("finish: total_questions == 100", int(result.get("total_questions") or 0) == 100),
+                ("finish: total_answered == 100", int(result.get("total_answered") or 0) == 100),
                 (
-                    "correct + wrong == answered",
+                    "finish: correct + wrong == answered",
                     int(result.get("total_correct") or 0) + int(result.get("total_wrong") or 0)
                     == int(result.get("total_answered") or 0),
                 ),
-                ("reviews == 100", len(result.get("reviews") or []) == 100),
                 (
-                    "marks within 0..100",
-                    0 <= float(result.get("total_marks") or 0) <= 100,
+                    "finish: marks match expected (~80)",
+                    abs(float(result.get("total_marks") or 0) - float(expected_correct)) < 0.01
+                    or abs(float(result.get("total_marks") or 0) - 80.0) < 0.01,
+                ),
+                ("result: total_answered == 100", int(full.get("total_answered") or 0) == 100),
+                ("result: reviews == 100", len(full.get("reviews") or []) == 100),
+                (
+                    "result: marks within 0..100",
+                    0 <= float(full.get("total_marks") or 0) <= 100,
+                ),
+                (
+                    "result score matches finish score",
+                    float(full.get("total_marks") or -1) == float(result.get("total_marks") or -2),
                 ),
             ]
             all_ok = True
@@ -378,6 +410,7 @@ def main() -> int:
                 "total_correct": result.get("total_correct"),
                 "total_wrong": result.get("total_wrong"),
                 "total_marks": result.get("total_marks"),
+                "reviews_count": len(full.get("reviews") or []),
                 "expected_correct_approx": expected_correct,
                 "expected_wrong_approx": expected_wrong,
             }
@@ -393,6 +426,7 @@ def main() -> int:
             print(f"Correct:          {result.get('total_correct')}")
             print(f"Incorrect:        {result.get('total_wrong')}")
             print(f"Marks:            {result.get('total_marks')} / {result.get('total_questions')}")
+            print(f"Detailed reviews: {len(full.get('reviews') or [])}")
             print(f"Overall:          {'PASS' if report['pass'] else 'FAIL'}")
             print("==========================================\n")
 
