@@ -68,8 +68,37 @@ export function parseVimeoVideoId(rawUrl?: string | null): string | null {
   return null;
 }
 
+/** Unlisted/private Vimeo share token (`?h=` or `/videoId/hash`). Must be kept on the embed URL. */
+export function parseVimeoPrivacyHash(rawUrl?: string | null): string | null {
+  const url = String(rawUrl || '').trim();
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const fromQuery = u.searchParams.get('h');
+    if (fromQuery && /^[a-f0-9]{6,}$/i.test(fromQuery)) return fromQuery;
+
+    const host = u.hostname.toLowerCase();
+    const parts = u.pathname.split('/').filter(Boolean);
+    if (host.endsWith('vimeo.com') && host !== 'player.vimeo.com') {
+      if (parts[0] && /^\d+$/.test(parts[0]) && parts[1] && /^[a-f0-9]{6,}$/i.test(parts[1])) {
+        return parts[1];
+      }
+    }
+    if (host === 'player.vimeo.com' && parts[0] === 'video' && parts[2] && /^[a-f0-9]{6,}$/i.test(parts[2])) {
+      return parts[2];
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 /** Minimal chrome; native controls hidden — custom overlay provides all UI. */
-export function buildVimeoPlayerEmbedUrl(videoId: string, playerId?: string): string {
+export function buildVimeoPlayerEmbedUrl(
+  videoId: string,
+  playerId?: string,
+  privacyHash?: string | null,
+): string {
   const params = new URLSearchParams({
     api: '1',           // required for postMessage timeupdate / getCurrentTime
     title: '0',
@@ -81,9 +110,12 @@ export function buildVimeoPlayerEmbedUrl(videoId: string, playerId?: string): st
     transcript: '0',
     pip: '0',
     allowfullscreen: '1',
+    // Adaptive bitrate — avoids starting at 1080p/4K which buffers on typical Wi‑Fi.
+    quality: 'auto',
     // speed=1 enables the playback-rate API (required for setPlaybackRate postMessage).
     speed: '1',
   });
+  if (privacyHash) params.set('h', privacyHash);
   if (playerId) params.set('player_id', playerId);
   return `https://player.vimeo.com/video/${videoId}?${params.toString()}`;
 }

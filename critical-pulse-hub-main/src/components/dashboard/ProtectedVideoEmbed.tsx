@@ -5,6 +5,7 @@ import {
   buildVimeoPlayerEmbedUrl,
   buildYouTubeEmbedUrl,
   isDirectVideoFileUrl,
+  parseVimeoPrivacyHash,
   parseVimeoVideoId,
   parseYouTubeVideoId,
   toEmbeddableVideoUrl,
@@ -170,6 +171,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
   const [qualities, setQualities] = useState<{ id: string; label: string }[]>([]);
   const [currentQuality, setCurrentQuality] = useState<string>('auto');
   const [showQualityMenu, setShowQualityMenu] = useState(false);
+  const [playerError, setPlayerError] = useState<string | null>(null);
+  const currentQualityRef = useRef('auto');
+  const bufferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
   const [currentSpeed, setCurrentSpeed] = useState<number>(1);
@@ -179,16 +183,31 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
   const isDirectVideo = isDirectVideoFileUrl(videoUrl);
   const detected = isDirectVideo ? null : detectProvider(videoUrl);
   const vimeoPlayerId = detected?.provider === 'vimeo' ? `vimeo-player-${detected.id}` : undefined;
+  const vimeoPrivacyHash = detected?.provider === 'vimeo' ? parseVimeoPrivacyHash(videoUrl) : null;
   const directVideoSrc = isDirectVideo
     ? resolvePublicUploadUrl(videoUrl) || toEmbeddableVideoUrl(videoUrl)
     : null;
   const embedSrc = detected
     ? detected.provider === 'vimeo'
-      ? buildVimeoPlayerEmbedUrl(detected.id, vimeoPlayerId)
+      ? buildVimeoPlayerEmbedUrl(detected.id, vimeoPlayerId, vimeoPrivacyHash)
       : buildYouTubeEmbedUrl(detected.id, window.location.origin)
     : isDirectVideo
       ? null
       : toEmbeddableVideoUrl(videoUrl);
+
+  useEffect(() => {
+    currentQualityRef.current = currentQuality;
+  }, [currentQuality]);
+
+  useEffect(() => {
+    setPlayerError(null);
+    return () => {
+      if (bufferTimerRef.current) {
+        clearTimeout(bufferTimerRef.current);
+        bufferTimerRef.current = null;
+      }
+    };
+  }, [videoUrl]);
 
   useEffect(() => {
     isSeekingRef.current = isSeeking;
@@ -534,15 +553,54 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
           return;
         }
 
+        if (data.event === 'error') {
+          const ed = data.data as { message?: string; name?: string } | undefined;
+          const name = (ed?.name || '').toLowerCase();
+          const message = (ed?.message || '').trim();
+          if (name.includes('privacy') || message.toLowerCase().includes('privacy')) {
+            setPlayerError(
+              'This video is blocked by Vimeo privacy settings. The site domain must be allowed in the Vimeo embed list, and the browser must send the page origin to the player.',
+            );
+          } else {
+            setPlayerError(message || 'This video could not be played.');
+          }
+        }
+
+        if (data.event === 'bufferstart') {
+          if (bufferTimerRef.current) clearTimeout(bufferTimerRef.current);
+          bufferTimerRef.current = setTimeout(() => {
+            const q = (currentQualityRef.current || '').toLowerCase();
+            if (q && q !== 'auto' && !['240p', '360p', '540p'].includes(q)) {
+              iframe?.contentWindow?.postMessage(
+                JSON.stringify({ method: 'setQuality', value: 'auto' }),
+                'https://player.vimeo.com',
+              );
+              setCurrentQuality('auto');
+            }
+          }, 8000);
+        }
+
+        if (data.event === 'bufferend' || data.event === 'play') {
+          if (bufferTimerRef.current) {
+            clearTimeout(bufferTimerRef.current);
+            bufferTimerRef.current = null;
+          }
+        }
+
         // When Vimeo is ready, subscribe to events
         if (data.event === 'ready' && iframe?.contentWindow) {
           playerReadyRef.current = true;
-          ['play', 'pause', 'timeupdate', 'qualitychange', 'playbackratechange', 'volumechange', 'fullscreenchange'].forEach((evt) => {
+          setPlayerError(null);
+          ['play', 'pause', 'timeupdate', 'qualitychange', 'playbackratechange', 'volumechange', 'fullscreenchange', 'error', 'bufferstart', 'bufferend'].forEach((evt) => {
             iframe.contentWindow?.postMessage(
               JSON.stringify({ method: 'addEventListener', value: evt }),
               'https://player.vimeo.com',
             );
           });
+          iframe.contentWindow?.postMessage(
+            JSON.stringify({ method: 'setQuality', value: 'auto' }),
+            'https://player.vimeo.com',
+          );
           // Request duration and qualities
           iframe.contentWindow?.postMessage(
             JSON.stringify({ method: 'getDuration' }),
@@ -942,11 +1000,21 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
           className="absolute inset-0 h-full w-full border-0"
           allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
           allowFullScreen
+          referrerPolicy="strict-origin-when-cross-origin"
           // @ts-expect-error legacy WebKit attribute for older mobile browsers
           webkitallowfullscreen="true"
           // @ts-expect-error legacy Mozilla attribute
           mozallowfullscreen="true"
         />
+      )}
+
+      {playerError && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/85 p-6 text-center pointer-events-none">
+          <div className="max-w-md">
+            <p className="text-white font-display font-bold mb-2">Video unavailable</p>
+            <p className="text-white/80 text-sm font-sans">{playerError}</p>
+          </div>
+        </div>
       )}
 
       {/* Full-area overlay — blocks ALL right-clicks, never toggled */}
