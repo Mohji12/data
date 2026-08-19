@@ -109,7 +109,6 @@ export function buildVimeoPlayerEmbedUrl(
     dnt: '1',
     transcript: '0',
     pip: '0',
-    allowfullscreen: '1',
     // Adaptive bitrate — avoids starting at 1080p/4K which buffers on typical Wi‑Fi.
     quality: 'auto',
     // speed=1 enables the playback-rate API (required for setPlaybackRate postMessage).

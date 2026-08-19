@@ -26,11 +26,6 @@ type ProtectedVideoEmbedProps = {
   title: string;
 };
 
-function isMobileViewport(): boolean {
-  if (typeof window === 'undefined') return false;
-  return window.matchMedia('(max-width: 768px)').matches;
-}
-
 function getFullscreenElement(): Element | null {
   const doc = document as Document & {
     webkitFullscreenElement?: Element | null;
@@ -38,22 +33,29 @@ function getFullscreenElement(): Element | null {
   return doc.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
 }
 
-async function requestElementFullscreen(el: HTMLElement): Promise<boolean> {
+/**
+ * Request fullscreen **synchronously** so Safari keeps the user-activation.
+ * Safari (macOS) supports webkitRequestFullscreen on any element.
+ * Safari (iOS) only supports webkitEnterFullscreen on <video>.
+ * Returns true if the call was made (may still reject asynchronously).
+ */
+function requestElementFullscreen(el: HTMLElement): boolean {
   const anyEl = el as HTMLElement & {
-    webkitRequestFullscreen?: () => Promise<void> | void;
-    msRequestFullscreen?: () => Promise<void> | void;
+    webkitRequestFullscreen?: () => void;
+    msRequestFullscreen?: () => void;
   };
   try {
-    if (anyEl.requestFullscreen) {
-      await anyEl.requestFullscreen();
+    if (anyEl.webkitRequestFullscreen) {
+      // Safari — must be called first, synchronously, in the click handler.
+      anyEl.webkitRequestFullscreen();
       return true;
     }
-    if (anyEl.webkitRequestFullscreen) {
-      await anyEl.webkitRequestFullscreen();
+    if (anyEl.requestFullscreen) {
+      anyEl.requestFullscreen().catch(() => {});
       return true;
     }
     if (anyEl.msRequestFullscreen) {
-      await anyEl.msRequestFullscreen();
+      anyEl.msRequestFullscreen();
       return true;
     }
   } catch {
@@ -151,7 +153,6 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
   const volumeControlRef = useRef<HTMLDivElement>(null);
   const hideVolumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isVolumeDraggingRef = useRef(false);
-  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentSpeedRef = useRef(1);
   const playerReadyRef = useRef(false);
   const lastVolumeRef = useRef(1);
@@ -254,12 +255,11 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
     if (getFullscreenElement()) {
       await exitDocumentFullscreen();
     }
-    if (detected?.provider === 'vimeo') {
-      postVimeo({ method: 'exitFullscreen' });
-    }
-  }, [detected, postVimeo]);
+  }, []);
 
-  /* ─── Fullscreen (native API + provider API + mobile CSS fallback) ─── */
+  /* ─── Fullscreen (native API on our container + mobile CSS fallback) ─── */
+  /* Do NOT post requestFullscreen to Vimeo — postMessage loses user activation
+     and the iframe throws: "API can only be initiated by a user gesture". */
 
   const toggleFullscreen = useCallback(() => {
     const container = containerRef.current;
@@ -270,6 +270,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
       return;
     }
 
+    // iOS Safari: only <video> supports webkitEnterFullscreen, not divs/iframes.
     if (isDirectVideo && video) {
       const anyVideo = video as HTMLVideoElement & { webkitEnterFullscreen?: () => void };
       if (anyVideo.webkitEnterFullscreen) {
@@ -278,25 +279,15 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
       }
     }
 
-    if (detected?.provider === 'vimeo') {
-      postVimeo({ method: 'requestFullscreen' });
-    }
-
-    if (container) {
-      void requestElementFullscreen(container).then((ok) => {
-        if (!ok && isMobileViewport()) {
-          setViewportExpanded(true);
-          document.body.style.overflow = 'hidden';
-        }
-      });
+    // Must call synchronously — Safari drops user-activation across await/.then().
+    if (container && requestElementFullscreen(container)) {
       return;
     }
 
-    if (isMobileViewport()) {
-      setViewportExpanded(true);
-      document.body.style.overflow = 'hidden';
-    }
-  }, [detected, exitExpandedView, isDirectVideo, postVimeo, viewportExpanded]);
+    // Fallback: CSS-based expanded view (iOS Safari for iframes, or any FS failure).
+    setViewportExpanded(true);
+    document.body.style.overflow = 'hidden';
+  }, [exitExpandedView, isDirectVideo, viewportExpanded]);
 
   /* ─── Play / Pause ─── */
 
@@ -557,7 +548,16 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
           const ed = data.data as { message?: string; name?: string } | undefined;
           const name = (ed?.name || '').toLowerCase();
           const message = (ed?.message || '').trim();
-          if (name.includes('privacy') || message.toLowerCase().includes('privacy')) {
+          const lower = message.toLowerCase();
+          // Transient: play/fullscreen without user activation — do not blank the player.
+          if (
+            lower.includes('user-initiated') ||
+            lower.includes('user gesture') ||
+            lower.includes('not called from a user')
+          ) {
+            return;
+          }
+          if (name.includes('privacy') || lower.includes('privacy')) {
             setPlayerError(
               'This video is blocked by Vimeo privacy settings. The site domain must be allowed in the Vimeo embed list, and the browser must send the page origin to the player.',
             );
@@ -853,8 +853,13 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
       const active = !!fsEl || viewportExpanded;
       setIsFullscreen(active);
 
-      if (fsEl && fsEl === iframe && container) {
-        void exitDocumentFullscreen().then(() => requestElementFullscreen(container));
+      // If the provider iframe somehow enters FS, exit and use CSS expanded view.
+      if (fsEl && iframe && (fsEl === iframe || iframe.contains(fsEl))) {
+        void exitDocumentFullscreen().then(() => {
+          setViewportExpanded(true);
+          document.body.style.overflow = 'hidden';
+        });
+        return;
       }
       if (!fsEl && !viewportExpanded) {
         document.body.style.overflow = '';
@@ -933,35 +938,47 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
     );
   }
 
-  /* ─── Click handling: single = play/pause, double = fullscreen ─── */
+  /* ─── Click: play/pause immediately (must stay in user-gesture stack for Vimeo).
+       Double-click: fullscreen via native dblclick (no delayed play). ─── */
 
-  const handleOverlayClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-
+  const dismissOverlayMenus = () => {
     if (showQualityMenu) {
       setShowQualityMenu(false);
-      return;
+      return true;
     }
     if (showSpeedMenu) {
       setShowSpeedMenu(false);
-      return;
+      return true;
     }
     if (showVolumeControl) {
       setShowVolumeControl(false);
+      return true;
+    }
+    return false;
+  };
+
+  const handleOverlayClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (dismissOverlayMenus()) return;
+    // Call play/pause synchronously — setTimeout would drop user activation and
+    // Vimeo rejects with "not called from a user-initiated event".
+    togglePlayPause();
+  };
+
+  const handleOverlayDoubleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    toggleFullscreen();
+    // Two clicks already fired (play then pause). Resume under this gesture.
+    if (isDirectVideo) {
+      void videoRef.current?.play();
       return;
     }
-
-    if (clickTimer.current) {
-      clearTimeout(clickTimer.current);
-      clickTimer.current = null;
-      toggleFullscreen();
-      return;
+    if (detected?.provider === 'vimeo') {
+      postVimeo({ method: 'play' });
+    } else if (detected?.provider === 'youtube') {
+      postYouTube({ event: 'command', func: 'playVideo', args: [] });
     }
-
-    clickTimer.current = setTimeout(() => {
-      clickTimer.current = null;
-      togglePlayPause();
-    }, 300);
   };
 
   const progress = duration ? (currentTime / duration) * 100 : 0;
@@ -999,12 +1016,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
           title={title}
           className="absolute inset-0 h-full w-full border-0"
           allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
-          allowFullScreen
           referrerPolicy="strict-origin-when-cross-origin"
-          // @ts-expect-error legacy WebKit attribute for older mobile browsers
-          webkitallowfullscreen="true"
-          // @ts-expect-error legacy Mozilla attribute
-          mozallowfullscreen="true"
         />
       )}
 
@@ -1031,6 +1043,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
           }
         }}
         onClick={handleOverlayClick}
+        onDoubleClick={handleOverlayDoubleClick}
         onDragStart={(e) => e.preventDefault()}
       />
 
