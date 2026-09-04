@@ -64,7 +64,8 @@ export default function Register() {
 
   const { data: batches } = useQuery({
     queryKey: ['regBatches'],
-    queryFn: () => apiClient('/registration/batches')
+    queryFn: () => apiClient('/registration/batches'),
+    staleTime: 5 * 60_000,
   });
 
   useEffect(() => {
@@ -156,9 +157,12 @@ export default function Register() {
     ? (searchParams.get('offer')?.trim() || '')
     : '';
 
+  const urlSelectedPackageId = searchParams.get('package_id')?.trim() || '';
+
   const { data: packages, isLoading: pkgsLoading } = useQuery({
-    queryKey: ['regPackages', form.batch_slug, form.country_id, form.registration_type, form.package_id],
+    queryKey: ['regPackages', form.batch_slug, form.country_id, form.registration_type],
     enabled: !!form.batch_slug && !!form.country_id,
+    staleTime: 60_000,
     queryFn: () => {
       const p = new URLSearchParams();
       p.set('batch_slug', String(form.batch_slug || ''));
@@ -166,8 +170,9 @@ export default function Register() {
       if (form.registration_type) {
         p.set('registration_type', String(form.registration_type));
       }
-      if (String(form.package_id || '').trim()) {
-        p.set('selected_package_id', String(form.package_id).trim());
+      // Only pin a package from the URL once — do not refetch on every radio click.
+      if (urlSelectedPackageId) {
+        p.set('selected_package_id', urlSelectedPackageId);
       }
       return apiClient(`/registration/packages?${p.toString()}`);
     }

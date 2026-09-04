@@ -668,12 +668,7 @@ def submit_answer(
         raise HTTPException(status_code=400, detail="No active exam attempt")
     attempt_no = _attempt_number(attempts, ue)
 
-    # Time check
-    if get_remaining_seconds(ue) <= 0:
-        ue.is_finish_exam = "1"
-        db.commit()
-        raise HTTPException(status_code=400, detail="Exam time is over")
-
+    time_over = get_remaining_seconds(ue) <= 0
     question_ids = parse_id_list(ue.exam_question_id or "")
     if not question_ids:
         raise HTTPException(status_code=400, detail="Exam has no questions")
@@ -682,6 +677,8 @@ def submit_answer(
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
 
+    # Always persist the answer first — even when the timer has hit zero — so a
+    # last-second click is not discarded before finish scores the attempt.
     _persist_one_answer(
         db,
         user_id=payload.user_id,
@@ -704,9 +701,10 @@ def submit_answer(
 
     next_question_payload: Optional[QuestionPayload] = None
 
-    # Only end the attempt when the client explicitly submits the last question.
-    # Saving an answer while viewing the final question must not auto-finish.
-    if payload.is_last_question:
+    # End when the client explicitly finishes the last question, or when the
+    # timer has already expired (grace save + close). Saving while viewing the
+    # final question with time remaining must not auto-finish.
+    if payload.is_last_question or time_over:
         ue.is_finish_exam = "1"
         ue.marks = float(total_marks or 0.0)
         finish_exam = True
@@ -764,11 +762,14 @@ def submit_answers_bulk(
     exam = _get_exam_or_404(db, exam_id)
     attempts = _list_user_exam_attempts(db, exam.id, payload.user_id)
     ue = _find_active_attempt(attempts)
+    # Grace window: if the client finished (or timer auto-closed) just before
+    # bulk sync, still attach answers to the latest finished attempt so scores
+    # are not stuck at 0 answered.
     if not ue:
-        raise HTTPException(status_code=400, detail="No active exam attempt")
-
-    if get_remaining_seconds(ue) <= 0 and ue.is_finish_exam == "1":
-        raise HTTPException(status_code=400, detail="Exam time is over")
+        if attempts and attempts[-1].is_finish_exam == "1":
+            ue = attempts[-1]
+        else:
+            raise HTTPException(status_code=400, detail="No active exam attempt")
 
     question_ids = parse_id_list(ue.exam_question_id or "")
     allowed = set(question_ids)
@@ -835,8 +836,9 @@ def submit_answers_bulk(
             skipped += 1
 
     db.commit()
-    # Only recompute marks when something actually changed — early finish is then near-instant.
-    if changed:
+    # Recompute marks after bulk save so a grace sync onto an already-finished
+    # attempt updates the stored score (avoids permanent 0 marks).
+    if changed or (saved and float(ue.marks or 0.0) == 0.0):
         total_marks = _sum_marks_for_attempt(db, payload.user_id, exam.id, ue.id)
         ue.marks = float(total_marks or 0.0)
         db.commit()

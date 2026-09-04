@@ -1097,6 +1097,12 @@ export default function AdminUsers() {
                             >
                               User detail
                             </Link>
+                            <Link
+                              to={`/admin/users/${u.id}#usage`}
+                              className="text-[10px] text-ink-faint hover:text-mint underline w-fit"
+                            >
+                              Usage
+                            </Link>
                           </div>
                         )}
                         {showRefundDeactive && (

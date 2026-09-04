@@ -16,11 +16,19 @@ from app.schemas import (
     VideoFolderItem,
     VideoListItem,
     VideoListPage,
+    VideoProgressRequest,
+    VideoProgressResponse,
     VideoQuestionCreate,
     VideoQuestionCreateResponse,
 )
 from app.security import get_current_user
 from app.services.access import can_access_video_library
+from app.services.batch_match import find_in_set_sql
+from app.services.video_progress import (
+    WATCHED_THRESHOLD_SECONDS,
+    is_video_watched,
+    upsert_watch_progress,
+)
 
 router = APIRouter(prefix="/videos", tags=["videos"])
 
@@ -82,7 +90,7 @@ def list_video_folders(
         db.query(FolderMaster)
         .filter(
             FolderMaster.status == "1",
-            func.find_in_set(subscription, func.coalesce(FolderMaster.batch, "")) > 0,
+            find_in_set_sql(FolderMaster.batch, subscription),
         )
         .order_by(FolderMaster.display_order.asc(), FolderMaster.id.asc())
         .all()
@@ -110,10 +118,10 @@ def list_videos(
     # PHP: FIND_IN_SET(subscription, videos.batch); folder: FIND_IN_SET(folder_id, videos.folder)
     filters = [
         Video.status == "1",
-        func.find_in_set(subscription, func.coalesce(Video.batch, "")) > 0,
+        find_in_set_sql(Video.batch, subscription),
     ]
     if folder_id is not None:
-        filters.append(func.find_in_set(str(folder_id), func.coalesce(Video.folder, "")) > 0)
+        filters.append(find_in_set_sql(Video.folder, str(folder_id)))
     if title:
         filters.append(func.lower(func.coalesce(Video.title, "")).contains(title.lower()))
 
@@ -201,6 +209,36 @@ def audit_video_play(
     return {"status": "ok"}
 
 
+@router.post("/{video_id}/progress", response_model=VideoProgressResponse)
+def record_video_progress(
+    video_id: int,
+    payload: VideoProgressRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> VideoProgressResponse:
+    """Accumulate played seconds for dashboard KPIs (heartbeat from the player)."""
+    _ensure_video_access(db, current_user)
+    video = db.query(Video).filter(Video.id == video_id, Video.status == "1").first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if not _subscription_in_csv(current_user.subscription, video.batch):
+        raise HTTPException(status_code=403, detail="Video not available for your subscription.")
+
+    row = upsert_watch_progress(
+        db,
+        user_id=current_user.id,
+        video_id=video.id,
+        delta_seconds=payload.delta_seconds,
+        position_seconds=payload.position_seconds,
+    )
+    return VideoProgressResponse(
+        video_id=video.id,
+        watched_seconds=int(row.watched_seconds or 0),
+        last_position_seconds=row.last_position_seconds,
+        is_watched=is_video_watched(row.watched_seconds, threshold=WATCHED_THRESHOLD_SECONDS),
+    )
+
+
 @router.get("/{video_id}", response_model=VideoDetail)
 def get_video_detail(
     video_id: int,
@@ -215,7 +253,20 @@ def get_video_detail(
 
     folder_key, folder_name = _folder_label_from_video_csv(db, video)
     if not _subscription_in_csv(current_user.subscription, video.batch):
-        raise HTTPException(status_code=403, detail="Video not available for your subscription.")
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Video not available for your subscription. "
+                f"Your batch is “{(current_user.subscription or '').strip() or 'unknown'}”. "
+                "Ask admin to add this batch on the video’s Batch field."
+            ),
+        )
+
+    if not (video.video_link or "").strip():
+        raise HTTPException(
+            status_code=404,
+            detail="This video has no playable link configured. Please contact support or your admin.",
+        )
 
     # PHP Videos::video_details — page open audit.
     db.add(

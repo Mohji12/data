@@ -266,6 +266,108 @@ class VideoQuestionCreateResponse(BaseModel):
     message: str
 
 
+class VideoProgressRequest(BaseModel):
+    delta_seconds: float = 0
+    position_seconds: Optional[float] = None
+
+
+class VideoProgressResponse(BaseModel):
+    video_id: int
+    watched_seconds: int
+    last_position_seconds: Optional[float] = None
+    is_watched: bool
+
+
+class DashboardStats(BaseModel):
+    videos_watched: int = 0
+    hours_spent: float = 0.0
+    avg_quiz_score: Optional[int] = None
+    tests_done: int = 0
+    folder_id: Optional[int] = None
+    folder_name: Optional[str] = None
+    folder_total_videos: Optional[int] = None
+    folder_watched_videos: Optional[int] = None
+    folder_remaining: Optional[int] = None
+
+
+class AdminUserVideoProgressItem(BaseModel):
+    video_id: int
+    title: str
+    folder: Optional[str] = None
+    batch: Optional[str] = None
+    video_status: Optional[str] = None
+    watched_seconds: int = 0
+    watched_minutes: float = 0.0
+    is_watched: bool = False
+    last_position_seconds: Optional[float] = None
+    updated_at: Optional[str] = None
+
+
+class AdminUserVideoProgressResponse(BaseModel):
+    user_id: int
+    videos_with_progress: int = 0
+    videos_watched: int = 0
+    total_watched_seconds: int = 0
+    hours_spent: float = 0.0
+    watched_threshold_seconds: int = 600
+    videos: list[AdminUserVideoProgressItem] = []
+
+
+class AdminUserExamAttemptItem(BaseModel):
+    user_exam_id: int
+    exam_id: int
+    exam_title: str
+    attempt_no: int = 1
+    marks: float = 0.0
+    total_questions: int = 0
+    score_percent: Optional[int] = None
+    is_finished: bool = False
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    batch: Optional[str] = None
+
+
+class AdminUserExamRollupItem(BaseModel):
+    exam_id: int
+    exam_title: str
+    attempts_count: int = 0
+    completed_count: int = 0
+    best_score_percent: Optional[int] = None
+    latest_score_percent: Optional[int] = None
+    latest_marks: Optional[float] = None
+
+
+class AdminUserExamAttemptsResponse(BaseModel):
+    user_id: int
+    exams_attempted: int = 0
+    tests_done: int = 0
+    mock_tests_completed: int = 0
+    in_progress_count: int = 0
+    avg_score_percent: Optional[int] = None
+    best_score_percent: Optional[int] = None
+    exams: list[AdminUserExamRollupItem] = []
+    attempts: list[AdminUserExamAttemptItem] = []
+
+
+class AdminUserUsageResponse(BaseModel):
+    user_id: int
+    videos_watched: int = 0
+    videos_with_progress: int = 0
+    hours_spent: float = 0.0
+    total_watched_seconds: int = 0
+    exams_attempted: int = 0
+    mock_tests_completed: int = 0
+    tests_done: int = 0
+    in_progress_count: int = 0
+    avg_score_percent: Optional[int] = None
+    best_score_percent: Optional[int] = None
+    login_count: int = 0
+    last_login_at: Optional[str] = None
+    last_activity_at: Optional[str] = None
+    video: AdminUserVideoProgressResponse
+    exams: AdminUserExamAttemptsResponse
+
+
 class BatchDefinition(BaseModel):
     slug: str
     title: str
@@ -304,6 +406,13 @@ class FeeStructureResponse(BaseModel):
     column_headers: list[str]
     indian: FeeStructureBlock
     foreign: FeeStructureBlock
+    # Best active package promo for the cloud badge on this course page
+    promo_discount_pct: Optional[float] = None
+    promo_valid_till: Optional[str] = None
+    promo_active: bool = False
+    promo_days_left: int = 0
+    promo_description: Optional[str] = None
+    promo_batch_start: Optional[str] = None
 
 
 class RegistrationCatalogItem(BaseModel):

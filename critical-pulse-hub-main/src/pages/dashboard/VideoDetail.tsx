@@ -52,6 +52,13 @@ export default function VideoDetail() {
     void apiClient(`/videos/${id}/play-audit`, { method: 'POST', body: '{}' }).catch(() => {});
   }, [video?.video_url, id]);
 
+  const loadError =
+    error instanceof Error
+      ? error.message
+      : error
+        ? 'Error loading video. It may be unavailable or restricted.'
+        : null;
+
   return (
     <div className="px-3 py-4 sm:p-6 lg:p-8" onContextMenu={blockRightClick}>
       <Link
@@ -62,19 +69,29 @@ export default function VideoDetail() {
       </Link>
 
       {isLoading && <div className="font-mono text-xs text-ink-faint">Loading video details...</div>}
-      {error && (
-        <div className="text-red-500 font-sans text-sm">
-          Error loading video. It may be unavailable or restricted.
+      {loadError && (
+        <div className="bg-cherry/5 border border-cherry/20 rounded-sm p-4 text-cherry font-sans text-sm">
+          {loadError}
         </div>
       )}
 
-      {video && (
+      {video && !video.video_url && (
+        <div className="bg-cherry/5 border border-cherry/20 rounded-sm p-4 text-cherry font-sans text-sm mb-4">
+          This video has no playable link configured. Please contact support.
+        </div>
+      )}
+
+      {video && video.video_url && (
         <>
           <div
             className="bg-monitor-bg rounded-sm w-full aspect-video min-h-[220px] sm:min-h-0 mb-4 sm:mb-6 overflow-hidden -mx-3 sm:mx-0 max-w-[100vw] sm:max-w-none"
             onContextMenu={blockRightClick}
           >
-            <ProtectedVideoEmbed videoUrl={video.video_url} title={video.title} />
+            <ProtectedVideoEmbed
+              videoUrl={video.video_url}
+              title={video.title}
+              videoId={typeof video.id === 'number' ? video.id : Number(id)}
+            />
           </div>
           <h1 className="font-display font-bold text-2xl text-slate mb-2">{video.title}</h1>
           <div className="font-mono text-[11px] text-ink-faint">
@@ -82,16 +99,24 @@ export default function VideoDetail() {
           </div>
           {(() => {
             if (!video.description) return null;
-            // Check if the HTML is actually empty (e.g. `<p>&nbsp;&nbsp;</p>`)
             const stripped = video.description.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, '').trim();
             if (!stripped) return null;
             return (
-              <div 
+              <div
                 className="mt-4 font-sans text-sm text-ink-muted [&>p]:mb-2 [&>ul]:list-disc [&>ul]:ml-4 [&>ol]:list-decimal [&>ol]:ml-4"
                 dangerouslySetInnerHTML={{ __html: video.description }}
               />
             );
           })()}
+        </>
+      )}
+
+      {video && !video.video_url && (
+        <>
+          <h1 className="font-display font-bold text-2xl text-slate mb-2">{video.title}</h1>
+          <div className="font-mono text-[11px] text-ink-faint">
+            {video.folder_name || 'General'}
+          </div>
         </>
       )}
     </div>

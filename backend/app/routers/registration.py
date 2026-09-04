@@ -62,6 +62,7 @@ from app.services.registration import (
     _resolve_package_line_amounts,
 )
 from app.services.uploads import save_registration_document
+from app.services.promo_badge import get_promo_badge_config
 
 router = APIRouter(prefix="/registration", tags=["registration"])
 
@@ -71,6 +72,21 @@ router = APIRouter(prefix="/registration", tags=["registration"])
 class CountryOut(BaseModel):
     id: int
     name: str
+
+
+class PromoBadgeOut(BaseModel):
+    active: bool
+    discount_pct: float
+    description: str
+    valid_till: Optional[str] = None
+    days_left: int
+
+
+@router.get("/promo-badge", response_model=PromoBadgeOut)
+def registration_promo_badge(db: Session = Depends(get_db)) -> PromoBadgeOut:
+    """Public site-wide marketing promo badge (admin-configured via options)."""
+    payload = get_promo_badge_config(db)
+    return PromoBadgeOut(**payload)
 
 
 @router.get("/countries", response_model=list[CountryOut])

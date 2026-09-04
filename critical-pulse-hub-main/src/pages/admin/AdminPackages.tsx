@@ -14,6 +14,29 @@ const toDateInputValue = (value?: string | null): string => {
   return raw.length >= 10 ? raw.slice(0, 10) : raw;
 };
 
+const promoDescriptionOptionKey = (subscription: string) =>
+  `package_promo_description::${subscription.trim()}`;
+
+const promoShowcaseStartOptionKey = (subscription: string) =>
+  `package_promo_showcase_start::${subscription.trim()}`;
+
+function promoStatusLine(pctRaw: string | number, validTill: string, description: string) {
+  const pct = Number(pctRaw || 0);
+  if (!validTill) {
+    return pct > 0
+      ? `${pct}% ${description || 'discount'} · set Valid till for countdown`
+      : 'Set discount % and valid till for the course cloud badge';
+  }
+  const till = new Date(`${validTill}T23:59:59+05:30`);
+  const msLeft = till.getTime() - Date.now();
+  const daysLeft = msLeft <= 0 ? 0 : Math.ceil(msLeft / (24 * 60 * 60 * 1000));
+  const active = daysLeft > 0 && pct > 0;
+  if (active) {
+    return `${daysLeft} day${daysLeft === 1 ? '' : 's'} left (until ${validTill}) · ${pct}% ${description || 'discount'}`;
+  }
+  return `Inactive — expired or invalid (until ${validTill})`;
+}
+
 const normalizePackageRow = (p: PackageRow): PackageRow => ({
   ...p,
   start_date: toDateInputValue(p.start_date),
@@ -74,8 +97,13 @@ type PackageRow = {
   discount_start_date?: string | null;
   discount_end_date?: string | null;
   status?: string | null;
+  /** Cloud badge label under % (stored in options per subscription) */
+  promo_description?: string;
+  /** Display-only “New Batch Starts From” date (options; not package.batch_start_date) */
+  promo_showcase_start?: string;
 };
 
+type OptionRow = { id: number; option_name: string; option_value: string };
 type BatchRow = { id: number; name: string; status: string };
 export default function AdminPackages() {
   const qc = useQueryClient();
@@ -102,6 +130,8 @@ export default function AdminPackages() {
     discounted_amount: '0',
     discount_start_date: '',
     discount_end_date: '',
+    promo_description: 'discount',
+    promo_showcase_start: '',
     status: '1',
   });
   const [isManualDurationAdd, setIsManualDurationAdd] = useState(false);
@@ -123,15 +153,55 @@ export default function AdminPackages() {
     queryKey: ['adminMiscBatches'],
     queryFn: () => apiClient('/admin/misc/batches') as Promise<BatchRow[]>,
   });
+  const { data: options } = useQuery({
+    queryKey: ['adminCommerceOptions'],
+    queryFn: () => apiClient('/admin/commerce/options') as Promise<OptionRow[]>,
+  });
   const activeBatches = (batches || []).filter((b) => String(b.status ?? '1') === '1');
+
+  const optionMap = new Map<string, string>();
+  for (const row of options || []) {
+    if (row.option_name) optionMap.set(row.option_name, row.option_value ?? '');
+  }
+
+  const savePromoBadgeOptions = async (
+    subscription: string,
+    description: string,
+    showcaseStart: string,
+  ) => {
+    const sub = subscription.trim();
+    if (!sub || !isTech) return;
+    const desc = (description || 'discount').trim() || 'discount';
+    const start = toDateInputValue(showcaseStart) || '';
+    // Course-scoped: same Subscription name is shared by all packages for that course
+    // (Indian/Foreign, all duration tiers). Persist once under the subscription key.
+    await Promise.all([
+      apiClient('/admin/commerce/options', {
+        method: 'POST',
+        body: JSON.stringify({
+          option_name: promoDescriptionOptionKey(sub),
+          option_value: desc,
+        }),
+      }),
+      apiClient('/admin/commerce/options', {
+        method: 'POST',
+        body: JSON.stringify({
+          option_name: promoShowcaseStartOptionKey(sub),
+          option_value: start,
+        }),
+      }),
+    ]);
+    void qc.invalidateQueries({ queryKey: ['adminCommerceOptions'] });
+    void qc.invalidateQueries({ queryKey: ['feeStructure'] });
+  };
 
   const copyMut = useMutation({
     mutationFn: (id: number) => apiClient(`/admin/commerce/packages/${id}/copy`, { method: 'POST' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['adminPackages'] }),
   });
   const createMut = useMutation({
-    mutationFn: () =>
-      apiClient('/admin/commerce/packages', {
+    mutationFn: async () => {
+      await apiClient('/admin/commerce/packages', {
         method: 'POST',
         body: JSON.stringify({
           ...form,
@@ -150,7 +220,9 @@ export default function AdminPackages() {
           discount_start_date: toDateInputValue(form.discount_start_date) || null,
           discount_end_date: toDateInputValue(form.discount_end_date) || null,
         }),
-      }),
+      });
+      await savePromoBadgeOptions(form.subscription, form.promo_description, form.promo_showcase_start);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['adminPackages'] });
       qc.invalidateQueries({ queryKey: ['registrationCatalogNavbar'] });
@@ -174,16 +246,24 @@ export default function AdminPackages() {
         discounted_amount: '0',
         discount_start_date: '',
         discount_end_date: '',
+        promo_description: 'discount',
+        promo_showcase_start: '',
         status: '1',
       });
     },
   });
   const updateMut = useMutation({
-    mutationFn: (p: PackageRow) =>
-      apiClient(`/admin/commerce/packages/${p.id}`, {
+    mutationFn: async (p: PackageRow) => {
+      await apiClient(`/admin/commerce/packages/${p.id}`, {
         method: 'PUT',
         body: JSON.stringify(packagePayloadFromRow(p)),
-      }),
+      });
+      await savePromoBadgeOptions(
+        p.subscription || '',
+        p.promo_description || 'discount',
+        p.promo_showcase_start || '',
+      );
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['adminPackages'] });
       qc.invalidateQueries({ queryKey: ['adminBatchLaunchReadiness'] });
@@ -442,27 +522,85 @@ export default function AdminPackages() {
                 <option value="0">Inactive</option>
               </select>
             </div>
-            <div>
-              <label className="block font-mono text-[10px] text-ink-faint mb-1">discount_percentage</label>
-              <input type="number" className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm" placeholder="Discount %" value={form.discount_percentage} onChange={(e) => calculateAddForm(form.gross_amount, form.gst_percentage, e.target.value)} />
-            </div>
-            <div>
-              <label className="block font-mono text-[10px] text-ink-faint mb-1">discounted_amount</label>
-              <input type="number" readOnly className="w-full bg-ink-ghost border border-border-soft rounded-sm py-2 px-3 text-sm" value={form.discounted_amount} />
-            </div>
-            <div>
-              <label className="block font-mono text-[10px] text-ink-faint mb-1">taxable_amount (gross - discount)</label>
-              <input type="number" readOnly className="w-full bg-ink-ghost border border-border-soft rounded-sm py-2 px-3 text-sm" value={Math.round((parseFloat(form.gross_amount) || 0) - (parseFloat(form.discounted_amount) || 0))} />
-            </div>
-            <div>
-              <label className="block font-mono text-[10px] text-ink-faint mb-1">discount_start_date</label>
-              <input type="date" className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm" value={form.discount_start_date} onChange={(e) => setForm({ ...form, discount_start_date: e.target.value })} />
-            </div>
-            <div>
-              <label className="block font-mono text-[10px] text-ink-faint mb-1">discount_end_date</label>
-              <input type="date" className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm" value={form.discount_end_date} onChange={(e) => setForm({ ...form, discount_end_date: e.target.value })} />
-            </div>
           </div>
+
+          <div className="mt-5 rounded-sm border border-border-soft bg-chalk p-4 sm:p-5">
+            <h3 className="font-display font-bold text-base text-slate mb-1">Course promo badge</h3>
+            <p className="font-sans text-xs text-ink-muted mb-4">
+              Cloud discount for this course description page. Discount % / dates sync across subscription tiers;
+              Description and <strong className="font-semibold">New batch starts from</strong> apply to{' '}
+              <strong className="font-semibold">all packages</strong> that share this Subscription (batch) name.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Discount %</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm"
+                  placeholder="25"
+                  value={form.discount_percentage}
+                  onChange={(e) => calculateAddForm(form.gross_amount, form.gst_percentage, e.target.value)}
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Description</label>
+                <input
+                  type="text"
+                  maxLength={40}
+                  className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm"
+                  placeholder="discount"
+                  value={form.promo_description}
+                  onChange={(e) => setForm({ ...form, promo_description: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Valid till</label>
+                <input
+                  type="date"
+                  className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm"
+                  value={form.discount_end_date}
+                  onChange={(e) => setForm({ ...form, discount_end_date: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Discount start (optional)</label>
+                <input
+                  type="date"
+                  className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm"
+                  value={form.discount_start_date}
+                  onChange={(e) => setForm({ ...form, discount_start_date: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Discounted amount</label>
+                <input type="number" readOnly className="w-full bg-ink-ghost border border-border-soft rounded-sm py-2 px-3 text-sm" value={form.discounted_amount} />
+              </div>
+              <div className="sm:col-span-3">
+                <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">
+                  New batch starts from (showcase)
+                </label>
+                <input
+                  type="date"
+                  className="w-full max-w-xs bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm"
+                  value={form.promo_showcase_start}
+                  onChange={(e) => setForm({ ...form, promo_showcase_start: e.target.value })}
+                />
+                <p className="mt-1 font-sans text-[10px] text-ink-faint">
+                  Display only. Shared for all packages of this course — does not change package access dates.
+                </p>
+              </div>
+            </div>
+            <p
+              className={`mt-3 font-mono text-[11px] ${
+                Number(form.discount_percentage) > 0 && form.discount_end_date ? 'text-mint' : 'text-ink-faint'
+              }`}
+            >
+              {promoStatusLine(form.discount_percentage, form.discount_end_date, form.promo_description)}
+            </p>
+          </div>
+
           <button
             type="button"
             disabled={
@@ -472,7 +610,7 @@ export default function AdminPackages() {
               createMut.isPending
             }
             onClick={() => createMut.mutate()}
-            className="magnetic bg-slate text-chalk rounded-sm px-4 py-2 font-sans text-xs font-semibold hover:bg-slate-light disabled:opacity-50"
+            className="magnetic bg-slate text-chalk rounded-sm px-4 py-2 font-sans text-xs font-semibold hover:bg-slate-light disabled:opacity-50 mt-4"
           >
             {createMut.isPending ? 'Adding…' : 'Add fee'}
           </button>
@@ -552,7 +690,17 @@ export default function AdminPackages() {
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => setEditing(normalizePackageRow(p))}
+                        onClick={() => {
+                          const row = normalizePackageRow(p);
+                          const sub = (row.subscription || '').trim();
+                          setEditing({
+                            ...row,
+                            promo_description:
+                              (sub && optionMap.get(promoDescriptionOptionKey(sub))) || 'discount',
+                            promo_showcase_start:
+                              (sub && optionMap.get(promoShowcaseStartOptionKey(sub))) || '',
+                          });
+                        }}
                         className="inline-flex items-center gap-1.5 text-xs font-sans text-slate border border-border-soft rounded-sm px-2 py-1"
                       >
                         Edit
@@ -592,9 +740,12 @@ export default function AdminPackages() {
         )}
       </div>
       {editing && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-          <div className="w-full max-w-3xl bg-chalk border border-border-soft rounded-sm p-5 space-y-3">
-            <h3 className="font-display font-bold text-xl text-slate">Edit fee row</h3>
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="w-full max-w-3xl max-h-[min(92vh,900px)] bg-chalk border border-border-soft rounded-sm flex flex-col my-auto shadow-lg">
+            <div className="shrink-0 px-5 pt-5 pb-3 border-b border-border-soft">
+              <h3 className="font-display font-bold text-xl text-slate">Edit fee row</h3>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 py-4 space-y-3">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <input className="bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm" value={editing.name || ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
               <select
@@ -701,22 +852,88 @@ export default function AdminPackages() {
                 <option value="1">Active</option>
                 <option value="0">Inactive</option>
               </select>
-              <div>
-                <label className="block font-mono text-[10px] text-ink-faint mb-1">discount_percentage</label>
-                <input type="number" className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm" placeholder="Discount %" value={editing.discount_percentage || 0} onChange={(e) => calculateEditForm(editing.gross_amount ?? 0, editing.gst_percentage ?? 18, Number(e.target.value || 0))} />
-              </div>
-              <div>
-                <label className="block font-mono text-[10px] text-ink-faint mb-1">discounted_amount</label>
-                <input type="number" readOnly className="w-full bg-ink-ghost border border-border-soft rounded-sm py-2 px-3 text-sm" value={editing.discounted_amount || 0} />
-              </div>
-              <div>
-                <label className="block font-mono text-[10px] text-ink-faint mb-1">taxable_amount</label>
-                <input type="number" readOnly className="w-full bg-ink-ghost border border-border-soft rounded-sm py-2 px-3 text-sm" value={Math.round((editing.gross_amount ?? 0) - (editing.discounted_amount ?? 0))} />
-              </div>
-              <input type="date" className="bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm" value={editing.discount_start_date || ''} onChange={(e) => setEditing({ ...editing, discount_start_date: e.target.value })} />
-              <input type="date" className="bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm" value={editing.discount_end_date || ''} onChange={(e) => setEditing({ ...editing, discount_end_date: e.target.value })} />
             </div>
-            <div className="flex justify-end gap-2">
+
+            <div className="rounded-sm border border-border-soft bg-chalk-warm/40 p-4">
+              <h3 className="font-display font-bold text-base text-slate mb-1">Course promo badge</h3>
+              <p className="font-sans text-xs text-ink-muted mb-4">
+                Applies to the course cloud for <strong className="font-semibold">every package</strong> with this
+                Subscription name (all durations / Indian &amp; Foreign). Discount % still syncs across tiers via Save.
+              </p>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Discount %</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm"
+                    value={editing.discount_percentage || 0}
+                    onChange={(e) => calculateEditForm(editing.gross_amount ?? 0, editing.gst_percentage ?? 18, Number(e.target.value || 0))}
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Description</label>
+                  <input
+                    type="text"
+                    maxLength={40}
+                    className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm"
+                    value={editing.promo_description || 'discount'}
+                    onChange={(e) => setEditing({ ...editing, promo_description: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Valid till</label>
+                  <input
+                    type="date"
+                    className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm"
+                    value={editing.discount_end_date || ''}
+                    onChange={(e) => setEditing({ ...editing, discount_end_date: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Discount start (optional)</label>
+                  <input
+                    type="date"
+                    className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm"
+                    value={editing.discount_start_date || ''}
+                    onChange={(e) => setEditing({ ...editing, discount_start_date: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Discounted amount</label>
+                  <input type="number" readOnly className="w-full bg-ink-ghost border border-border-soft rounded-sm py-2 px-3 text-sm" value={editing.discounted_amount || 0} />
+                </div>
+                <div className="sm:col-span-3">
+                  <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">
+                    New batch starts from (showcase)
+                  </label>
+                  <input
+                    type="date"
+                    className="w-full max-w-xs bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 text-sm"
+                    value={editing.promo_showcase_start || ''}
+                    onChange={(e) => setEditing({ ...editing, promo_showcase_start: e.target.value })}
+                  />
+                  <p className="mt-1 font-sans text-[10px] text-ink-faint">
+                    Display only. Shared across all packages for this course — does not change access dates.
+                  </p>
+                </div>
+              </div>
+              <p
+                className={`mt-3 font-mono text-[11px] ${
+                  Number(editing.discount_percentage) > 0 && editing.discount_end_date ? 'text-mint' : 'text-ink-faint'
+                }`}
+              >
+                {promoStatusLine(
+                  editing.discount_percentage || 0,
+                  editing.discount_end_date || '',
+                  editing.promo_description || 'discount',
+                )}
+              </p>
+            </div>
+            </div>
+
+            <div className="shrink-0 flex justify-end gap-2 px-5 py-3 border-t border-border-soft bg-chalk">
               <button type="button" className="px-3 py-2 text-xs border border-border-soft rounded-sm" onClick={() => setEditing(null)}>Cancel</button>
               <button
                 type="button"

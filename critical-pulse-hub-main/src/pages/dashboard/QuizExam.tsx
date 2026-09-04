@@ -300,18 +300,23 @@ export default function QuizExam() {
             if (q && shouldPersistAnswer(selected, q.user_answer)) {
               updateLocalAnswer(q.id, selected);
             }
-            // Cap wait — answers are already saved question-by-question during the exam.
+            // Persist all local answers before closing — otherwise results show 0 answered.
             await Promise.race([
               flushAllAnswersRef.current().catch(() => 0),
-              new Promise((r) => setTimeout(r, 20000)),
+              new Promise((r) => setTimeout(r, 45000)),
             ]);
             await Promise.race([
               apiClient(`/exams/${id}/finish?user_id=${user?.id}`, { method: 'POST' }),
               new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000)),
             ]).catch(() => {});
+            // Grace re-sync in case finish closed the attempt before bulk completed.
+            await Promise.race([
+              flushAllAnswersRef.current().catch(() => 0),
+              new Promise((r) => setTimeout(r, 20000)),
+            ]);
             clearLocalStore();
           } catch {
-            // Still land on result — attempt may already be closed by server time check.
+            // Still land on result — keep local backup if sync may have failed.
           } finally {
             navigate(`/dashboard/quiz/${id}/result`);
           }
@@ -378,8 +383,8 @@ export default function QuizExam() {
     finishInFlightRef.current = true;
     setIsFinishing(true);
 
-    const goToResult = () => {
-      clearLocalStore();
+    const goToResult = (clearLocal = true) => {
+      if (clearLocal) clearLocalStore();
       navigate(`/dashboard/quiz/${id}/result`);
     };
 
@@ -404,11 +409,20 @@ export default function QuizExam() {
       );
     };
 
+    const localAnswerCount = () =>
+      Object.values({
+        ...Object.fromEntries(
+          (queryClient.getQueryData<ExamBundle>(bundleKey)?.questions ?? [])
+            .filter((q) => (q.user_answer?.length ?? 0) > 0)
+            .map((q) => [q.id, q.user_answer as string[]]),
+        ),
+        ...localAnswersRef.current,
+      }).filter((v) => Array.isArray(v) && v.length > 0).length;
+
     try {
       await refreshStudentSession();
       if (currentQ && shouldPersistAnswer(selectedAnswers, currentQ.user_answer)) {
         updateLocalAnswer(currentQ.id, selectedAnswers);
-        // Persist current question only — full bulk of 100 answers is too slow mid-finish.
         await withTimeout(
           saveAnswer(currentQ.id, currentIdx, selectedAnswers, { await: true }),
           15000,
@@ -416,12 +430,27 @@ export default function QuizExam() {
       }
       await withTimeout(saveQueueRef.current.catch(() => {}), 15000).catch(() => {});
 
-      // Best-effort sync of any failed/local-only answers, but never block finish for long.
-      // Answers are already saved one-by-one while the student works through the exam.
+      // Sync every local answer before closing the attempt. If this fails and the
+      // student had answers only in the browser, finishing would show 0/answered.
+      let bulkSaved = 0;
       try {
-        await withTimeout(flushAllAnswers(), 25000);
+        bulkSaved = await withTimeout(flushAllAnswers(), 45000);
       } catch (bulkErr) {
-        console.warn('bulk save skipped/failed during early finish', bulkErr);
+        console.warn('bulk save failed during finish', bulkErr);
+        if (localAnswerCount() > 0) {
+          // One more attempt after refreshing the session.
+          await refreshStudentSession();
+          try {
+            bulkSaved = await withTimeout(flushAllAnswers(), 45000);
+          } catch {
+            finishInFlightRef.current = false;
+            setIsFinishing(false);
+            alert(
+              'Your answers could not be uploaded to the server. Please check your internet connection and tap Finish again — do not close this page or your answers may be lost.',
+            );
+            return;
+          }
+        }
       }
 
       try {
@@ -435,23 +464,27 @@ export default function QuizExam() {
         ) {
           await refreshStudentSession();
           try {
+            // Re-sync answers in case finish raced ahead of an earlier bulk.
+            await withTimeout(flushAllAnswers(), 30000).catch(() => 0);
             await postFinish();
           } catch {
-            // Answers are already on the server — open result page anyway.
-            goToResult();
+            // Keep local backup if we never confirmed a server sync.
+            goToResult(bulkSaved > 0 || localAnswerCount() === 0);
             return;
           }
         } else if (
           finishMsg.includes('No active exam attempt') ||
           finishMsg.includes('Exam time is over')
         ) {
-          goToResult();
+          // Attempt may already be closed — still try a grace bulk sync.
+          await withTimeout(flushAllAnswers(), 30000).catch(() => 0);
+          goToResult(true);
           return;
         } else {
           throw finishErr;
         }
       }
-      goToResult();
+      goToResult(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Could not finish exam';
       if (
@@ -460,25 +493,27 @@ export default function QuizExam() {
         msg.toLowerCase().includes('failed to fetch') ||
         msg.toLowerCase().includes('timed out')
       ) {
-        goToResult();
+        await withTimeout(flushAllAnswers(), 30000).catch(() => 0);
+        goToResult(true);
         return;
       }
       if (isExpiredTokenError(e)) {
         const refreshed = await refreshStudentSession();
         if (refreshed) {
           try {
+            await withTimeout(flushAllAnswers(), 30000).catch(() => 0);
             await postFinish();
-            goToResult();
+            goToResult(true);
             return;
           } catch {
-            goToResult();
+            goToResult(false);
             return;
           }
         }
         finishInFlightRef.current = false;
         setIsFinishing(false);
         alert(
-          'Your login session expired while submitting the exam. Please log in again and open Results — your answers are already saved.',
+          'Your login session expired while submitting the exam. Please log in again and open Results — if the score shows 0, reopen this exam page so unsaved answers can sync.',
         );
         return;
       }
@@ -498,6 +533,8 @@ export default function QuizExam() {
     id,
     user?.id,
     navigate,
+    queryClient,
+    bundleKey,
   ]);
 
   const handleFinish = () => {

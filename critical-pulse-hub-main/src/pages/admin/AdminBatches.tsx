@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { apiClient } from '@/lib/apiClient';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
 import { useIsTechAdmin } from '@/store/authStore';
+import RichTextEditor from '@/components/admin/RichTextEditor';
 
 type BatchRow = {
   id: number;
@@ -273,13 +274,15 @@ export default function AdminBatches() {
               placeholder="e.g. CP 7 — must match package.subscription in DB"
             />
           </div>
-          <div className="flex-1 min-w-[300px]">
+          <div className="w-full basis-full">
             <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Batch Description</label>
-            <textarea
+            <RichTextEditor
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm min-h-[40px]"
-              placeholder="Enter batch description..."
+              onChange={setDescription}
+              disabled={!isTech}
+              placeholder="Enter batch description…"
+              minHeightClass="min-h-[320px]"
+              className="w-full"
             />
           </div>
           <div className="flex-1 min-w-[220px]">
@@ -433,7 +436,7 @@ export default function AdminBatches() {
 
       {editing && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-          <div className="w-full max-w-xl bg-chalk border border-border-soft rounded-sm p-5 space-y-3">
+          <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto bg-chalk border border-border-soft rounded-sm p-5 space-y-3">
             <h3 className="font-display font-bold text-xl text-slate">Edit batch</h3>
             <p className="font-sans text-xs text-ink-muted">
               Renaming updates all enrolled users, exams, videos, and access settings linked to this batch.
@@ -476,12 +479,16 @@ export default function AdminBatches() {
             <p className="font-sans text-[11px] text-ink-muted -mt-1">
               Display name above is shown on the website. Package subscription must match the batch name in the Packages table.
             </p>
-            <textarea
-              value={editing.description || ''}
-              onChange={(e) => setEditing({ ...editing, description: e.target.value })}
-              className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm min-h-[80px]"
-              placeholder="Batch description"
-            />
+            <div>
+              <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Batch description</label>
+              <RichTextEditor
+                value={editing.description || ''}
+                onChange={(html) => setEditing({ ...editing, description: html })}
+                disabled={!isTech}
+                placeholder="Batch description"
+                minHeightClass="min-h-[360px]"
+              />
+            </div>
             <input
               value={editing.video_url || ''}
               onChange={(e) => setEditing({ ...editing, video_url: e.target.value })}

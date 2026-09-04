@@ -51,6 +51,12 @@ def _answer_letter_set(csv: str) -> set[str]:
     return {p.strip().upper() for p in (csv or "").split(",") if p.strip()}
 
 
+def normalize_answer_csv(csv: str | None) -> str:
+    """Canonical form for multi-select answers: sorted unique letters, e.g. 'B,A' -> 'A,B'."""
+    letters = sorted(_answer_letter_set(csv or ""))
+    return ",".join(letters)
+
+
 def count_k_type_correct_judgments(
     question: Question,
     submitted_answer: str,
@@ -95,40 +101,41 @@ def calculate_marks(
     """
     Port of the PHP marking logic for R, C, MTF, and K questions.
     Returns (is_correct, marks, negative_mark).
+
+    Multi-select answers are compared as letter sets so order in the DB
+    (e.g. "B,A") matches a student submission normalized to "A,B".
     """
     if submitted_answer is None:
         submitted_answer = ""
-    submitted_answer = submitted_answer.strip().upper()
-    correct_answer = (question.answer or "").strip().upper()
+    submitted_set = _answer_letter_set(submitted_answer)
+    correct_set = _answer_letter_set(question.answer or "")
+    # Keep CSV forms for K/MTF helpers that still accept comma-separated strings.
+    submitted_answer = normalize_answer_csv(submitted_answer)
+    correct_answer = normalize_answer_csv(question.answer or "")
 
     is_correct = False
     marks = 0.0
     negative_mark = 0.0
 
     if question.answer_type == "R":
-        if submitted_answer and submitted_answer == correct_answer:
+        if submitted_set and submitted_set == correct_set:
             is_correct = True
             marks = float(marking_type.total_correct_answer_mark or 0.0)
         else:
             negative_mark = float(marking_type.negative_mark or 0.0)
 
     elif question.answer_type == "C":
-        correct_count = 0
-        if submitted_answer:
-            answers = submitted_answer.split(",")
-            for ans in answers:
-                ans = ans.strip().upper()
-                if ans and ans in correct_answer:
-                    correct_count += 1
+        # How many of the student's selections are actually correct keys.
+        correct_count = len(submitted_set & correct_set)
 
-        if submitted_answer and submitted_answer == correct_answer:
+        if submitted_set and submitted_set == correct_set:
             is_correct = True
             marks = float(marking_type.total_correct_answer_mark or 0.0)
         else:
             if (
                 correct_count > 0
                 and marking_type.minimum_correct_answer
-                and correct_count == marking_type.minimum_correct_answer
+                and correct_count >= marking_type.minimum_correct_answer
             ):
                 is_correct = True
                 marks = float(marking_type.minimum_correct_answer_mark or 0.0)
@@ -142,11 +149,11 @@ def calculate_marks(
         if total_option > 0:
             for i in range(total_option):
                 key = options[i]
-                if key in correct_answer:
-                    if submitted_answer and key in submitted_answer:
+                if key in correct_set:
+                    if key in submitted_set:
                         correct_count += 1
                 else:
-                    if not submitted_answer or key not in submitted_answer:
+                    if key not in submitted_set:
                         correct_count += 1
 
         if correct_count > 0:
@@ -166,7 +173,7 @@ def calculate_marks(
 
     elif question.answer_type == "K":
         # K-type: unanswered = 0; partial credit 0.5 at (n-1)/n; no negative marking.
-        if not submitted_answer:
+        if not submitted_set:
             return False, 0.0, 0.0
         total_option = question.total_option or 4
         correct_count = count_k_type_correct_judgments(

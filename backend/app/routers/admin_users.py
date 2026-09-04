@@ -17,6 +17,11 @@ from app.admin_security import get_current_admin
 from app.core.config import get_settings
 from app.db import SessionLocal, get_db
 from app.models import Country, CouponMaster, Package, User, UserPackagePayment
+from app.schemas import (
+    AdminUserExamAttemptsResponse,
+    AdminUserUsageResponse,
+    AdminUserVideoProgressResponse,
+)
 from app.services.registration import apply_batch_subscription_filter_to_users
 from app.services.access import admin_subscription_summary, batch_admin_subscription_summaries
 from app.services.mailer import send_html_email
@@ -38,6 +43,9 @@ from app.services.email_templates import (
     plaintext_password_for_password_mail,
     resolve_batch_template_email,
 )
+from app.services.exam_analytics import build_admin_user_exam_analytics
+from app.services.user_usage import build_admin_user_usage
+from app.services.video_progress import build_admin_user_video_analytics
 
 logger = logging.getLogger(__name__)
 
@@ -709,6 +717,181 @@ def get_user(user_id: int, db: Session = Depends(get_db)) -> dict:
         for p in pay_rows
     ]
     return {"user": udict, "recent_payments": payments}
+
+
+@router.get("/{user_id}/video-progress", response_model=AdminUserVideoProgressResponse)
+def get_user_video_progress(user_id: int, db: Session = Depends(get_db)) -> AdminUserVideoProgressResponse:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    data = build_admin_user_video_analytics(db, user_id)
+    return AdminUserVideoProgressResponse(user_id=user_id, **data)
+
+
+@router.get("/{user_id}/video-progress/export.csv")
+def export_user_video_progress(user_id: int, db: Session = Depends(get_db)) -> Response:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    data = build_admin_user_video_analytics(db, user_id)
+    name = " ".join(x for x in [(user.title or "").strip(), (user.name or "").strip()] if x).strip()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(
+        [
+            "Name",
+            "Email",
+            "Video",
+            "Folder",
+            "Watched Seconds",
+            "Watched Minutes",
+            "Watched ≥10m",
+            "Last Position Seconds",
+            "Updated",
+        ]
+    )
+    for v in data.get("videos") or []:
+        w.writerow(
+            [
+                name,
+                user.email or "",
+                v.get("title") or "",
+                v.get("folder") or "",
+                v.get("watched_seconds") or 0,
+                v.get("watched_minutes") or 0,
+                "Yes" if v.get("is_watched") else "No",
+                v.get("last_position_seconds") if v.get("last_position_seconds") is not None else "",
+                v.get("updated_at") or "",
+            ]
+        )
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=user_{user_id}_video_progress.csv"
+        },
+    )
+
+
+@router.get("/{user_id}/exam-attempts", response_model=AdminUserExamAttemptsResponse)
+def get_user_exam_attempts(user_id: int, db: Session = Depends(get_db)) -> AdminUserExamAttemptsResponse:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    data = build_admin_user_exam_analytics(db, user_id)
+    return AdminUserExamAttemptsResponse(user_id=user_id, **data)
+
+
+@router.get("/{user_id}/exam-attempts/export.csv")
+def export_user_exam_attempts(user_id: int, db: Session = Depends(get_db)) -> Response:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    data = build_admin_user_exam_analytics(db, user_id)
+    name = " ".join(x for x in [(user.title or "").strip(), (user.name or "").strip()] if x).strip()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(
+        [
+            "Name",
+            "Email",
+            "Exam",
+            "Attempt #",
+            "Marks",
+            "Total Questions",
+            "Score %",
+            "Finished",
+            "Started",
+            "Ended",
+        ]
+    )
+    for a in data.get("attempts") or []:
+        w.writerow(
+            [
+                name,
+                user.email or "",
+                a.get("exam_title") or "",
+                a.get("attempt_no") or 1,
+                a.get("marks") if a.get("marks") is not None else 0,
+                a.get("total_questions") or 0,
+                a.get("score_percent") if a.get("score_percent") is not None else "",
+                "Yes" if a.get("is_finished") else "No",
+                a.get("start_date") or "",
+                a.get("end_date") or "",
+            ]
+        )
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=user_{user_id}_exam_attempts.csv"
+        },
+    )
+
+
+@router.get("/{user_id}/usage", response_model=AdminUserUsageResponse)
+def get_user_usage(user_id: int, db: Session = Depends(get_db)) -> AdminUserUsageResponse:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    data = build_admin_user_usage(db, user_id)
+    return AdminUserUsageResponse(user_id=user_id, **data)
+
+
+@router.get("/{user_id}/usage/export.csv")
+def export_user_usage(user_id: int, db: Session = Depends(get_db)) -> Response:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    data = build_admin_user_usage(db, user_id)
+    name = " ".join(x for x in [(user.title or "").strip(), (user.name or "").strip()] if x).strip()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(
+        [
+            "Name",
+            "Email",
+            "Batch",
+            "Videos Watched (≥10m)",
+            "Videos With Progress",
+            "Hours Spent",
+            "Total Watched Seconds",
+            "Exams Attempted",
+            "Mock Tests Completed",
+            "In Progress Attempts",
+            "Avg Score %",
+            "Best Score %",
+            "Login Count",
+            "Last Login",
+            "Last Activity",
+        ]
+    )
+    w.writerow(
+        [
+            name,
+            user.email or "",
+            user.subscription or "",
+            data.get("videos_watched") or 0,
+            data.get("videos_with_progress") or 0,
+            data.get("hours_spent") or 0,
+            data.get("total_watched_seconds") or 0,
+            data.get("exams_attempted") or 0,
+            data.get("mock_tests_completed") or 0,
+            data.get("in_progress_count") or 0,
+            data.get("avg_score_percent") if data.get("avg_score_percent") is not None else "",
+            data.get("best_score_percent") if data.get("best_score_percent") is not None else "",
+            data.get("login_count") or 0,
+            data.get("last_login_at") or "",
+            data.get("last_activity_at") or "",
+        ]
+    )
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=user_{user_id}_usage.csv"
+        },
+    )
 
 
 class UserMockTestAttemptsResponse(BaseModel):

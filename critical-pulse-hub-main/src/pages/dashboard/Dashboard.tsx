@@ -1,9 +1,24 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
 import { useOdometer } from '@/hooks/useOdometer';
 import { PlayCircle, ClipboardCheck, BookOpen, ArrowUpRight, Calendar } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
+
+type VideoFolder = { id: number; name: string; display_order?: number };
+
+type DashboardStats = {
+  videos_watched: number;
+  hours_spent: number;
+  avg_quiz_score: number | null;
+  tests_done: number;
+  folder_id?: number | null;
+  folder_name?: string | null;
+  folder_total_videos?: number | null;
+  folder_watched_videos?: number | null;
+  folder_remaining?: number | null;
+};
 
 function formatBatchDate(iso: string | null | undefined): string {
   if (!iso) return '';
@@ -19,7 +34,7 @@ function formatBatchDate(iso: string | null | undefined): string {
 
 export default function Dashboard() {
   const { user } = useAuthStore();
-  const navigate = useNavigate();
+  const [folderId, setFolderId] = useState<number | null>(null);
 
   const { data: summary, isLoading, error } = useQuery({
     queryKey: ['dashboardSummary'],
@@ -27,17 +42,47 @@ export default function Dashboard() {
     enabled: !!user?.id,
   });
 
-  // Since metrics are not fully aggregated in the API yet, we default to 0.
-  const videosWatched = useOdometer(0);
-  const quizScore = useOdometer(0);
-  const hoursSpent = useOdometer(0);
-  const testsCompleted = useOdometer(0);
+  const videoEnabled = !!summary?.video?.enabled;
+
+  const { data: folders } = useQuery({
+    queryKey: ['videoFolders', user?.id],
+    queryFn: () => apiClient('/videos/folders') as Promise<VideoFolder[]>,
+    enabled: !!user?.id && videoEnabled,
+  });
+
+  const { data: stats } = useQuery({
+    queryKey: ['dashboardStats', user?.id, folderId],
+    queryFn: () => {
+      const q = folderId ? `?folder_id=${folderId}` : '';
+      return apiClient(`/dashboard/stats${q}`) as Promise<DashboardStats>;
+    },
+    enabled: !!user?.id,
+  });
+
+  const folderSelected = folderId != null;
+  const firstKpiTarget = folderSelected
+    ? Number(stats?.folder_remaining ?? 0)
+    : Number(stats?.videos_watched ?? 0);
+  const videosWatched = useOdometer(firstKpiTarget);
+  const quizScore = useOdometer(Number(stats?.avg_quiz_score ?? 0));
+  const hoursSpent = useOdometer(Number(stats?.hours_spent ?? 0), 1);
+  const testsCompleted = useOdometer(Number(stats?.tests_done ?? 0));
 
   if (isLoading) return <div className="p-8 font-mono text-sm text-ink-faint">Loading real-time dashboard...</div>;
   if (error) return <div className="p-8 font-mono text-sm text-red-500">Failed to connect to real-time data API.</div>;
 
   const batchAccess = summary?.batch_access;
   const batchEndLabel = batchAccess?.is_extended ? 'Extended access until' : 'Batch access until';
+  const folderWatched = Number(stats?.folder_watched_videos ?? 0);
+  const folderTotal = Number(stats?.folder_total_videos ?? 0);
+  const firstKpiLabel = folderSelected ? 'Remaining to Watch' : 'Videos Watched';
+  const firstKpiSubtitle = folderSelected
+    ? `${folderWatched} of ${folderTotal} watched${stats?.folder_name ? ` · ${stats.folder_name}` : ''}`
+    : null;
+  const quizLabel =
+    stats?.avg_quiz_score == null && Number(stats?.tests_done ?? 0) === 0
+      ? 'Avg Quiz Score'
+      : 'Avg Quiz Score %';
 
   return (
     <div>
@@ -65,7 +110,7 @@ export default function Dashboard() {
             )}
           </div>
         </div>
-        
+
         {summary?.extension?.enabled && (
           <div className="bg-mint-pale border border-mint/30 rounded-sm px-5 py-4 mt-4 flex flex-col sm:flex-row sm:items-center gap-3">
             <p className="font-sans text-sm text-slate flex-1">
@@ -87,12 +132,52 @@ export default function Dashboard() {
       </div>
 
       <div className="p-6 lg:p-8">
+        {videoEnabled && (
+          <div className="mb-4">
+            <label className="font-mono text-[10px] text-ink-faint uppercase tracking-wider block mb-2">
+              Video folder filter
+            </label>
+            <select
+              className="w-full sm:w-[320px] bg-white border border-border-soft rounded-sm py-2 px-3 font-sans text-sm"
+              value={folderId ?? ''}
+              onChange={(e) => setFolderId(e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="">All folders</option>
+              {(folders ?? []).map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
           {[
-            { icon: PlayCircle, value: videosWatched, label: 'Videos Watched' },
-            { icon: ClipboardCheck, value: quizScore, label: 'Avg Quiz Score' },
-            { icon: BookOpen, value: hoursSpent, label: 'Hours Spent' },
-            { icon: ClipboardCheck, value: testsCompleted, label: 'Tests Done' },
+            {
+              icon: PlayCircle,
+              value: videosWatched,
+              label: firstKpiLabel,
+              subtitle: firstKpiSubtitle,
+            },
+            {
+              icon: ClipboardCheck,
+              value: stats?.avg_quiz_score == null && Number(stats?.tests_done ?? 0) === 0 ? '—' : quizScore,
+              label: quizLabel,
+              subtitle: null as string | null,
+            },
+            {
+              icon: BookOpen,
+              value: hoursSpent,
+              label: 'Hours Spent',
+              subtitle: null as string | null,
+            },
+            {
+              icon: ClipboardCheck,
+              value: testsCompleted,
+              label: 'Tests Done',
+              subtitle: null as string | null,
+            },
           ].map((s, i) => {
             const Icon = s.icon;
             return (
@@ -100,6 +185,9 @@ export default function Dashboard() {
                 <Icon size={16} className="text-ink-faint" />
                 <div className="font-display font-black text-5xl text-slate leading-none mt-3">{s.value}</div>
                 <div className="font-mono text-xs text-ink-faint mt-2">{s.label}</div>
+                {s.subtitle && (
+                  <div className="font-sans text-[11px] text-ink-muted mt-1">{s.subtitle}</div>
+                )}
               </div>
             );
           })}
@@ -107,7 +195,6 @@ export default function Dashboard() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {[
-            // Dynamically show blocks based on real API permissions!
             ...(summary?.video?.enabled ? [{ title: 'Watch Videos', sub: 'Access your batch folders', to: '/dashboard/videos' }] : []),
             ...(summary?.mock_test?.enabled ? [{ title: 'Mock Tests', sub: 'Practice real exam patterns', to: '/dashboard/quiz' }] : []),
             ...(summary?.extension?.enabled

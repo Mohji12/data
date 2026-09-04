@@ -38,6 +38,9 @@ export default function AdminSettings() {
   const [err, setErr] = useState<string | null>(null);
 
   const [usdRate, setUsdRate] = useState('');
+  const [promoPct, setPromoPct] = useState('25');
+  const [promoDescription, setPromoDescription] = useState('discount');
+  const [promoValidTill, setPromoValidTill] = useState('2026-09-16');
 
   const [displayVideo, setDisplayVideo] = useState(false);
   const [accessVideo, setAccessVideo] = useState<string[]>([]);
@@ -93,6 +96,9 @@ export default function AdminSettings() {
       if (row.option_name) map.set(row.option_name, row.option_value ?? '');
     }
     setUsdRate(map.get('usd_rate') ?? '');
+    setPromoPct(map.get('site_promo_discount_pct') || '25');
+    setPromoDescription(map.get('site_promo_discount_description') || 'discount');
+    setPromoValidTill(map.get('site_promo_discount_valid_till') || '2026-09-16');
     setDisplayVideo((map.get('display_video_library_link') || '0') === '1');
     setAccessVideo(splitBatches(map.get('access_video_library_link')));
     setDisplayQuiz((map.get('display_quiz_link') || '0') === '1');
@@ -173,6 +179,9 @@ export default function AdminSettings() {
     try {
       const pairs: { option_name: string; option_value: string }[] = [
         { option_name: 'usd_rate', option_value: usdRate.trim() },
+        { option_name: 'site_promo_discount_pct', option_value: promoPct.trim() || '0' },
+        { option_name: 'site_promo_discount_description', option_value: promoDescription.trim() || 'discount' },
+        { option_name: 'site_promo_discount_valid_till', option_value: promoValidTill.trim() },
         { option_name: 'display_video_library_link', option_value: displayVideo ? '1' : '0' },
         { option_name: 'access_video_library_link', option_value: accessVideo.join(',') },
         { option_name: 'display_quiz_link', option_value: displayQuiz ? '1' : '0' },
@@ -202,6 +211,7 @@ export default function AdminSettings() {
       await Promise.all(pairs.map((p) => upsertMut.mutateAsync(p)));
       setMessage('Settings saved.');
       void qc.invalidateQueries({ queryKey: ['adminCommerceOptions'] });
+      void qc.invalidateQueries({ queryKey: ['promoBadge'] });
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Save failed');
     }
@@ -323,6 +333,70 @@ export default function AdminSettings() {
             className="w-full max-w-xs bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
             placeholder="e.g. 83"
           />
+        </section>
+
+        <section className="bg-chalk border border-border-soft rounded-sm p-6">
+          <h2 className="font-display font-bold text-lg text-slate mb-1">Site promo badge</h2>
+          <p className="font-sans text-xs text-ink-muted mb-4">
+            Cloud discount on the Home page only. Course pages use package discounts from Admin → Packages.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Discount %</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={promoPct}
+                disabled={!isTech}
+                onChange={(e) => setPromoPct(e.target.value)}
+                className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
+                placeholder="25"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Description</label>
+              <input
+                type="text"
+                value={promoDescription}
+                disabled={!isTech}
+                onChange={(e) => setPromoDescription(e.target.value)}
+                className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
+                placeholder="discount"
+                maxLength={40}
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Valid till</label>
+              <input
+                type="date"
+                value={promoValidTill}
+                disabled={!isTech}
+                onChange={(e) => setPromoValidTill(e.target.value)}
+                className="w-full max-w-xs bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
+              />
+            </div>
+          </div>
+          {(() => {
+            if (!promoValidTill) {
+              return (
+                <p className="mt-3 font-mono text-[11px] text-ink-faint">Set a valid-till date to show days left.</p>
+              );
+            }
+            const till = new Date(`${promoValidTill}T23:59:59+05:30`);
+            const msLeft = till.getTime() - Date.now();
+            const daysLeft = msLeft <= 0 ? 0 : Math.ceil(msLeft / (24 * 60 * 60 * 1000));
+            const pctNum = Number(promoPct);
+            const active = daysLeft > 0 && pctNum > 0;
+            return (
+              <p className={`mt-3 font-mono text-[11px] ${active ? 'text-mint' : 'text-red-600'}`}>
+                {active
+                  ? `${daysLeft} day${daysLeft === 1 ? '' : 's'} left (until ${promoValidTill}) · ${promoPct || 0}% ${promoDescription || 'discount'}`
+                  : `Inactive — expired or invalid (until ${promoValidTill})`}
+              </p>
+            );
+          })()}
         </section>
 
         <section className="bg-chalk border border-border-soft rounded-sm p-6">

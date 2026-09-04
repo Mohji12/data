@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Stethoscope, Activity, BookOpen, GraduationCap, Award, Heart, MonitorCheck, Brain, Video, ClipboardCheck, MessageCircle, BarChart3, Users, Shield, PlayCircle, ArrowUpRight, Quote } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
+import DiscountOfferBadge from '@/components/DiscountOfferBadge';
 import ECGWaveform from '@/components/ECGWaveform';
 import { useScramble } from '@/hooks/useScramble';
 import { useOdometer } from '@/hooks/useOdometer';
@@ -102,11 +103,19 @@ function HeroSection({
 
   return (
     <section className="min-h-screen flex flex-col relative">
-      <div className="flex flex-col lg:flex-row flex-1 min-h-0">
+      <div className="flex flex-col lg:flex-row flex-1 min-h-0 relative overflow-visible">
+        {/* Small seal: top of the gap between left copy and right image */}
+        <div className="hidden lg:block absolute left-[50%] top-4 z-30 -translate-x-1/2 pointer-events-auto overflow-visible">
+          <DiscountOfferBadge />
+        </div>
+
         {/* Left */}
         <div className="lg:w-[52%] bg-chalk-warm flex flex-col justify-start px-8 lg:px-16 pt-16 lg:pt-20 pb-12 lg:pb-16 relative z-10">
           <motion.div variants={stagger(0.1)} initial="hidden" animate="show">
-            {/* Status pill */}
+            {/* Mobile: compact seal above headline */}
+            <div className="lg:hidden mb-5 flex justify-center sm:justify-start">
+              <DiscountOfferBadge />
+            </div>
 
             {/* H1 */}
             <h1 className="font-display font-black text-slate leading-[0.88] tracking-[-0.01em] mb-0" style={{ fontSize: 'clamp(56px, 9vw, 70px)' }}>
@@ -128,9 +137,11 @@ function HeroSection({
             </motion.p>
 
             {/* Stats */}
-            <motion.div variants={fadeUp} className="flex gap-10 mt-8">
-              <StatNumber value={6000} suffix="+" label="DOCTORS TRAINED" />
-              <StatNumber value={90} suffix="%" label="EDIC PASS" />
+            <motion.div variants={fadeUp} className="flex flex-wrap items-center gap-8 sm:gap-10 mt-8">
+              <div className="flex gap-10">
+                <StatNumber value={6000} suffix="+" label="DOCTORS TRAINED" />
+                <StatNumber value={90} suffix="%" label="EDIC PASS" />
+              </div>
             </motion.div>
 
             {/* Buttons */}
@@ -549,6 +560,8 @@ export default function Home() {
   const { data: catalogRaw } = useQuery<any[]>({
     queryKey: ['registrationCatalogHome'],
     queryFn: () => apiClient('/registration/catalog?include_inactive=true'),
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
   });
 
   const { data: dbTestimonials } = useQuery<any[]>({

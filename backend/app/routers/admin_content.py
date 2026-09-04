@@ -325,8 +325,8 @@ class VideoPayload(BaseModel):
 def _normalize_csv_field(s: Optional[str]) -> Optional[str]:
     if s is None:
         return None
-    t = str(s).strip()
-    return t if t else None
+    parts = [p.strip() for p in str(s).split(",") if p.strip()]
+    return ",".join(parts) if parts else None
 
 
 _VIDEO_LIST_COLUMNS = (
@@ -444,7 +444,7 @@ def create_video(payload: VideoPayload, db: Session = Depends(get_db)) -> dict:
         image=(payload.image or "").strip(),
         video_link=payload.video_link.strip(),
         folder=_normalize_csv_field(payload.folder),
-        batch=payload.batch.strip(),
+        batch=_normalize_csv_field(payload.batch) or payload.batch.strip(),
         status=payload.status or "1",
         upload_date=ud,
     )
@@ -479,7 +479,7 @@ def update_video(video_id: int, payload: VideoPayload, db: Session = Depends(get
     v.image = new_img or old_img
     v.video_link = payload.video_link.strip()
     v.folder = _normalize_csv_field(payload.folder)
-    v.batch = payload.batch.strip()
+    v.batch = _normalize_csv_field(payload.batch) or payload.batch.strip()
     v.status = payload.status or "1"
     if payload.upload_date is not None:
         v.upload_date = payload.upload_date

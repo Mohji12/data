@@ -36,6 +36,8 @@ export default function Navbar() {
     // Keep this identical to Home ("Choose your path") source to avoid divergence.
     queryKey: ['registrationCatalogHome'],
     queryFn: () => apiClient('/registration/catalog?include_inactive=true'),
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
   });
   const registrationCatalog = filterRegistrationCatalogBatches(catalog || []);
   const batchOptions = registrationCatalog.map((b) => ({

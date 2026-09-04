@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Maximize2, Minimize2, Play, Pause, Settings, FastForward, Volume1, Volume2, VolumeX, Plus, Minus } from 'lucide-react';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
+import { apiClient } from '@/lib/apiClient';
 import {
   buildVimeoPlayerEmbedUrl,
   buildYouTubeEmbedUrl,
@@ -24,6 +25,8 @@ function detectProvider(rawUrl?: string | null): { provider: Provider; id: strin
 type ProtectedVideoEmbedProps = {
   videoUrl?: string | null;
   title: string;
+  /** When set, accumulate played seconds via POST /videos/{id}/progress. */
+  videoId?: number | null;
 };
 
 function getFullscreenElement(): Element | null {
@@ -142,7 +145,7 @@ function useBlockRightClick() {
  *  - Fullscreen button
  *  - Keyboard: ← → = ±10s, Space = play/pause, F = fullscreen
  */
-export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoEmbedProps) {
+export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: ProtectedVideoEmbedProps) {
   useBlockRightClick();
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -157,6 +160,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
   const playerReadyRef = useRef(false);
   const lastVolumeRef = useRef(1);
   const isSeekingRef = useRef(false);
+  const watchAnchorMsRef = useRef<number | null>(null);
+  const currentTimeRef = useRef(0);
+  const flushWatchProgressRef = useRef<(force?: boolean) => void>(() => {});
 
   const VOLUME_STEP = 0.1;
 
@@ -199,6 +205,59 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
   useEffect(() => {
     currentQualityRef.current = currentQuality;
   }, [currentQuality]);
+
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
+
+  // Persist played time while the video is actually playing (not on seek jumps).
+  useEffect(() => {
+    if (!videoId) return;
+
+    const HEARTBEAT_MS = 15_000;
+
+    const flush = (force = false) => {
+      const anchor = watchAnchorMsRef.current;
+      if (anchor == null) return;
+      const elapsedMs = Date.now() - anchor;
+      if (!force && elapsedMs < 1_000) return;
+      const deltaSeconds = Math.min(30, Math.max(0, Math.round(elapsedMs / 1000)));
+      watchAnchorMsRef.current = Date.now();
+      if (deltaSeconds <= 0) return;
+      void apiClient(`/videos/${videoId}/progress`, {
+        method: 'POST',
+        body: JSON.stringify({
+          delta_seconds: deltaSeconds,
+          position_seconds: currentTimeRef.current,
+        }),
+      }).catch(() => {
+        // Keep playback uninterrupted; next tick will retry remaining time.
+      });
+    };
+
+    flushWatchProgressRef.current = flush;
+
+    if (isPlaying) {
+      if (watchAnchorMsRef.current == null) {
+        watchAnchorMsRef.current = Date.now();
+      }
+      const intervalId = window.setInterval(() => flush(false), HEARTBEAT_MS);
+      return () => {
+        window.clearInterval(intervalId);
+        flush(true);
+      };
+    }
+
+    flush(true);
+    watchAnchorMsRef.current = null;
+    return undefined;
+  }, [isPlaying, videoId]);
+
+  useEffect(() => {
+    return () => {
+      flushWatchProgressRef.current(true);
+    };
+  }, []);
 
   useEffect(() => {
     setPlayerError(null);
@@ -559,8 +618,10 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
           }
           if (name.includes('privacy') || lower.includes('privacy')) {
             setPlayerError(
-              'This video is blocked by Vimeo privacy settings. The site domain must be allowed in the Vimeo embed list, and the browser must send the page origin to the player.',
+              'This video is blocked by Vimeo privacy settings. An admin must allow this website domain under Vimeo → Video → Embed → Domains, and the video link in Admin must include the privacy hash (?h=…) for unlisted videos.',
             );
+          } else if (lower.includes('not found') || name.includes('notfound')) {
+            setPlayerError('This Vimeo video was not found or has been removed. Ask admin to update the video link.');
           } else {
             setPlayerError(message || 'This video could not be played.');
           }
@@ -577,7 +638,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
               );
               setCurrentQuality('auto');
             }
-          }, 8000);
+          }, 3000);
         }
 
         if (data.event === 'bufferend' || data.event === 'play') {
@@ -1007,17 +1068,31 @@ export default function ProtectedVideoEmbed({ videoUrl, title }: ProtectedVideoE
           className="absolute inset-0 h-full w-full border-0 object-contain bg-black"
           playsInline
           preload="metadata"
+          onError={() => {
+            setPlayerError(
+              'This video file could not be loaded. The file may be missing or the link may be incorrect.',
+            );
+          }}
         />
-      ) : (
+      ) : embedSrc ? (
         <iframe
           ref={iframeRef}
           id={vimeoPlayerId}
-          src={embedSrc ?? undefined}
+          src={embedSrc}
           title={title}
           className="absolute inset-0 h-full w-full border-0"
           allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
           referrerPolicy="strict-origin-when-cross-origin"
         />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center bg-black p-6 text-center">
+          <div className="max-w-md">
+            <p className="text-white font-display font-bold mb-2">Video unavailable</p>
+            <p className="text-white/80 text-sm font-sans">
+              No playable video URL was provided for this lesson.
+            </p>
+          </div>
+        </div>
       )}
 
       {playerError && (

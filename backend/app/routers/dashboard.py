@@ -1,5 +1,8 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends
+
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -8,6 +11,7 @@ from app.schemas import (
     DashboardPaymentItem,
     DashboardProfile,
     DashboardProfileUpdateRequest,
+    DashboardStats,
     DashboardSummary,
     FeatureAccess,
     SubscriptionPeriodInfo,
@@ -21,6 +25,7 @@ from app.services.access import (
     get_subscription_period_for_profile,
     is_certificate_only_user,
 )
+from app.services.video_progress import build_dashboard_stats
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -77,6 +82,17 @@ def dashboard_summary(
         extension=get_extension_offer(db, current_user),
         batch_access=batch_access,
     )
+
+
+@router.get("/stats", response_model=DashboardStats)
+def dashboard_stats(
+    folder_id: Optional[int] = Query(None, ge=1),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> DashboardStats:
+    """KPI aggregates for the student dashboard (watch progress + quiz)."""
+    data = build_dashboard_stats(db, current_user, folder_id=folder_id)
+    return DashboardStats(**data)
 
 
 @router.get("/profile", response_model=DashboardProfile)

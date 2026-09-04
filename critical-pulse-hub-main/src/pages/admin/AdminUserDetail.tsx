@@ -1,22 +1,120 @@
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
+import { openAuthenticatedExport, openAuthenticatedPdf } from '@/lib/apiBase';
 import { resolveAdminDocumentHref } from '@/lib/legacyUploadBase';
 import AdminDocumentPreview from '@/components/admin/AdminDocumentPreview';
 import { ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 type UserDetailResponse = {
   user: Record<string, unknown>;
   recent_payments: Array<Record<string, unknown>>;
 };
 
+type VideoProgressItem = {
+  video_id: number;
+  title: string;
+  folder: string | null;
+  batch: string | null;
+  video_status: string | null;
+  watched_seconds: number;
+  watched_minutes: number;
+  is_watched: boolean;
+  last_position_seconds: number | null;
+  updated_at: string | null;
+};
+
+type VideoProgressResponse = {
+  user_id: number;
+  videos_with_progress: number;
+  videos_watched: number;
+  total_watched_seconds: number;
+  hours_spent: number;
+  watched_threshold_seconds: number;
+  videos: VideoProgressItem[];
+};
+
+type ExamAttemptItem = {
+  user_exam_id: number;
+  exam_id: number;
+  exam_title: string;
+  attempt_no: number;
+  marks: number;
+  total_questions: number;
+  score_percent: number | null;
+  is_finished: boolean;
+  start_date: string | null;
+  end_date: string | null;
+  batch: string | null;
+};
+
+type ExamRollupItem = {
+  exam_id: number;
+  exam_title: string;
+  attempts_count: number;
+  completed_count: number;
+  best_score_percent: number | null;
+  latest_score_percent: number | null;
+  latest_marks: number | null;
+};
+
+type ExamAttemptsResponse = {
+  user_id: number;
+  exams_attempted: number;
+  tests_done: number;
+  mock_tests_completed: number;
+  in_progress_count: number;
+  avg_score_percent: number | null;
+  best_score_percent: number | null;
+  exams: ExamRollupItem[];
+  attempts: ExamAttemptItem[];
+};
+
+type UserUsageResponse = {
+  user_id: number;
+  videos_watched: number;
+  videos_with_progress: number;
+  hours_spent: number;
+  total_watched_seconds: number;
+  exams_attempted: number;
+  mock_tests_completed: number;
+  tests_done: number;
+  in_progress_count: number;
+  avg_score_percent: number | null;
+  best_score_percent: number | null;
+  login_count: number;
+  last_login_at: string | null;
+  last_activity_at: string | null;
+  video: VideoProgressResponse;
+  exams: ExamAttemptsResponse;
+};
+
+function formatWatchDuration(totalSeconds: number): string {
+  const secs = Math.max(0, Math.floor(totalSeconds || 0));
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  if (h > 0) return `${h}h ${m}m ${String(s).padStart(2, '0')}s`;
+  if (m > 0) return `${m}m ${String(s).padStart(2, '0')}s`;
+  return `${s}s`;
+}
+
+function formatUpdatedAt(iso: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+}
+
 export default function AdminUserDetail() {
   const { id } = useParams();
   const userId = Number(id);
   const qc = useQueryClient();
   const [offlineNote, setOfflineNote] = useState('');
+  const [videoFilter, setVideoFilter] = useState<'all' | 'watched'>('all');
+  const [examFilter, setExamFilter] = useState<'all' | 'completed'>('all');
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['adminUser', userId],
@@ -24,10 +122,36 @@ export default function AdminUserDetail() {
     enabled: Number.isFinite(userId) && userId > 0,
   });
 
+  const {
+    data: usage,
+    isLoading: usageLoading,
+    error: usageError,
+  } = useQuery({
+    queryKey: ['adminUserUsage', userId],
+    queryFn: () => apiClient(`/admin/users/${userId}/usage`) as Promise<UserUsageResponse>,
+    enabled: Number.isFinite(userId) && userId > 0,
+  });
+
+  const videoProgress = usage?.video;
+  const examAttempts = usage?.exams;
+
+  const filteredVideos = useMemo(() => {
+    const rows = videoProgress?.videos ?? [];
+    if (videoFilter === 'watched') return rows.filter((v) => v.is_watched);
+    return rows;
+  }, [videoProgress?.videos, videoFilter]);
+
+  const filteredAttempts = useMemo(() => {
+    const rows = examAttempts?.attempts ?? [];
+    if (examFilter === 'completed') return rows.filter((a) => a.is_finished);
+    return rows;
+  }, [examAttempts?.attempts, examFilter]);
+
   const u = data?.user;
 
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ['adminUser', userId] });
+    void qc.invalidateQueries({ queryKey: ['adminUserUsage', userId] });
     void qc.invalidateQueries({ queryKey: ['adminUsers'] });
   };
 
@@ -169,9 +293,99 @@ export default function AdminUserDetail() {
       </Link>
 
       <h1 className="font-display font-bold text-3xl text-slate mb-2">{str('name')}</h1>
-      <p className="font-mono text-[11px] text-ink-faint mb-8">
+      <p className="font-mono text-[11px] text-ink-faint mb-6">
         #{userId} · {str('email')}
       </p>
+
+      <section
+        id="usage"
+        className="mb-8 max-w-5xl bg-chalk border border-border-soft rounded-sm p-6 space-y-4 scroll-mt-4"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-display font-bold text-lg text-slate">Student usage</h2>
+            <p className="font-mono text-[10px] text-ink-faint mt-1">
+              Consolidated video + mock-test + login activity
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <a
+              href="#video-watching"
+              className="rounded-sm border border-border-soft px-3 py-2 font-sans text-xs hover:bg-chalk-warm"
+            >
+              Video details
+            </a>
+            <a
+              href="#mock-tests"
+              className="rounded-sm border border-border-soft px-3 py-2 font-sans text-xs hover:bg-chalk-warm"
+            >
+              Mock test details
+            </a>
+            <button
+              type="button"
+              className="rounded-sm border border-border-strong px-3 py-2 font-sans text-xs font-medium hover:bg-chalk-cool"
+              onClick={() =>
+                void openAuthenticatedExport(
+                  `/admin/users/${userId}/usage/export.csv`,
+                  `user_${userId}_usage.csv`,
+                ).catch((e: Error) => toast.error(e.message))
+              }
+            >
+              Export CSV
+            </button>
+          </div>
+        </div>
+
+        {usageLoading ? (
+          <p className="font-mono text-xs text-ink-faint animate-pulse">Loading usage…</p>
+        ) : usageError ? (
+          <p className="text-sm text-red-600">
+            {(usageError as Error).message || 'Failed to load usage'}
+          </p>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+              <div className="font-mono text-[10px] text-ink-faint uppercase">Videos watched (≥10 min)</div>
+              <div className="font-display font-bold text-2xl text-slate mt-1">{usage?.videos_watched ?? 0}</div>
+            </div>
+            <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+              <div className="font-mono text-[10px] text-ink-faint uppercase">Total watch hours</div>
+              <div className="font-display font-bold text-2xl text-slate mt-1">{usage?.hours_spent ?? 0}</div>
+            </div>
+            <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+              <div className="font-mono text-[10px] text-ink-faint uppercase">Videos with progress</div>
+              <div className="font-display font-bold text-2xl text-slate mt-1">{usage?.videos_with_progress ?? 0}</div>
+            </div>
+            <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+              <div className="font-mono text-[10px] text-ink-faint uppercase">Exams attempted</div>
+              <div className="font-display font-bold text-2xl text-slate mt-1">{usage?.exams_attempted ?? 0}</div>
+            </div>
+            <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+              <div className="font-mono text-[10px] text-ink-faint uppercase">Mock tests completed</div>
+              <div className="font-display font-bold text-2xl text-slate mt-1">{usage?.mock_tests_completed ?? 0}</div>
+            </div>
+            <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+              <div className="font-mono text-[10px] text-ink-faint uppercase">Avg score %</div>
+              <div className="font-display font-bold text-2xl text-slate mt-1">
+                {usage?.avg_score_percent != null ? usage.avg_score_percent : '—'}
+              </div>
+            </div>
+            <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+              <div className="font-mono text-[10px] text-ink-faint uppercase">Best score %</div>
+              <div className="font-display font-bold text-2xl text-slate mt-1">
+                {usage?.best_score_percent != null ? usage.best_score_percent : '—'}
+              </div>
+            </div>
+            <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+              <div className="font-mono text-[10px] text-ink-faint uppercase">Logins</div>
+              <div className="font-display font-bold text-2xl text-slate mt-1">{usage?.login_count ?? 0}</div>
+              <div className="font-mono text-[10px] text-ink-faint mt-1">
+                Last activity: {formatUpdatedAt(usage?.last_activity_at ?? null)}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
 
       <div className="grid gap-6 lg:grid-cols-2 max-w-5xl">
         <section className="bg-chalk border border-border-soft rounded-sm p-6 space-y-3">
@@ -221,6 +435,353 @@ export default function AdminUserDetail() {
               <span className="text-ink text-right break-all">{value}</span>
             </div>
           ))}
+        </section>
+
+        <section
+          id="video-watching"
+          className="bg-chalk border border-border-soft rounded-sm p-6 space-y-4 lg:col-span-2 scroll-mt-4"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="font-display font-bold text-lg text-slate">Video watching</h2>
+              <p className="font-mono text-[10px] text-ink-faint mt-1">
+                Cumulative play time · watched = ≥10 minutes
+              </p>
+            </div>
+            <button
+              type="button"
+              className="rounded-sm border border-border-strong px-3 py-2 font-sans text-xs font-medium hover:bg-chalk-cool"
+              onClick={() =>
+                void openAuthenticatedExport(
+                  `/admin/users/${userId}/video-progress/export.csv`,
+                  `user_${userId}_video_progress.csv`,
+                ).catch((e: Error) => toast.error(e.message))
+              }
+            >
+              Export CSV
+            </button>
+          </div>
+
+          {usageLoading ? (
+            <p className="font-mono text-xs text-ink-faint animate-pulse">Loading video progress…</p>
+          ) : usageError ? (
+            <p className="text-sm text-red-600">
+              {(usageError as Error).message || 'Failed to load video progress'}
+            </p>
+          ) : (
+            <>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+                  <div className="font-mono text-[10px] text-ink-faint uppercase">Videos watched (≥10 min)</div>
+                  <div className="font-display font-bold text-2xl text-slate mt-1">
+                    {videoProgress?.videos_watched ?? 0}
+                  </div>
+                </div>
+                <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+                  <div className="font-mono text-[10px] text-ink-faint uppercase">With any progress</div>
+                  <div className="font-display font-bold text-2xl text-slate mt-1">
+                    {videoProgress?.videos_with_progress ?? 0}
+                  </div>
+                </div>
+                <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+                  <div className="font-mono text-[10px] text-ink-faint uppercase">Total learning hours</div>
+                  <div className="font-display font-bold text-2xl text-slate mt-1">
+                    {videoProgress?.hours_spent ?? 0}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setVideoFilter('all')}
+                  className={`rounded-sm px-3 py-1.5 font-sans text-xs border ${
+                    videoFilter === 'all'
+                      ? 'bg-slate text-chalk border-slate'
+                      : 'bg-chalk border-border-soft text-ink-secondary hover:bg-chalk-warm'
+                  }`}
+                >
+                  All progress
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVideoFilter('watched')}
+                  className={`rounded-sm px-3 py-1.5 font-sans text-xs border ${
+                    videoFilter === 'watched'
+                      ? 'bg-slate text-chalk border-slate'
+                      : 'bg-chalk border-border-soft text-ink-secondary hover:bg-chalk-warm'
+                  }`}
+                >
+                  Watched (≥10 min)
+                </button>
+              </div>
+
+              <div className="overflow-x-auto border border-border-soft rounded-sm">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-chalk-cool border-b border-border-soft text-left">
+                      <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">Video</th>
+                      <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">Folder</th>
+                      <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">Duration</th>
+                      <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">Status</th>
+                      <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">Last updated</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredVideos.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-3 py-8 text-center text-ink-muted font-sans text-sm">
+                          No video watch progress recorded yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredVideos.map((v) => (
+                        <tr key={v.video_id} className="border-b border-border-soft last:border-0">
+                          <td className="px-3 py-2 text-ink font-medium max-w-[280px]">
+                            <div className="truncate" title={v.title}>
+                              {v.title}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-ink-muted">{v.folder || '—'}</td>
+                          <td className="px-3 py-2 font-mono text-xs text-ink whitespace-nowrap">
+                            {formatWatchDuration(v.watched_seconds)}
+                            <span className="text-ink-faint ml-1">({v.watched_minutes} min)</span>
+                          </td>
+                          <td className="px-3 py-2">
+                            {v.is_watched ? (
+                              <span className="inline-block rounded-sm bg-mint/15 text-slate px-2 py-0.5 text-[11px] font-sans font-semibold">
+                                Watched
+                              </span>
+                            ) : (
+                              <span className="inline-block rounded-sm bg-chalk-warm text-ink-muted px-2 py-0.5 text-[11px] font-sans">
+                                In progress
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 font-mono text-[11px] text-ink-faint whitespace-nowrap">
+                            {formatUpdatedAt(v.updated_at)}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </section>
+
+        <section
+          id="mock-tests"
+          className="bg-chalk border border-border-soft rounded-sm p-6 space-y-4 lg:col-span-2 scroll-mt-4"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="font-display font-bold text-lg text-slate">Mock tests</h2>
+              <p className="font-mono text-[10px] text-ink-faint mt-1">
+                All assessments · score % = marks ÷ total questions (finished only)
+              </p>
+            </div>
+            <button
+              type="button"
+              className="rounded-sm border border-border-strong px-3 py-2 font-sans text-xs font-medium hover:bg-chalk-cool"
+              onClick={() =>
+                void openAuthenticatedExport(
+                  `/admin/users/${userId}/exam-attempts/export.csv`,
+                  `user_${userId}_exam_attempts.csv`,
+                ).catch((e: Error) => toast.error(e.message))
+              }
+            >
+              Export CSV
+            </button>
+          </div>
+
+          {usageLoading ? (
+            <p className="font-mono text-xs text-ink-faint animate-pulse">Loading mock-test attempts…</p>
+          ) : usageError ? (
+            <p className="text-sm text-red-600">
+              {(usageError as Error).message || 'Failed to load exam attempts'}
+            </p>
+          ) : (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+                  <div className="font-mono text-[10px] text-ink-faint uppercase">Exams attempted</div>
+                  <div className="font-display font-bold text-2xl text-slate mt-1">
+                    {examAttempts?.exams_attempted ?? 0}
+                  </div>
+                </div>
+                <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+                  <div className="font-mono text-[10px] text-ink-faint uppercase">Completed attempts</div>
+                  <div className="font-display font-bold text-2xl text-slate mt-1">
+                    {examAttempts?.mock_tests_completed ?? 0}
+                  </div>
+                </div>
+                <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+                  <div className="font-mono text-[10px] text-ink-faint uppercase">Avg score %</div>
+                  <div className="font-display font-bold text-2xl text-slate mt-1">
+                    {examAttempts?.avg_score_percent != null ? examAttempts.avg_score_percent : '—'}
+                  </div>
+                </div>
+                <div className="bg-chalk-warm border border-border-soft rounded-sm p-3">
+                  <div className="font-mono text-[10px] text-ink-faint uppercase">Best score %</div>
+                  <div className="font-display font-bold text-2xl text-slate mt-1">
+                    {examAttempts?.best_score_percent != null ? examAttempts.best_score_percent : '—'}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <h3 className="font-sans text-sm font-semibold text-slate mb-2">By exam</h3>
+                <div className="overflow-x-auto border border-border-soft rounded-sm">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-chalk-cool border-b border-border-soft text-left">
+                        <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">Exam</th>
+                        <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">Attempts</th>
+                        <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">Completed</th>
+                        <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">Best %</th>
+                        <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">Latest %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(examAttempts?.exams ?? []).length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="px-3 py-6 text-center text-ink-muted font-sans text-sm">
+                            No mock tests attempted yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        (examAttempts?.exams ?? []).map((e) => (
+                          <tr key={e.exam_id} className="border-b border-border-soft last:border-0">
+                            <td className="px-3 py-2 text-ink font-medium max-w-[280px]">
+                              <div className="truncate" title={e.exam_title}>
+                                {e.exam_title}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 font-mono text-xs">{e.attempts_count}</td>
+                            <td className="px-3 py-2 font-mono text-xs">{e.completed_count}</td>
+                            <td className="px-3 py-2 font-mono text-xs">
+                              {e.best_score_percent != null ? `${e.best_score_percent}%` : '—'}
+                            </td>
+                            <td className="px-3 py-2 font-mono text-xs">
+                              {e.latest_score_percent != null ? `${e.latest_score_percent}%` : '—'}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setExamFilter('all')}
+                  className={`rounded-sm px-3 py-1.5 font-sans text-xs border ${
+                    examFilter === 'all'
+                      ? 'bg-slate text-chalk border-slate'
+                      : 'bg-chalk border-border-soft text-ink-secondary hover:bg-chalk-warm'
+                  }`}
+                >
+                  All attempts
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExamFilter('completed')}
+                  className={`rounded-sm px-3 py-1.5 font-sans text-xs border ${
+                    examFilter === 'completed'
+                      ? 'bg-slate text-chalk border-slate'
+                      : 'bg-chalk border-border-soft text-ink-secondary hover:bg-chalk-warm'
+                  }`}
+                >
+                  Completed only
+                </button>
+              </div>
+
+              <div>
+                <h3 className="font-sans text-sm font-semibold text-slate mb-2">Attempt history</h3>
+                <div className="overflow-x-auto border border-border-soft rounded-sm">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-chalk-cool border-b border-border-soft text-left">
+                        <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">Exam</th>
+                        <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">#</th>
+                        <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">Score</th>
+                        <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">Status</th>
+                        <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">Started</th>
+                        <th className="px-3 py-2 font-mono text-[10px] uppercase text-ink-faint">PDF</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredAttempts.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="px-3 py-6 text-center text-ink-muted font-sans text-sm">
+                            No attempts to show.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredAttempts.map((a) => (
+                          <tr key={a.user_exam_id} className="border-b border-border-soft last:border-0">
+                            <td className="px-3 py-2 text-ink font-medium max-w-[240px]">
+                              <div className="truncate" title={a.exam_title}>
+                                {a.exam_title}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 font-mono text-xs">{a.attempt_no}</td>
+                            <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
+                              {a.is_finished ? (
+                                <>
+                                  {a.marks}/{a.total_questions}
+                                  {a.score_percent != null ? (
+                                    <span className="text-ink-faint ml-1">({a.score_percent}%)</span>
+                                  ) : null}
+                                </>
+                              ) : (
+                                '—'
+                              )}
+                            </td>
+                            <td className="px-3 py-2">
+                              {a.is_finished ? (
+                                <span className="inline-block rounded-sm bg-mint/15 text-slate px-2 py-0.5 text-[11px] font-sans font-semibold">
+                                  Done
+                                </span>
+                              ) : (
+                                <span className="inline-block rounded-sm bg-chalk-warm text-ink-muted px-2 py-0.5 text-[11px] font-sans">
+                                  In progress
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 font-mono text-[11px] text-ink-faint whitespace-nowrap">
+                              {formatUpdatedAt(a.start_date)}
+                            </td>
+                            <td className="px-3 py-2">
+                              {a.is_finished ? (
+                                <button
+                                  type="button"
+                                  className="text-xs text-slate font-sans underline hover:no-underline"
+                                  onClick={() =>
+                                    void openAuthenticatedPdf(
+                                      `/admin/quiz/results/${a.user_exam_id}/download.pdf`,
+                                    ).catch((e: Error) => toast.error(e.message))
+                                  }
+                                >
+                                  PDF
+                                </button>
+                              ) : (
+                                '—'
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
         </section>
 
         <section className="bg-chalk border border-border-soft rounded-sm p-6 space-y-4">

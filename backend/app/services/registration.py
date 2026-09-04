@@ -3,11 +3,11 @@ from __future__ import annotations
 import re
 import uuid
 from calendar import monthrange
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import List, Optional, Tuple
 
 from fastapi import HTTPException
-from sqlalchemy import Date, and_, cast, func, inspect, or_
+from sqlalchemy import Date, and_, case, cast, func, inspect, or_
 from sqlalchemy.orm import Session, load_only
 
 from app.models import (
@@ -297,10 +297,28 @@ def batch_definition_from_master_row(row: BatchMaster) -> BatchDefinition:
     )
 
 
+_SCHEMA_COLS_CACHE: dict[str, set[str]] = {}
+_COUPON_SCHEMA_COLS_CACHE: dict[str, set[str]] = {}
+
+
 def _batch_has_column(db: Session, column_name: str) -> bool:
     bind = db.get_bind()
-    cols = inspect(bind).get_columns("batch_master")
-    return any((c.get("name") or "").lower() == column_name.lower() for c in cols)
+    key = str(getattr(bind, "url", "") or id(bind))
+    cols = _SCHEMA_COLS_CACHE.get(key)
+    if cols is None:
+        cols = {(c.get("name") or "").lower() for c in inspect(bind).get_columns("batch_master")}
+        _SCHEMA_COLS_CACHE[key] = cols
+    return column_name.lower() in cols
+
+
+def _coupon_has_column(db: Session, column_name: str) -> bool:
+    bind = db.get_bind()
+    key = str(getattr(bind, "url", "") or id(bind))
+    cols = _COUPON_SCHEMA_COLS_CACHE.get(key)
+    if cols is None:
+        cols = {(c.get("name") or "").lower() for c in inspect(bind).get_columns("coupon_master")}
+        _COUPON_SCHEMA_COLS_CACHE[key] = cols
+    return column_name.lower() in cols
 
 
 def _batch_load_only(db: Session):
@@ -326,12 +344,6 @@ def _batch_query(db: Session):
 
 def _brochure_option_key(batch_name: str) -> str:
     return f"batch_brochure::{(batch_name or '').strip().casefold()}"
-
-
-def _coupon_has_column(db: Session, column_name: str) -> bool:
-    bind = db.get_bind()
-    cols = inspect(bind).get_columns("coupon_master")
-    return any((c.get("name") or "").lower() == column_name.lower() for c in cols)
 
 
 def _coupon_query(db: Session):
@@ -639,6 +651,80 @@ def shift_following_package_windows_after_extension(
     return moved
 
 
+def _load_package_delegate_counts(db: Session) -> dict[str, dict[str, int]]:
+    """One aggregated query: subscription → {indian, foreign, registerable} counts.
+
+    Avoids N+1 round-trips to a remote MySQL (Select Batch was ~10s+).
+    """
+    today = date.today()
+    upcoming = today + timedelta(days=PRICING_TIER_UPCOMING_DAYS)
+    sub_key = func.lower(func.trim(Package.subscription))
+
+    # "Current" for catalog counts — mirrors `_count_current_packages_for_delegate`.
+    current_open = and_(
+        or_(Package.start_date.is_(None), cast(Package.start_date, Date) <= today),
+        or_(
+            Package.plan_type == "subscription",
+            Package.end_date.is_(None),
+            cast(Package.end_date, Date) >= today,
+        ),
+    )
+    indian_flag = and_(Package.category_name.ilike("%Indian%"), current_open)
+    foreign_flag = and_(Package.category_name.ilike("%Foreign%"), current_open)
+
+    # Registerable for list_batches — mirrors `_package_visible_for_registration`.
+    registerable = or_(
+        and_(
+            or_(Package.start_date.is_(None), cast(Package.start_date, Date) <= today),
+            or_(
+                Package.plan_type == "subscription",
+                Package.end_date.is_(None),
+                cast(Package.end_date, Date) >= today,
+            ),
+        ),
+        and_(
+            cast(Package.start_date, Date) > today,
+            cast(Package.start_date, Date) <= upcoming,
+        ),
+    )
+
+    rows = (
+        db.query(
+            sub_key.label("sub_key"),
+            func.sum(case((indian_flag, 1), else_=0)).label("indian"),
+            func.sum(case((foreign_flag, 1), else_=0)).label("foreign"),
+            func.sum(case((registerable, 1), else_=0)).label("registerable"),
+        )
+        .filter(Package.status == "1")
+        .group_by(sub_key)
+        .all()
+    )
+    out: dict[str, dict[str, int]] = {}
+    for row in rows:
+        key = (row.sub_key or "").strip()
+        if not key:
+            continue
+        out[key] = {
+            "indian": int(row.indian or 0),
+            "foreign": int(row.foreign or 0),
+            "registerable": int(row.registerable or 0),
+        }
+    return out
+
+
+def _batch_counts_from_index(
+    counts: dict[str, dict[str, int]],
+    batch: BatchDefinition,
+) -> tuple[int, int, int]:
+    indian = foreign = registerable = 0
+    for sub in package_subscriptions_for_batch(batch):
+        entry = counts.get((sub or "").strip().casefold()) or {}
+        indian += int(entry.get("indian") or 0)
+        foreign += int(entry.get("foreign") or 0)
+        registerable += int(entry.get("registerable") or 0)
+    return indian, foreign, registerable
+
+
 def _has_registerable_package_today(db: Session, subscription_title: str) -> bool:
     """At least one package row open now or starting within PRICING_TIER_UPCOMING_DAYS (any category)."""
     today = date.today()
@@ -676,13 +762,15 @@ def list_batches(db: Session) -> list[BatchDefinition]:
         .order_by(BatchMaster.display_order.desc(), BatchMaster.id.desc())
         .all()
     )
+    counts = _load_package_delegate_counts(db)
     out: list[BatchDefinition] = []
     for row in rows:
         title = (row.name or "").strip()
         if not title:
             continue
         bd = batch_definition_from_master_row(row)
-        if not _has_registerable_package_for_batch(db, bd):
+        _indian, _foreign, registerable = _batch_counts_from_index(counts, bd)
+        if registerable <= 0:
             continue
         out.append(bd)
     return out
@@ -720,6 +808,8 @@ def build_registration_catalog(
         if keys:
             opt_rows = db.query(Option).filter(Option.option_name.in_(keys)).all()
             brochure_map = {str(o.option_name): str(o.option_value or "").strip() for o in opt_rows}
+    # One aggregate query replaces per-batch N+1 counts (Select Batch was ~10s+).
+    counts = _load_package_delegate_counts(db)
     out: list[RegistrationCatalogItem] = []
 
     def _brochure_url(filename: Optional[str]) -> Optional[str]:
@@ -733,8 +823,7 @@ def build_registration_catalog(
         name = (row.name or "").strip()
         if not name:
             continue
-        indian_count = _count_current_packages_for_batch_delegate(db, bd, "Indian")
-        foreign_count = _count_current_packages_for_batch_delegate(db, bd, "Foreign")
+        indian_count, foreign_count, _registerable = _batch_counts_from_index(counts, bd)
         has_indian = indian_count > 0
         has_foreign = foreign_count > 0
         active_flag = (row.status or "0") == "1"
@@ -885,6 +974,8 @@ def _attach_subscription_duration_siblings(
     visible: list[Package],
     pkg_sub: str,
     category: str,
+    *,
+    all_for_sub: Optional[list[Package]] = None,
 ) -> list[Package]:
     """
     Batch 16-style subscription sales: when 6-month is on sale, also list 9- and 12-month
@@ -896,13 +987,17 @@ def _attach_subscription_duration_siblings(
     tier_keys = {_pricing_window_key(p) for p in visible_sub}
     by_id = {p.id: p for p in visible}
     siblings = (
-        db.query(Package)
-        .filter(
-            _subscription_name_eq(Package.subscription, pkg_sub),
-            Package.status == "1",
-            Package.category_name == category,
+        all_for_sub
+        if all_for_sub is not None
+        else (
+            db.query(Package)
+            .filter(
+                _subscription_name_eq(Package.subscription, pkg_sub),
+                Package.status == "1",
+                Package.category_name == category,
+            )
+            .all()
         )
-        .all()
     )
     for p in siblings:
         if (p.plan_type or "").strip().lower() != "subscription":
@@ -1143,7 +1238,9 @@ def query_active_packages_for_registration(
             visible = list(pkgs_raw)
         else:
             visible = [p for p in pkgs_raw if _package_visible_for_registration(p, today)]
-        visible = _attach_subscription_duration_siblings(db, visible, pkg_sub, category)
+        visible = _attach_subscription_duration_siblings(
+            db, visible, pkg_sub, category, all_for_sub=pkgs_raw
+        )
         for p in visible:
             by_id[p.id] = p
     pkgs = sorted(by_id.values(), key=lambda p: (_as_date(p.start_date) or date.min, p.id))
@@ -1859,6 +1956,72 @@ def get_batch_master_row_by_slug(db: Session, batch_slug: str) -> Tuple[BatchMas
     return found
 
 
+def _package_promo_for_badge(
+    pkgs: List[Package],
+    *,
+    today: Optional[date] = None,
+    description: str = "discount",
+    showcase_batch_start: Optional[str] = None,
+) -> dict:
+    """
+    Pick the strongest active package promo for the course-page cloud badge.
+    Prefer highest discount_percentage; tie-break by latest discount_end_date.
+    showcase_batch_start is display-only (admin showcase date), not package.batch_start_date.
+    """
+    from app.services.promo_badge import days_remaining_for_valid_till
+
+    day = today or date.today()
+    best: Package | None = None
+    best_pct = 0.0
+    best_end: date | None = None
+    label = (description or "").strip() or "discount"
+    showcase: date | None = None
+    raw_showcase = str(showcase_batch_start or "").strip()
+    if raw_showcase:
+        try:
+            showcase = date.fromisoformat(raw_showcase[:10])
+        except ValueError:
+            showcase = None
+
+    for p in pkgs:
+        if not _package_promo_discount_active(p, day):
+            continue
+        pct = float(p.discount_percentage or 0)
+        if pct <= 0:
+            continue
+        end = _as_date(p.discount_end_date)
+        if best is None or pct > best_pct or (pct == best_pct and (end or date.min) > (best_end or date.min)):
+            best = p
+            best_pct = pct
+            best_end = end
+
+    if best is None or best_pct <= 0:
+        return {
+            "promo_active": False,
+            "promo_discount_pct": None,
+            "promo_valid_till": None,
+            "promo_days_left": 0,
+            "promo_description": label,
+            "promo_batch_start": showcase.isoformat() if showcase else None,
+        }
+
+    days_left = days_remaining_for_valid_till(best_end, now=None) if best_end else 0
+    active = True
+    if best_end is not None:
+        active = days_left > 0
+    else:
+        days_left = 0
+
+    return {
+        "promo_active": active and best_pct > 0,
+        "promo_discount_pct": int(best_pct) if float(best_pct).is_integer() else best_pct,
+        "promo_valid_till": best_end.isoformat() if best_end else None,
+        "promo_days_left": days_left if best_end else 0,
+        "promo_description": label,
+        "promo_batch_start": showcase.isoformat() if showcase else None,
+    }
+
+
 def build_fee_structure_response(db: Session, batch_slug: str) -> FeeStructureResponse:
     """Build fee table from all active `package` rows (any date window)."""
     row, bd = get_batch_master_row_by_slug(db, batch_slug)
@@ -1955,6 +2118,26 @@ def build_fee_structure_response(db: Session, batch_slug: str) -> FeeStructureRe
         brochure_value = (str(opt.option_value).strip() if opt and opt.option_value else "")
     brochure_url = f"/upload/brochures/{brochure_value}" if brochure_value else None
 
+    from app.services.access import get_option_value
+
+    def _promo_option(prefix: str) -> str:
+        for key in [primary_sub, batch_name, *subs]:
+            k = (key or "").strip()
+            if not k:
+                continue
+            val = (get_option_value(db, f"{prefix}::{k}") or "").strip()
+            if val:
+                return val
+        return ""
+
+    promo_desc = _promo_option("package_promo_description") or "discount"
+    showcase_start = _promo_option("package_promo_showcase_start") or None
+    promo = _package_promo_for_badge(
+        [*ind_pkgs, *for_pkgs],
+        description=promo_desc,
+        showcase_batch_start=showcase_start,
+    )
+
     return FeeStructureResponse(
         batch_slug=batch_slug,
         batch_name=batch_name,
@@ -1970,4 +2153,10 @@ def build_fee_structure_response(db: Session, batch_slug: str) -> FeeStructureRe
         column_headers=headers,
         indian=build_block(ind_pkgs, True, "Indian Delegates (INR)"),
         foreign=build_block(for_pkgs, False, "Foreign Delegates (USD)"),
+        promo_discount_pct=promo["promo_discount_pct"],
+        promo_valid_till=promo["promo_valid_till"],
+        promo_active=bool(promo["promo_active"]),
+        promo_days_left=int(promo["promo_days_left"] or 0),
+        promo_description=str(promo.get("promo_description") or "discount"),
+        promo_batch_start=promo.get("promo_batch_start"),
     )

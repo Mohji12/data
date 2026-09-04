@@ -3,9 +3,11 @@ import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
+import DiscountOfferBadge from '@/components/DiscountOfferBadge';
 import { apiClient } from '@/lib/apiClient';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
 import { toEmbeddableVideoUrl } from '@/lib/videoUrl';
+import { descriptionToSafeHtml } from '@/lib/markdown';
 
 export type FeeStructureBlock = {
   group_label: string;
@@ -31,6 +33,12 @@ export type FeeStructureResponse = {
   column_headers: string[];
   indian: FeeStructureBlock;
   foreign: FeeStructureBlock;
+  promo_discount_pct?: number | null;
+  promo_valid_till?: string | null;
+  promo_active?: boolean;
+  promo_days_left?: number;
+  promo_description?: string | null;
+  promo_batch_start?: string | null;
 };
 
 const rowLabels = ['Registration Fee', 'Discount', 'Total', 'Total Amount Payable'] as const;
@@ -242,6 +250,18 @@ export default function RegistrationFeePage({ batchSlug }: Props) {
   });
   const brochureResolvedUrl = resolvePublicUploadUrl(data?.brochure_url);
   const brochureType = brochureKind(brochureResolvedUrl);
+  const packagePromo =
+    data?.promo_active && Number(data.promo_discount_pct) > 0
+      ? {
+          active: true,
+          discount_pct: Number(data.promo_discount_pct),
+          description: (data.promo_description || 'discount').trim() || 'discount',
+          valid_till: data.promo_valid_till ?? null,
+          days_left: Number(data.promo_days_left || 0),
+          batch_start: data.promo_batch_start ?? null,
+          layout: 'course' as const,
+        }
+      : null;
 
   return (
     <div className="min-h-screen bg-chalk-warm flex flex-col">
@@ -264,8 +284,15 @@ export default function RegistrationFeePage({ batchSlug }: Props) {
       </section>
 
       <main className="flex-1 w-full max-w-[960px] mx-auto px-4 sm:px-6 -mt-8 pb-16 relative z-10">
-        <div className="bg-chalk border border-border-soft rounded-sm shadow-[0_12px_40px_rgba(26,35,50,0.08)] p-6 sm:p-10">
-          <h2 className="font-display font-bold text-2xl sm:text-3xl text-slate mb-6 text-center">
+        <div className="bg-chalk border border-border-soft rounded-sm shadow-[0_12px_40px_rgba(26,35,50,0.08)] p-6 sm:p-10 relative overflow-visible">
+          {/* Cloud discount from this batch's package promo (Admin Packages) */}
+          {packagePromo ? (
+            <div className="absolute top-2 right-1 sm:top-3 sm:right-3 z-20 pointer-events-auto">
+              <DiscountOfferBadge compact config={packagePromo} />
+            </div>
+          ) : null}
+
+          <h2 className="font-display font-bold text-2xl sm:text-3xl text-slate mb-6 text-center pr-24 sm:pr-40">
             Registration Fee Structure
           </h2>
 
@@ -276,7 +303,7 @@ export default function RegistrationFeePage({ batchSlug }: Props) {
           )}
 
           {data?.notice ? (
-            <p className="font-sans text-sm sm:text-[15px] text-red-600 leading-relaxed mb-8 text-center whitespace-pre-line">
+            <p className="font-sans text-sm sm:text-[15px] text-red-600 leading-relaxed mb-8 text-center whitespace-pre-line pr-0 sm:pr-40">
               {data.notice}
             </p>
           ) : null}
@@ -286,11 +313,16 @@ export default function RegistrationFeePage({ batchSlug }: Props) {
           )}
           
           {data?.description && (
-            <div className="mb-8 prose prose-slate max-w-none">
-              <p className="font-sans text-base text-slate-light whitespace-pre-line leading-relaxed">
-                {data.description}
-              </p>
-            </div>
+            <div
+              className="mb-8 prose prose-slate max-w-none sm:pr-52 lg:pr-60 font-sans text-base text-slate-light leading-relaxed
+                prose-headings:font-display prose-headings:text-slate prose-headings:font-bold
+                prose-h2:text-xl prose-h2:mt-6 prose-h2:mb-2
+                prose-h3:text-lg prose-h3:mt-5 prose-h3:mb-2
+                prose-h4:text-base prose-h4:mt-4 prose-h4:mb-1.5
+                prose-p:my-3 prose-strong:text-slate prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5
+                [&_mark]:rounded-sm [&_mark]:px-0.5"
+              dangerouslySetInnerHTML={{ __html: descriptionToSafeHtml(data.description) }}
+            />
           )}
 
           {data?.brochure_url && brochureResolvedUrl && (

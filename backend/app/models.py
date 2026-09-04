@@ -302,6 +302,23 @@ class Video(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class UserVideoProgress(Base):
+    """Cumulative played seconds per user × video (dashboard KPI watch tracking)."""
+
+    __tablename__ = "user_video_progress"
+    __table_args__ = (
+        UniqueConstraint("user_id", "video_id", name="uq_user_video_progress"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False)
+    video_id = Column(Integer, nullable=False)
+    watched_seconds = Column(Integer, nullable=False, default=0)
+    last_position_seconds = Column(Float, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class VideoQuestion(Base):
     """Legacy `video_question` table: id, users_id, question, created_at (no video FK in production DB)."""
 

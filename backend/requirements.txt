@@ -10,3 +10,5 @@ fpdf2
 boto3
 openpyxl
 tzdata
+email-validator
+python-multipart
