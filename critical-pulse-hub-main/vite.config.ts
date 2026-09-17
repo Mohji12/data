@@ -1,7 +1,6 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
-import { componentTagger } from "lovable-tagger";
 
 const LOCAL_API = "http://127.0.0.1:8000";
 const API_PROXY_PREFIXES = [
@@ -54,7 +53,7 @@ export default defineConfig(({ mode }) => {
       // Dev: browser → localhost:8080 → proxy → VITE_API_URL (or local :8000). Avoids CORS.
       proxy: buildDevProxy(proxyTarget),
     },
-    plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
+    plugins: [react()],
     resolve: {
       // TipTap / zustand can otherwise pull a second React copy after dep re-optimization.
       dedupe: ["react", "react-dom"],
