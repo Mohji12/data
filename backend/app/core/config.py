@@ -78,6 +78,7 @@ class Settings:
                 "https://harishcriticalcareclasses.com",
                 "https://www.harishcriticalcareclasses.com",
                 "https://krintixsample.site",
+                "https://data-eta-one.vercel.app",
                 "https://staging.dsuusrdh99pl9.amplifyapp.com",
                 "https://staging.d5w312h4wy6nw.amplifyapp.com",
                 "http://localhost:8080",
