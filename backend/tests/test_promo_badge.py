@@ -35,12 +35,15 @@ def test_payload_active_with_defaults_style():
         pct_raw="25",
         description_raw="discount",
         valid_till_raw="2026-09-16",
+        batch_start_raw="2026-10-01",
         now=now,
     )
     assert payload["active"] is True
     assert payload["discount_pct"] == 25
-    assert payload["description"] == "discount"
+    assert payload["description"] == "DISCOUNT"
     assert payload["valid_till"] == "2026-09-16"
+    assert payload["batch_start"] == "2026-10-01"
+    assert payload["headline"] == "OFFER"
     assert payload["days_left"] > 0
 
 
@@ -64,7 +67,7 @@ def test_payload_inactive_when_expired():
     )
     assert payload["active"] is False
     assert payload["days_left"] == 0
-    assert payload["description"] == "Early bird"
+    assert payload["description"] == "EARLY BIRD"
 
 
 def test_payload_inactive_when_invalid_date():

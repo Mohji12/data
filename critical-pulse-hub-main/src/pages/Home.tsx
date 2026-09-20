@@ -105,7 +105,7 @@ function HeroSection({
     <section className="min-h-screen flex flex-col relative">
       <div className="flex flex-col lg:flex-row flex-1 min-h-0 relative overflow-visible">
         {/* Small seal: top of the gap between left copy and right image */}
-        <div className="hidden lg:block absolute left-[50%] top-4 z-30 -translate-x-1/2 pointer-events-auto overflow-visible">
+        <div className="hidden lg:block absolute left-[50%] top-2 z-30 -translate-x-1/2 pointer-events-auto overflow-visible">
           <DiscountOfferBadge />
         </div>
 

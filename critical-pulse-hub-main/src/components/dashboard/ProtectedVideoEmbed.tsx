@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react';
 import { Maximize2, Minimize2, Play, Pause, Settings, FastForward, Volume1, Volume2, VolumeX, Plus, Minus } from 'lucide-react';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
 import { apiClient } from '@/lib/apiClient';
@@ -29,6 +29,15 @@ type ProtectedVideoEmbedProps = {
   videoId?: number | null;
 };
 
+/** iPhone/iPad (incl. iPadOS desktop UA) — no element fullscreen for div/iframe. */
+function isIosLike(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  if (/iPad|iPhone|iPod/.test(ua)) return true;
+  // iPadOS 13+ reports as MacIntel with touch
+  return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+}
+
 function getFullscreenElement(): Element | null {
   const doc = document as Document & {
     webkitFullscreenElement?: Element | null;
@@ -39,10 +48,12 @@ function getFullscreenElement(): Element | null {
 /**
  * Request fullscreen **synchronously** so Safari keeps the user-activation.
  * Safari (macOS) supports webkitRequestFullscreen on any element.
- * Safari (iOS) only supports webkitEnterFullscreen on <video>.
- * Returns true if the call was made (may still reject asynchronously).
+ * Safari (iOS) only supports webkitEnterFullscreen on <video> — callers must
+ * skip this helper on iOS for iframes and use the CSS expanded view instead.
+ * Returns true if a native request was started (may still reject asynchronously).
  */
 function requestElementFullscreen(el: HTMLElement): boolean {
+  if (isIosLike()) return false;
   const anyEl = el as HTMLElement & {
     webkitRequestFullscreen?: () => void;
     msRequestFullscreen?: () => void;
@@ -54,7 +65,9 @@ function requestElementFullscreen(el: HTMLElement): boolean {
       return true;
     }
     if (anyEl.requestFullscreen) {
-      anyEl.requestFullscreen().catch(() => {});
+      void anyEl.requestFullscreen().catch(() => {
+        /* async reject handled by toggleFullscreen fallback timer */
+      });
       return true;
     }
     if (anyEl.msRequestFullscreen) {
@@ -148,6 +161,7 @@ function useBlockRightClick() {
 export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: ProtectedVideoEmbedProps) {
   useBlockRightClick();
 
+  const hostRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -310,6 +324,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
   const exitExpandedView = useCallback(async () => {
     setViewportExpanded(false);
+    setIsFullscreen(false);
     document.body.style.overflow = '';
     if (getFullscreenElement()) {
       await exitDocumentFullscreen();
@@ -319,6 +334,12 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   /* ─── Fullscreen (native API on our container + mobile CSS fallback) ─── */
   /* Do NOT post requestFullscreen to Vimeo — postMessage loses user activation
      and the iframe throws: "API can only be initiated by a user gesture". */
+
+  const enterCssExpandedView = useCallback(() => {
+    setViewportExpanded(true);
+    setIsFullscreen(true);
+    document.body.style.overflow = 'hidden';
+  }, []);
 
   const toggleFullscreen = useCallback(() => {
     const container = containerRef.current;
@@ -332,21 +353,37 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     // iOS Safari: only <video> supports webkitEnterFullscreen, not divs/iframes.
     if (isDirectVideo && video) {
       const anyVideo = video as HTMLVideoElement & { webkitEnterFullscreen?: () => void };
-      if (anyVideo.webkitEnterFullscreen) {
-        anyVideo.webkitEnterFullscreen();
-        return;
+      if (typeof anyVideo.webkitEnterFullscreen === 'function') {
+        try {
+          anyVideo.webkitEnterFullscreen();
+          setIsFullscreen(true);
+          return;
+        } catch {
+          /* fall through to CSS expand */
+        }
       }
+    }
+
+    // iPhone/iPad: native element fullscreen is unreliable / unsupported for iframes.
+    if (isIosLike()) {
+      enterCssExpandedView();
+      return;
     }
 
     // Must call synchronously — Safari drops user-activation across await/.then().
     if (container && requestElementFullscreen(container)) {
+      // If the promise rejects (common on some mobile browsers), fall back to CSS expand.
+      window.setTimeout(() => {
+        if (!getFullscreenElement()) {
+          enterCssExpandedView();
+        }
+      }, 280);
       return;
     }
 
     // Fallback: CSS-based expanded view (iOS Safari for iframes, or any FS failure).
-    setViewportExpanded(true);
-    document.body.style.overflow = 'hidden';
-  }, [exitExpandedView, isDirectVideo, viewportExpanded]);
+    enterCssExpandedView();
+  }, [enterCssExpandedView, exitExpandedView, isDirectVideo, viewportExpanded]);
 
   /* ─── Play / Pause ─── */
 
@@ -443,24 +480,27 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     [applyVolume],
   );
 
-  const handleVolumeMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+  const handleVolumePointerDown = useCallback(
+    (e: React.PointerEvent) => {
       e.stopPropagation();
       e.preventDefault();
       openVolumeControl();
       isVolumeDraggingRef.current = true;
       calcVolumeFromMouse(e.clientX);
 
-      const onMove = (ev: MouseEvent) => calcVolumeFromMouse(ev.clientX);
+      const onMove = (ev: PointerEvent) => calcVolumeFromMouse(ev.clientX);
       const onUp = () => {
         isVolumeDraggingRef.current = false;
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', onUp);
+        scheduleHideVolumeControl();
       };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
     },
-    [calcVolumeFromMouse, openVolumeControl],
+    [calcVolumeFromMouse, openVolumeControl, scheduleHideVolumeControl],
   );
 
   useEffect(() => {
@@ -569,21 +609,23 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     [duration, seekTo],
   );
 
-  const handleSeekMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+  const handleSeekPointerDown = useCallback(
+    (e: React.PointerEvent) => {
       e.stopPropagation();
       e.preventDefault();
       setIsSeeking(true);
       calcSeekFromMouse(e.clientX);
 
-      const onMove = (ev: MouseEvent) => calcSeekFromMouse(ev.clientX);
+      const onMove = (ev: PointerEvent) => calcSeekFromMouse(ev.clientX);
       const onUp = () => {
         setIsSeeking(false);
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', onUp);
       };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
     },
     [calcSeekFromMouse],
   );
@@ -918,12 +960,16 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       if (fsEl && iframe && (fsEl === iframe || iframe.contains(fsEl))) {
         void exitDocumentFullscreen().then(() => {
           setViewportExpanded(true);
+          setIsFullscreen(true);
           document.body.style.overflow = 'hidden';
         });
         return;
       }
       if (!fsEl && !viewportExpanded) {
+        setIsFullscreen(false);
         document.body.style.overflow = '';
+      } else {
+        setIsFullscreen(!!fsEl || viewportExpanded);
       }
     };
 
@@ -941,6 +987,51 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       document.body.style.overflow = '';
     };
   }, []);
+
+  /* iOS: position:fixed inside overflow:hidden ancestors breaks touch/layout — temporarily unlock. */
+  useLayoutEffect(() => {
+    if (!viewportExpanded) return;
+    const unlocked: { el: HTMLElement; overflow: string }[] = [];
+    let node: HTMLElement | null = hostRef.current?.parentElement ?? null;
+    while (node && node !== document.documentElement) {
+      const cs = window.getComputedStyle(node);
+      if (
+        cs.overflow === 'hidden' ||
+        cs.overflowY === 'hidden' ||
+        cs.overflowX === 'hidden' ||
+        cs.overflow === 'clip' ||
+        cs.overflowY === 'clip'
+      ) {
+        unlocked.push({ el: node, overflow: node.style.overflow });
+        node.style.overflow = 'visible';
+      }
+      node = node.parentElement;
+    }
+    return () => {
+      unlocked.forEach(({ el, overflow }) => {
+        el.style.overflow = overflow;
+      });
+    };
+  }, [viewportExpanded]);
+
+  /* Sync native <video> webkit fullscreen on iOS. */
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !isDirectVideo) return;
+
+    const onBegin = () => setIsFullscreen(true);
+    const onEnd = () => {
+      setIsFullscreen(false);
+      setViewportExpanded(false);
+      document.body.style.overflow = '';
+    };
+    video.addEventListener('webkitbeginfullscreen', onBegin);
+    video.addEventListener('webkitendfullscreen', onEnd);
+    return () => {
+      video.removeEventListener('webkitbeginfullscreen', onBegin);
+      video.removeEventListener('webkitendfullscreen', onEnd);
+    };
+  }, [isDirectVideo, directVideoSrc]);
 
   /* ─── Keyboard: ← → seek, Space play/pause, F fullscreen ─── */
 
@@ -1048,13 +1139,31 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
   return (
     <div
+      ref={hostRef}
+      className={
+        viewportExpanded
+          ? 'relative w-full aspect-video min-h-[220px] sm:min-h-[280px]'
+          : 'relative w-full h-full min-h-[220px] sm:min-h-[280px]'
+      }
+    >
+    <div
       ref={containerRef}
       className={`
-        relative w-full h-full bg-black overflow-hidden select-none group
+        relative w-full h-full bg-black overflow-hidden select-none group touch-manipulation
         ${isExpanded
-          ? 'fixed inset-0 z-[200] w-[100dvw] h-[100dvh] max-w-none max-h-none rounded-none aspect-auto min-h-0'
+          ? 'fixed inset-0 z-[300] w-[100dvw] h-[100dvh] max-w-none max-h-none rounded-none aspect-auto min-h-0'
           : 'min-h-[220px] sm:min-h-[280px] aspect-video rounded'}
       `}
+      style={
+        isExpanded
+          ? {
+              paddingTop: 'env(safe-area-inset-top)',
+              paddingBottom: 'env(safe-area-inset-bottom)',
+              paddingLeft: 'env(safe-area-inset-left)',
+              paddingRight: 'env(safe-area-inset-right)',
+            }
+          : undefined
+      }
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1124,13 +1233,15 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
       {/* ─── Custom controls bar ─── */}
       <div
-        className="
+        className={`
           absolute bottom-0 left-0 right-0 z-20 pointer-events-auto
           bg-gradient-to-t from-black/80 via-black/40 to-transparent
-          pt-10 pb-2 px-3
-          opacity-0 group-hover:opacity-100
+          pt-10 px-3
+          pb-[max(0.5rem,env(safe-area-inset-bottom))]
           transition-opacity duration-300 ease-in-out
-        "
+          ${isExpanded ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
+          [@media(hover:none)]:opacity-100
+        `}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -1138,15 +1249,16 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Seek bar */}
+        {/* Seek bar — larger hit target on touch */}
         <div
           ref={seekBarRef}
           className="
-            w-full h-[5px] bg-white/20 rounded-full cursor-pointer mb-2
+            w-full h-3 sm:h-[5px] bg-white/20 rounded-full cursor-pointer mb-2
+            flex items-center
             hover:h-[7px] transition-all duration-150
-            relative group/seek
+            relative group/seek touch-none
           "
-          onMouseDown={handleSeekMouseDown}
+          onPointerDown={handleSeekPointerDown}
           onContextMenu={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -1276,7 +1388,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
                         w-24 h-2 bg-white/20 rounded-full cursor-pointer
                         relative group/vol shrink-0
                       "
-                      onMouseDown={handleVolumeMouseDown}
+                      onPointerDown={handleVolumePointerDown}
                       role="slider"
                       aria-valuemin={0}
                       aria-valuemax={100}
@@ -1465,14 +1577,15 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
                 text-white/80 hover:text-white
                 transition-colors cursor-pointer
               "
-              title={isFullscreen ? 'Exit Fullscreen (F)' : 'Fullscreen (F)'}
-              aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+              title={isExpanded ? 'Exit Fullscreen (F)' : 'Fullscreen (F)'}
+              aria-label={isExpanded ? 'Exit fullscreen' : 'Enter fullscreen'}
             >
-              {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              {isExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
             </button>
           </div>
         </div>
       </div>
+    </div>
     </div>
   );
 }

@@ -39,8 +39,13 @@ export default function AdminSettings() {
 
   const [usdRate, setUsdRate] = useState('');
   const [promoPct, setPromoPct] = useState('25');
-  const [promoDescription, setPromoDescription] = useState('discount');
-  const [promoValidTill, setPromoValidTill] = useState('2026-09-16');
+  const [promoDescription, setPromoDescription] = useState('DISCOUNT');
+  const [promoValidTill, setPromoValidTill] = useState('2026-09-30');
+  const [promoBatchStart, setPromoBatchStart] = useState('2026-10-01');
+  const [promoHeadline, setPromoHeadline] = useState('OFFER');
+  const [promoBatchLabel, setPromoBatchLabel] = useState('NEW BATCHES START FROM');
+  const [promoCtaPrefix, setPromoCtaPrefix] = useState('REGISTER NOW TO AVAIL');
+  const [promoValidPrefix, setPromoValidPrefix] = useState('OFFER VALID TILL');
 
   const [displayVideo, setDisplayVideo] = useState(false);
   const [accessVideo, setAccessVideo] = useState<string[]>([]);
@@ -97,8 +102,13 @@ export default function AdminSettings() {
     }
     setUsdRate(map.get('usd_rate') ?? '');
     setPromoPct(map.get('site_promo_discount_pct') || '25');
-    setPromoDescription(map.get('site_promo_discount_description') || 'discount');
-    setPromoValidTill(map.get('site_promo_discount_valid_till') || '2026-09-16');
+    setPromoDescription(map.get('site_promo_discount_description') || 'DISCOUNT');
+    setPromoValidTill(map.get('site_promo_discount_valid_till') || '2026-09-30');
+    setPromoBatchStart(map.get('site_promo_batch_start') || '2026-10-01');
+    setPromoHeadline(map.get('site_promo_headline') || 'OFFER');
+    setPromoBatchLabel(map.get('site_promo_batch_label') || 'NEW BATCHES START FROM');
+    setPromoCtaPrefix(map.get('site_promo_cta_prefix') || 'REGISTER NOW TO AVAIL');
+    setPromoValidPrefix(map.get('site_promo_valid_prefix') || 'OFFER VALID TILL');
     setDisplayVideo((map.get('display_video_library_link') || '0') === '1');
     setAccessVideo(splitBatches(map.get('access_video_library_link')));
     setDisplayQuiz((map.get('display_quiz_link') || '0') === '1');
@@ -180,8 +190,13 @@ export default function AdminSettings() {
       const pairs: { option_name: string; option_value: string }[] = [
         { option_name: 'usd_rate', option_value: usdRate.trim() },
         { option_name: 'site_promo_discount_pct', option_value: promoPct.trim() || '0' },
-        { option_name: 'site_promo_discount_description', option_value: promoDescription.trim() || 'discount' },
+        { option_name: 'site_promo_discount_description', option_value: promoDescription.trim() || 'DISCOUNT' },
         { option_name: 'site_promo_discount_valid_till', option_value: promoValidTill.trim() },
+        { option_name: 'site_promo_batch_start', option_value: promoBatchStart.trim() },
+        { option_name: 'site_promo_headline', option_value: promoHeadline.trim() || 'OFFER' },
+        { option_name: 'site_promo_batch_label', option_value: promoBatchLabel.trim() || 'NEW BATCHES START FROM' },
+        { option_name: 'site_promo_cta_prefix', option_value: promoCtaPrefix.trim() || 'REGISTER NOW TO AVAIL' },
+        { option_name: 'site_promo_valid_prefix', option_value: promoValidPrefix.trim() || 'OFFER VALID TILL' },
         { option_name: 'display_video_library_link', option_value: displayVideo ? '1' : '0' },
         { option_name: 'access_video_library_link', option_value: accessVideo.join(',') },
         { option_name: 'display_quiz_link', option_value: displayQuiz ? '1' : '0' },
@@ -338,9 +353,21 @@ export default function AdminSettings() {
         <section className="bg-chalk border border-border-soft rounded-sm p-6">
           <h2 className="font-display font-bold text-lg text-slate mb-1">Site promo badge</h2>
           <p className="font-sans text-xs text-ink-muted mb-4">
-            Cloud discount on the Home page only. Course pages use package discounts from Admin → Packages.
+            Edit every line shown inside the Home page cloud. Course pages still use package discounts from Admin → Packages.
           </p>
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Top headline</label>
+              <input
+                type="text"
+                value={promoHeadline}
+                disabled={!isTech}
+                onChange={(e) => setPromoHeadline(e.target.value)}
+                className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
+                placeholder="OFFER"
+                maxLength={24}
+              />
+            </div>
             <div>
               <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Discount %</label>
               <input
@@ -355,33 +382,80 @@ export default function AdminSettings() {
                 placeholder="25"
               />
             </div>
-            <div className="sm:col-span-2">
-              <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Description</label>
+            <div>
+              <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Label next to %</label>
               <input
                 type="text"
                 value={promoDescription}
                 disabled={!isTech}
                 onChange={(e) => setPromoDescription(e.target.value)}
                 className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
-                placeholder="discount"
+                placeholder="DISCOUNT"
+                maxLength={16}
+              />
+            </div>
+            <div>
+              <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Batch line label</label>
+              <input
+                type="text"
+                value={promoBatchLabel}
+                disabled={!isTech}
+                onChange={(e) => setPromoBatchLabel(e.target.value)}
+                className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
+                placeholder="NEW BATCHES START FROM"
                 maxLength={40}
               />
             </div>
-            <div className="sm:col-span-2">
-              <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Valid till</label>
+            <div>
+              <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Batch start date</label>
+              <input
+                type="date"
+                value={promoBatchStart}
+                disabled={!isTech}
+                onChange={(e) => setPromoBatchStart(e.target.value)}
+                className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
+              />
+            </div>
+            <div>
+              <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Valid till (hides cloud when expired)</label>
               <input
                 type="date"
                 value={promoValidTill}
                 disabled={!isTech}
                 onChange={(e) => setPromoValidTill(e.target.value)}
-                className="w-full max-w-xs bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
+                className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
+              />
+            </div>
+            <div>
+              <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">CTA prefix</label>
+              <input
+                type="text"
+                value={promoCtaPrefix}
+                disabled={!isTech}
+                onChange={(e) => setPromoCtaPrefix(e.target.value)}
+                className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
+                placeholder="REGISTER NOW TO AVAIL"
+                maxLength={40}
+              />
+              <p className="mt-1 font-mono text-[10px] text-ink-faint">Shown as: {promoCtaPrefix || '…'} {promoPct || 0}% {promoDescription || 'DISCOUNT'}</p>
+            </div>
+            <div>
+              <label className="font-mono text-[10px] text-ink-faint uppercase block mb-1">Valid-till prefix</label>
+              <input
+                type="text"
+                value={promoValidPrefix}
+                disabled={!isTech}
+                onChange={(e) => setPromoValidPrefix(e.target.value)}
+                className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2 px-3 font-sans text-sm disabled:opacity-60"
+                placeholder="OFFER VALID TILL"
+                maxLength={40}
               />
             </div>
           </div>
           {(() => {
             if (!promoValidTill) {
               return (
-                <p className="mt-3 font-mono text-[11px] text-ink-faint">Set a valid-till date to show days left.</p>
+                <p className="mt-3 font-mono text-[11px] text-ink-faint">Set a valid-till date to show the cloud.</p>
               );
             }
             const till = new Date(`${promoValidTill}T23:59:59+05:30`);

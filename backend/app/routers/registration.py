@@ -79,7 +79,12 @@ class PromoBadgeOut(BaseModel):
     discount_pct: float
     description: str
     valid_till: Optional[str] = None
+    batch_start: Optional[str] = None
     days_left: int
+    headline: str = "OFFER"
+    batch_label: str = "NEW BATCHES START FROM"
+    cta_prefix: str = "REGISTER NOW TO AVAIL"
+    valid_prefix: str = "OFFER VALID TILL"
 
 
 @router.get("/promo-badge", response_model=PromoBadgeOut)
