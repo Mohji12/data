@@ -1,0 +1,9 @@
+{
+  "installCommand": "cd critical-pulse-hub-main && npm install",
+  "buildCommand": "cd critical-pulse-hub-main && npm run build",
+  "outputDirectory": "critical-pulse-hub-main/dist",
+  "rewrites": [
+    { "handle": "filesystem" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
