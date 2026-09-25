@@ -176,7 +176,11 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const isSeekingRef = useRef(false);
   const watchAnchorMsRef = useRef<number | null>(null);
   const currentTimeRef = useRef(0);
+  const durationRef = useRef(0);
+  const isPlayingRef = useRef(false);
+  const overlayTouchRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const flushWatchProgressRef = useRef<(force?: boolean) => void>(() => {});
+  const iosLike = typeof navigator !== 'undefined' && isIosLike();
 
   const VOLUME_STEP = 0.1;
 
@@ -223,6 +227,18 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   useEffect(() => {
     currentTimeRef.current = currentTime;
   }, [currentTime]);
+
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
+  useEffect(() => {
+    isSeekingRef.current = isSeeking;
+  }, [isSeeking]);
 
   // Persist played time while the video is actually playing (not on seek jumps).
   useEffect(() => {
@@ -282,10 +298,6 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       }
     };
   }, [videoUrl]);
-
-  useEffect(() => {
-    isSeekingRef.current = isSeeking;
-  }, [isSeeking]);
 
   const postVimeo = useCallback((payload: Record<string, unknown>) => {
     iframeRef.current?.contentWindow?.postMessage(
@@ -392,7 +404,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       const video = videoRef.current;
       if (!video) return;
       if (video.paused) {
-        void video.play();
+        void video.play().catch(() => {});
       } else {
         video.pause();
       }
@@ -402,12 +414,13 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     const iframe = iframeRef.current;
     if (!iframe?.contentWindow || !detected) return;
 
+    const playing = isPlayingRef.current;
     if (detected.provider === 'vimeo') {
-      postVimeo({ method: isPlaying ? 'pause' : 'play' });
+      postVimeo({ method: playing ? 'pause' : 'play' });
     } else if (detected.provider === 'youtube') {
-      postYouTube({ event: 'command', func: isPlaying ? 'pauseVideo' : 'playVideo', args: [] });
+      postYouTube({ event: 'command', func: playing ? 'pauseVideo' : 'playVideo', args: [] });
     }
-  }, [isPlaying, detected, isDirectVideo, postVimeo, postYouTube]);
+  }, [detected, isDirectVideo, postVimeo, postYouTube]);
 
   /* ─── Volume / Mute ─── */
 
@@ -537,12 +550,22 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
   const seekTo = useCallback(
     (seconds: number) => {
-      const clamped = Math.max(0, Math.min(seconds, duration || Infinity));
+      const dur = durationRef.current > 0 ? durationRef.current : duration;
+      const clamped = Math.max(0, Math.min(seconds, dur > 0 ? dur : Infinity));
+
+      // Optimistic UI — critical while paused (no timeupdate until play).
+      setCurrentTime(clamped);
+      currentTimeRef.current = clamped;
 
       if (isDirectVideo) {
         const video = videoRef.current;
-        if (video) video.currentTime = clamped;
-        setCurrentTime(clamped);
+        if (video) {
+          try {
+            video.currentTime = clamped;
+          } catch {
+            /* iOS can throw if metadata not ready */
+          }
+        }
         return;
       }
 
@@ -554,8 +577,6 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       } else if (detected.provider === 'youtube') {
         postYouTube({ event: 'command', func: 'seekTo', args: [clamped, true] });
       }
-
-      setCurrentTime(clamped);
     },
     [detected, duration, isDirectVideo, postVimeo, postYouTube],
   );
@@ -596,38 +617,80 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     [applySpeedToPlayer],
   );
 
-  /* ─── Seek bar drag ─── */
+  /* ─── Seek bar drag (pointer capture — reliable on iPhone) ─── */
 
-  const calcSeekFromMouse = useCallback(
+  const endSeekGesture = useCallback(() => {
+    isSeekingRef.current = false;
+    setIsSeeking(false);
+  }, []);
+
+  const seekFromClientX = useCallback(
     (clientX: number) => {
       const bar = seekBarRef.current;
-      if (!bar || !duration) return;
+      const dur =
+        durationRef.current > 0
+          ? durationRef.current
+          : isDirectVideo
+            ? videoRef.current?.duration || 0
+            : 0;
+      if (!bar || !(dur > 0) || !Number.isFinite(dur)) return;
       const rect = bar.getBoundingClientRect();
+      if (rect.width <= 0) return;
       const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      seekTo(pct * duration);
+      seekTo(pct * dur);
     },
-    [duration, seekTo],
+    [isDirectVideo, seekTo],
   );
 
   const handleSeekPointerDown = useCallback(
-    (e: React.PointerEvent) => {
+    (e: React.PointerEvent<HTMLDivElement>) => {
       e.stopPropagation();
       e.preventDefault();
-      setIsSeeking(true);
-      calcSeekFromMouse(e.clientX);
 
-      const onMove = (ev: PointerEvent) => calcSeekFromMouse(ev.clientX);
-      const onUp = () => {
-        setIsSeeking(false);
+      const target = e.currentTarget;
+      try {
+        target.setPointerCapture(e.pointerId);
+      } catch {
+        /* older Safari */
+      }
+
+      isSeekingRef.current = true;
+      setIsSeeking(true);
+      seekFromClientX(e.clientX);
+
+      const safetyId = window.setTimeout(() => {
+        endSeekGesture();
+      }, 4000);
+
+      const onMove = (ev: PointerEvent) => {
+        if (ev.cancelable) ev.preventDefault();
+        seekFromClientX(ev.clientX);
+      };
+
+      const onUp = (ev: PointerEvent) => {
+        window.clearTimeout(safetyId);
+        try {
+          if (target.hasPointerCapture?.(ev.pointerId)) {
+            target.releasePointerCapture(ev.pointerId);
+          }
+        } catch {
+          /* ignore */
+        }
+        endSeekGesture();
+        // Confirm position after scrub (especially while paused on iOS).
+        if (detected?.provider === 'vimeo') {
+          postVimeo({ method: 'getCurrentTime' });
+        }
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
         document.removeEventListener('pointercancel', onUp);
       };
-      document.addEventListener('pointermove', onMove);
+
+      document.addEventListener('pointermove', onMove, { passive: false });
       document.addEventListener('pointerup', onUp);
       document.addEventListener('pointercancel', onUp);
     },
-    [calcSeekFromMouse],
+    [detected?.provider, endSeekGesture, postVimeo, seekFromClientX],
   );
 
   /* ─── PostMessage listener: play/pause state + time updates ─── */
@@ -1111,17 +1174,40 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
   const handleOverlayClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+    // iPhone: play/pause handled via touch end (avoids scroll + double-fire).
+    if (iosLike || (typeof window !== 'undefined' && 'ontouchstart' in window)) return;
     if (dismissOverlayMenus()) return;
-    // Call play/pause synchronously — setTimeout would drop user activation and
-    // Vimeo rejects with "not called from a user-initiated event".
+    togglePlayPause();
+  };
+
+  const handleOverlayTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    if (!t) return;
+    overlayTouchRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
+  };
+
+  const handleOverlayTouchEnd = (e: React.TouchEvent) => {
+    e.stopPropagation();
+    const start = overlayTouchRef.current;
+    overlayTouchRef.current = null;
+    if (!start) return;
+    const t = e.changedTouches[0];
+    if (!t) return;
+    const dx = Math.abs(t.clientX - start.x);
+    const dy = Math.abs(t.clientY - start.y);
+    // Finger moved → treat as scroll/gesture, not a tap.
+    if (dx > 14 || dy > 14) return;
+    if (Date.now() - start.t > 450) return;
+    if (dismissOverlayMenus()) return;
     togglePlayPause();
   };
 
   const handleOverlayDoubleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
+    // Double-tap zooms the page on iPhone — fullscreen only via the button there.
+    if (iosLike) return;
     toggleFullscreen();
-    // Two clicks already fired (play then pause). Resume under this gesture.
     if (isDirectVideo) {
       void videoRef.current?.play();
       return;
@@ -1149,9 +1235,10 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     <div
       ref={containerRef}
       className={`
-        relative w-full h-full bg-black overflow-hidden select-none group touch-manipulation
+        relative w-full h-full bg-black overflow-hidden select-none group
+        touch-manipulation [-webkit-touch-callout:none] [-webkit-user-select:none]
         ${isExpanded
-          ? 'fixed inset-0 z-[300] w-[100dvw] h-[100dvh] max-w-none max-h-none rounded-none aspect-auto min-h-0'
+          ? 'fixed inset-0 z-[300] w-[100dvw] h-[100dvh] max-w-none max-h-none rounded-none aspect-auto min-h-0 touch-none overscroll-none'
           : 'min-h-[220px] sm:min-h-[280px] aspect-video rounded'}
       `}
       style={
@@ -1161,8 +1248,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
               paddingBottom: 'env(safe-area-inset-bottom)',
               paddingLeft: 'env(safe-area-inset-left)',
               paddingRight: 'env(safe-area-inset-right)',
+              overscrollBehavior: 'none',
             }
-          : undefined
+          : { WebkitUserSelect: 'none', userSelect: 'none' }
       }
       onContextMenu={(e) => {
         e.preventDefault();
@@ -1174,9 +1262,11 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           ref={videoRef}
           src={directVideoSrc ?? undefined}
           title={title}
-          className="absolute inset-0 h-full w-full border-0 object-contain bg-black"
+          className="absolute inset-0 h-full w-full border-0 object-contain bg-black pointer-events-none"
           playsInline
           preload="metadata"
+          controlsList="nodownload noplaybackrate"
+          disablePictureInPicture
           onError={() => {
             setPlayerError(
               'This video file could not be loaded. The file may be missing or the link may be incorrect.',
@@ -1189,7 +1279,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           id={vimeoPlayerId}
           src={embedSrc}
           title={title}
-          className="absolute inset-0 h-full w-full border-0"
+          className="absolute inset-0 h-full w-full border-0 pointer-events-none"
           allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
           referrerPolicy="strict-origin-when-cross-origin"
         />
@@ -1213,9 +1303,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         </div>
       )}
 
-      {/* Full-area overlay — blocks ALL right-clicks, never toggled */}
+      {/* Full-area overlay — blocks iframe gestures; tap vs scroll aware on iPhone */}
       <div
-        className="absolute inset-0 z-10 cursor-pointer"
+        className="absolute inset-0 z-10 cursor-pointer touch-manipulation"
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -1227,7 +1317,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           }
         }}
         onClick={handleOverlayClick}
-        onDoubleClick={handleOverlayDoubleClick}
+        onDoubleClick={iosLike ? undefined : handleOverlayDoubleClick}
+        onTouchStart={handleOverlayTouchStart}
+        onTouchEnd={handleOverlayTouchEnd}
         onDragStart={(e) => e.preventDefault()}
       />
 
@@ -1246,17 +1338,22 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           e.preventDefault();
           e.stopPropagation();
         }}
+        onPointerDown={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
       >
-        {/* Seek bar — larger hit target on touch */}
+        {/* Seek bar — tall hit target so scrub works after pause on iPhone */}
         <div
           ref={seekBarRef}
+          role="slider"
+          aria-label="Seek"
+          aria-valuemin={0}
+          aria-valuemax={Math.round(duration || 0)}
+          aria-valuenow={Math.round(currentTime || 0)}
           className="
-            w-full h-3 sm:h-[5px] bg-white/20 rounded-full cursor-pointer mb-2
-            flex items-center
-            hover:h-[7px] transition-all duration-150
-            relative group/seek touch-none
+            relative w-full h-11 flex items-center cursor-pointer mb-1
+            touch-none select-none
           "
           onPointerDown={handleSeekPointerDown}
           onContextMenu={(e) => {
@@ -1264,19 +1361,18 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             e.stopPropagation();
           }}
         >
-          {/* Progress fill */}
-          <div
-            className="h-full bg-cyan-400 rounded-full relative"
-            style={{ width: `${progress}%` }}
-          >
-            {/* Seek handle */}
+          <div className="relative w-full h-1.5 bg-white/25 rounded-full">
+            <div
+              className="h-full bg-cyan-400 rounded-full"
+              style={{ width: `${progress}%` }}
+            />
             <div
               className="
-                absolute right-0 top-1/2 -translate-y-1/2
-                w-3.5 h-3.5 bg-white rounded-full shadow-md
-                opacity-0 group-hover/seek:opacity-100
-                transition-opacity duration-150
+                absolute top-1/2 -translate-y-1/2 -translate-x-1/2
+                w-4 h-4 bg-white rounded-full shadow-md
+                opacity-100
               "
+              style={{ left: `${progress}%` }}
             />
           </div>
         </div>
@@ -1296,14 +1392,14 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
                 e.stopPropagation();
               }}
               className="
-                flex items-center justify-center w-7 h-7
+                flex items-center justify-center w-10 h-10 sm:w-7 sm:h-7
                 text-white/90 hover:text-white
                 transition-colors cursor-pointer
               "
               title={isPlaying ? 'Pause' : 'Play'}
               aria-label={isPlaying ? 'Pause' : 'Play'}
             >
-              {isPlaying ? <Pause size={16} /> : <Play size={16} />}
+              {isPlaying ? <Pause size={18} /> : <Play size={18} />}
             </button>
 
             {/* Skip backward 10s */}
@@ -1311,15 +1407,15 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                seekTo(Math.max(0, currentTime - 10));
+                seekTo(Math.max(0, currentTimeRef.current - 10));
               }}
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
               }}
               className="
-                flex items-center justify-center w-7 h-7
-                text-white/70 hover:text-white text-[10px] font-bold
+                flex items-center justify-center w-10 h-10 sm:w-7 sm:h-7
+                text-white/70 hover:text-white text-[11px] font-bold
                 transition-colors cursor-pointer
               "
               title="Back 10s (←)"
@@ -1333,15 +1429,15 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                seekTo(currentTime + 10);
+                seekTo(currentTimeRef.current + 10);
               }}
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
               }}
               className="
-                flex items-center justify-center w-7 h-7
-                text-white/70 hover:text-white text-[10px] font-bold
+                flex items-center justify-center w-10 h-10 sm:w-7 sm:h-7
+                text-white/70 hover:text-white text-[11px] font-bold
                 transition-colors cursor-pointer
               "
               title="Forward 10s (→)"

@@ -227,12 +227,12 @@ export default function DiscountOfferBadge({
                   </span>
                 </span>
 
-                <span className="flex items-baseline justify-center gap-1 leading-none max-w-full">
-                  <span className="font-display font-black text-[#e11d48] tabular-nums text-[22px] sm:text-[26px] lg:text-[30px] [text-shadow:0_1px_0_#fff,0_1px_2px_rgba(15,39,68,0.2)]">
+                <span className="flex items-baseline justify-center gap-0.5 sm:gap-1 leading-none whitespace-nowrap">
+                  <span className="font-display font-black text-[#e11d48] tabular-nums text-[20px] sm:text-[24px] lg:text-[28px] shrink-0 [text-shadow:0_1px_0_#fff,0_1px_2px_rgba(15,39,68,0.2)]">
                     {discountPct}
-                    <span className="text-[12px] sm:text-[14px] lg:text-[16px] align-super ml-px">%</span>
+                    <span className="text-[11px] sm:text-[13px] lg:text-[15px] align-super ml-px">%</span>
                   </span>
-                  <span className="font-sans font-black uppercase text-[#0f2744] text-[9px] sm:text-[11px] lg:text-[12px] tracking-wide truncate max-w-[45%]">
+                  <span className="font-sans font-black uppercase text-[#0f2744] text-[8px] sm:text-[10px] lg:text-[11px] tracking-wide shrink-0">
                     {description}
                   </span>
                 </span>
