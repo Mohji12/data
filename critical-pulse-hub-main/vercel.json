@@ -1,4 +1,9 @@
 {
+  "env": {
+    "VITE_API_USE_PROXY": "false",
+    "VITE_API_URL": "https://api.harishcriticalcareclasses.com",
+    "VITE_DOCUMENT_PUBLIC_BASE_URL": "https://api.harishcriticalcareclasses.com"
+  },
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
   ]
