@@ -111,6 +111,8 @@ export function buildVimeoPlayerEmbedUrl(
     pip: '0',
     // Adaptive bitrate — avoids starting at 1080p/4K which buffers on typical Wi‑Fi.
     quality: 'auto',
+    // Keep playback inside the iframe on iPhone/iPad so our pause button can stop it.
+    playsinline: '1',
     // speed=1 enables the playback-rate API (required for setPlaybackRate postMessage).
     speed: '1',
   });

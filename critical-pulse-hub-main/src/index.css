@@ -44,6 +44,18 @@ body {
   font-family: 'Times New Roman', Times, serif;
 }
 
+/* iPad/Safari fullscreen: the player must fill the screen, not the video slot. */
+.video-player-shell:fullscreen,
+.video-player-shell:-webkit-full-screen {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  background: #000;
+}
+
 /* Public + student pages: discourage copy via selection highlight (JS blocks copy/cut too). */
 body.no-user-copy,
 body.no-user-copy *:not(input):not(textarea):not(select):not([contenteditable='true']) {

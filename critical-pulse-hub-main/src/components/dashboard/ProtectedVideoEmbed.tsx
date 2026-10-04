@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react';
-import { Maximize2, Minimize2, Play, Pause, Settings, FastForward, Volume1, Volume2, VolumeX, Plus, Minus } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Maximize2, Minimize2, Play, Pause, Settings, Volume1, Volume2, VolumeX } from 'lucide-react';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
 import { apiClient } from '@/lib/apiClient';
 import {
@@ -29,13 +30,22 @@ type ProtectedVideoEmbedProps = {
   videoId?: number | null;
 };
 
-/** iPhone/iPad (incl. iPadOS desktop UA) — no element fullscreen for div/iframe. */
-function isIosLike(): boolean {
+function isIphone(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /iPhone|iPod/.test(navigator.userAgent || '');
+}
+
+/** iPad, including iPadOS 13+ which reports a desktop Mac user agent. */
+function isIpad(): boolean {
   if (typeof navigator === 'undefined') return false;
   const ua = navigator.userAgent || '';
-  if (/iPad|iPhone|iPod/.test(ua)) return true;
-  // iPadOS 13+ reports as MacIntel with touch
+  if (/iPad/.test(ua)) return true;
   return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+}
+
+/** iPhone/iPad (incl. iPadOS desktop UA). iPhone cannot fullscreen a div/iframe. */
+function isIosLike(): boolean {
+  return isIphone() || isIpad();
 }
 
 function getFullscreenElement(): Element | null {
@@ -53,7 +63,8 @@ function getFullscreenElement(): Element | null {
  * Returns true if a native request was started (may still reject asynchronously).
  */
 function requestElementFullscreen(el: HTMLElement): boolean {
-  if (isIosLike()) return false;
+  // iPhone Safari only fullscreens a <video> element. iPad can fullscreen a div.
+  if (isIphone()) return false;
   const anyEl = el as HTMLElement & {
     webkitRequestFullscreen?: () => void;
     msRequestFullscreen?: () => void;
@@ -168,8 +179,12 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const seekBarRef = useRef<HTMLDivElement>(null);
   const volumeBarRef = useRef<HTMLDivElement>(null);
   const volumeControlRef = useRef<HTMLDivElement>(null);
-  const hideVolumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isVolumeDraggingRef = useRef(false);
+  const volumeLockUntilRef = useRef(0);
+  const lastMuteToggleRef = useRef(0);
+  const lastVolumeWheelRef = useRef(0);
+  const volumeRef = useRef(1);
+  const isMutedRef = useRef(false);
   const currentSpeedRef = useRef(1);
   const playerReadyRef = useRef(false);
   const lastVolumeRef = useRef(1);
@@ -178,6 +193,10 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const currentTimeRef = useRef(0);
   const durationRef = useRef(0);
   const isPlayingRef = useRef(false);
+  const lastToggleAtRef = useRef(0);
+  const pauseRetryRef = useRef(0);
+  const userIntentRef = useRef<{ action: 'play' | 'pause'; at: number } | null>(null);
+  const viewportExpandedRef = useRef(false);
   const overlayTouchRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const flushWatchProgressRef = useRef<(force?: boolean) => void>(() => {});
   const iosLike = typeof navigator !== 'undefined' && isIosLike();
@@ -191,7 +210,6 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const [isSeeking, setIsSeeking] = useState(false);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
-  const [showVolumeControl, setShowVolumeControl] = useState(false);
   
   const [qualities, setQualities] = useState<{ id: string; label: string }[]>([]);
   const [currentQuality, setCurrentQuality] = useState<string>('auto');
@@ -235,6 +253,10 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  useEffect(() => {
+    viewportExpandedRef.current = viewportExpanded;
+  }, [viewportExpanded]);
 
   useEffect(() => {
     isSeekingRef.current = isSeeking;
@@ -337,6 +359,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const exitExpandedView = useCallback(async () => {
     setViewportExpanded(false);
     setIsFullscreen(false);
+    document.documentElement.style.overflow = '';
     document.body.style.overflow = '';
     if (getFullscreenElement()) {
       await exitDocumentFullscreen();
@@ -350,7 +373,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const enterCssExpandedView = useCallback(() => {
     setViewportExpanded(true);
     setIsFullscreen(true);
-    document.body.style.overflow = 'hidden';
+    // overflow:hidden on body makes iPad treat position:fixed as clipped to the page.
+    document.documentElement.style.overflow = 'visible';
+    document.body.style.overflow = 'visible';
   }, []);
 
   const toggleFullscreen = useCallback(() => {
@@ -376,17 +401,21 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       }
     }
 
-    // iPhone/iPad: native element fullscreen is unreliable / unsupported for iframes.
-    if (isIosLike()) {
+    // iPhone cannot fullscreen an iframe. iPad uses the Fullscreen API, then CSS.
+    if (isIphone()) {
       enterCssExpandedView();
       return;
     }
 
     // Must call synchronously — Safari drops user-activation across await/.then().
     if (container && requestElementFullscreen(container)) {
-      // If the promise rejects (common on some mobile browsers), fall back to CSS expand.
+      // iPad often "succeeds" without actually covering the screen.
       window.setTimeout(() => {
-        if (!getFullscreenElement()) {
+        const fsEl = getFullscreenElement();
+        const box = (fsEl ?? container).getBoundingClientRect();
+        const fillsScreen = box.height >= window.innerHeight * 0.85 && box.width >= window.innerWidth * 0.85;
+        if (!fsEl || fsEl !== container || !fillsScreen) {
+          if (fsEl) void exitDocumentFullscreen();
           enterCssExpandedView();
         }
       }, 280);
@@ -399,34 +428,66 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
   /* ─── Play / Pause ─── */
 
-  const togglePlayPause = useCallback(() => {
-    if (isDirectVideo) {
-      const video = videoRef.current;
-      if (!video) return;
-      if (video.paused) {
-        void video.play().catch(() => {});
-      } else {
-        video.pause();
+  const commandPlayback = useCallback(
+    (shouldPlay: boolean) => {
+      userIntentRef.current = { action: shouldPlay ? 'play' : 'pause', at: Date.now() };
+      if (!shouldPlay) pauseRetryRef.current = 0;
+      isPlayingRef.current = shouldPlay;
+      setIsPlaying(shouldPlay);
+
+      if (isDirectVideo) {
+        const video = videoRef.current;
+        if (!video) return;
+        if (shouldPlay) void video.play().catch(() => {});
+        else video.pause();
+        return;
       }
-      return;
-    }
 
-    const iframe = iframeRef.current;
-    if (!iframe?.contentWindow || !detected) return;
+      const iframe = iframeRef.current;
+      if (!iframe?.contentWindow || !detected) return;
 
-    const playing = isPlayingRef.current;
-    if (detected.provider === 'vimeo') {
-      postVimeo({ method: playing ? 'pause' : 'play' });
-    } else if (detected.provider === 'youtube') {
-      postYouTube({ event: 'command', func: playing ? 'pauseVideo' : 'playVideo', args: [] });
-    }
-  }, [detected, isDirectVideo, postVimeo, postYouTube]);
+      if (detected.provider === 'vimeo') {
+        postVimeo({ method: shouldPlay ? 'play' : 'pause' });
+        if (!shouldPlay) {
+          window.setTimeout(() => postVimeo({ method: 'getPaused' }), 200);
+        }
+      } else if (detected.provider === 'youtube') {
+        postYouTube({
+          event: 'command',
+          func: shouldPlay ? 'playVideo' : 'pauseVideo',
+          args: [],
+        });
+      }
+    },
+    [detected, isDirectVideo, postVimeo, postYouTube],
+  );
+
+  const togglePlayPause = useCallback(() => {
+    const now = Date.now();
+    // iPad fires touchend and a delayed click for one tap — ignore the second.
+    if (now - lastToggleAtRef.current < 450) return;
+    lastToggleAtRef.current = now;
+    commandPlayback(!isPlayingRef.current);
+  }, [commandPlayback]);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.hidden && isPlayingRef.current) {
+        commandPlayback(false);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [commandPlayback]);
 
   /* ─── Volume / Mute ─── */
 
   const applyVolume = useCallback(
     (level: number) => {
       const clamped = Math.max(0, Math.min(1, level));
+      volumeLockUntilRef.current = Date.now() + 900;
+      volumeRef.current = clamped;
+      isMutedRef.current = clamped === 0;
       setVolume(clamped);
       setIsMuted(clamped === 0);
       if (clamped > 0) lastVolumeRef.current = clamped;
@@ -459,28 +520,11 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
   const adjustVolume = useCallback(
     (delta: number) => {
-      const base = isMuted || volume === 0 ? 0 : volume;
+      const base = isMutedRef.current || volumeRef.current === 0 ? 0 : volumeRef.current;
       applyVolume(base + delta);
     },
-    [applyVolume, isMuted, volume],
+    [applyVolume],
   );
-
-  const openVolumeControl = useCallback(() => {
-    if (hideVolumeTimerRef.current) {
-      clearTimeout(hideVolumeTimerRef.current);
-      hideVolumeTimerRef.current = null;
-    }
-    setShowVolumeControl(true);
-  }, []);
-
-  const scheduleHideVolumeControl = useCallback(() => {
-    if (isVolumeDraggingRef.current) return;
-    if (hideVolumeTimerRef.current) clearTimeout(hideVolumeTimerRef.current);
-    hideVolumeTimerRef.current = setTimeout(() => {
-      setShowVolumeControl(false);
-      hideVolumeTimerRef.current = null;
-    }, 400);
-  }, []);
 
   const calcVolumeFromMouse = useCallback(
     (clientX: number) => {
@@ -497,23 +541,28 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     (e: React.PointerEvent) => {
       e.stopPropagation();
       e.preventDefault();
-      openVolumeControl();
       isVolumeDraggingRef.current = true;
+      volumeLockUntilRef.current = Date.now() + 900;
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
       calcVolumeFromMouse(e.clientX);
 
       const onMove = (ev: PointerEvent) => calcVolumeFromMouse(ev.clientX);
       const onUp = () => {
         isVolumeDraggingRef.current = false;
+        volumeLockUntilRef.current = Date.now() + 400;
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
         document.removeEventListener('pointercancel', onUp);
-        scheduleHideVolumeControl();
       };
       document.addEventListener('pointermove', onMove);
       document.addEventListener('pointerup', onUp);
       document.addEventListener('pointercancel', onUp);
     },
-    [calcVolumeFromMouse, openVolumeControl, scheduleHideVolumeControl],
+    [calcVolumeFromMouse],
   );
 
   useEffect(() => {
@@ -524,27 +573,26 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       e.preventDefault();
       e.stopPropagation();
       if (e.deltaY === 0) return;
-      openVolumeControl();
+      const now = Date.now();
+      if (now - lastVolumeWheelRef.current < 90) return;
+      lastVolumeWheelRef.current = now;
       adjustVolume(e.deltaY < 0 ? VOLUME_STEP : -VOLUME_STEP);
     };
 
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [adjustVolume, openVolumeControl]);
-
-  useEffect(() => {
-    return () => {
-      if (hideVolumeTimerRef.current) clearTimeout(hideVolumeTimerRef.current);
-    };
-  }, []);
+  }, [adjustVolume]);
 
   const toggleMute = useCallback(() => {
-    if (isMuted || volume === 0) {
+    const now = Date.now();
+    if (now - lastMuteToggleRef.current < 450) return;
+    lastMuteToggleRef.current = now;
+    if (isMutedRef.current || volumeRef.current === 0) {
       applyVolume(lastVolumeRef.current > 0 ? lastVolumeRef.current : 1);
     } else {
       applyVolume(0);
     }
-  }, [applyVolume, isMuted, volume]);
+  }, [applyVolume]);
 
   /* ─── Seek ─── */
 
@@ -832,25 +880,52 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         }
 
         if (data.event === 'volumechange') {
-          const vd = data.data as { volume?: number } | undefined;
-          if (typeof vd?.volume === 'number') {
+          if (Date.now() < volumeLockUntilRef.current || isVolumeDraggingRef.current) return;
+          const vd = data.data as { volume?: number; muted?: boolean } | undefined;
+          if (!vd || typeof vd.volume !== 'number') return;
+          const muted = typeof vd.muted === 'boolean' ? vd.muted : vd.volume === 0;
+          isMutedRef.current = muted;
+          setIsMuted(muted);
+          if (!muted) {
+            volumeRef.current = vd.volume;
             setVolume(vd.volume);
-            setIsMuted(vd.volume === 0);
             if (vd.volume > 0) lastVolumeRef.current = vd.volume;
           }
         }
 
-        if (data.event === 'fullscreenchange') {
-          const fd = data.data as { fullscreen?: boolean } | undefined;
-          setIsFullscreen(!!fd?.fullscreen);
-          if (!fd?.fullscreen) {
-            setViewportExpanded(false);
-            document.body.style.overflow = '';
+        if (data.method === 'getPaused') {
+          const paused = data.value === true;
+          const intent = userIntentRef.current;
+          if (
+            intent?.action === 'pause' &&
+            !paused &&
+            Date.now() - intent.at < 2000 &&
+            pauseRetryRef.current < 2
+          ) {
+            pauseRetryRef.current += 1;
+            iframe?.contentWindow?.postMessage(
+              JSON.stringify({ method: 'pause' }),
+              'https://player.vimeo.com',
+            );
+            return;
           }
+          if (intent && Date.now() - intent.at < 800 && (intent.action === 'pause') !== paused) {
+            return;
+          }
+          isPlayingRef.current = !paused;
+          setIsPlaying(!paused);
         }
 
-        if (data.event === 'play') setIsPlaying(true);
-        if (data.event === 'pause') setIsPlaying(false);
+        if (data.event === 'play' || data.event === 'pause') {
+          const wantPlay = data.event === 'play';
+          const intent = userIntentRef.current;
+          // A second tap used to flip play right after pause. Ignore that echo.
+          if (intent && Date.now() - intent.at < 800 && (intent.action === 'play') !== wantPlay) {
+            return;
+          }
+          isPlayingRef.current = wantPlay;
+          setIsPlaying(wantPlay);
+        }
       }
 
       /* ---------- YouTube ---------- */
@@ -891,7 +966,23 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
               setDuration((prev) => Math.max(prev, info.duration));
             }
             if (typeof info.playerState === 'number') {
-              setIsPlaying(info.playerState === 1);
+              const wantPlay = info.playerState === 1;
+              const intent = userIntentRef.current;
+              if (
+                intent?.action === 'pause' &&
+                wantPlay &&
+                Date.now() - intent.at < 2000 &&
+                pauseRetryRef.current < 2
+              ) {
+                pauseRetryRef.current += 1;
+                iframe?.contentWindow?.postMessage(
+                  JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+                  'https://www.youtube.com',
+                );
+              } else if (!(intent && Date.now() - intent.at < 800 && (intent.action === 'play') !== wantPlay)) {
+                isPlayingRef.current = wantPlay;
+                setIsPlaying(wantPlay);
+              }
             }
             if (info.availableQualityLevels && Array.isArray(info.availableQualityLevels)) {
               setQualities(
@@ -904,19 +995,28 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             if (info.playbackRate) {
               setCurrentSpeed(info.playbackRate);
             }
-            if (typeof info.volume === 'number') {
-              const vol = info.volume / 100;
-              setVolume(vol);
-              if (vol > 0) lastVolumeRef.current = vol;
-            }
-            if (typeof info.muted === 'boolean') {
-              setIsMuted(info.muted);
+            if (Date.now() >= volumeLockUntilRef.current && !isVolumeDraggingRef.current) {
+              if (typeof info.muted === 'boolean') {
+                isMutedRef.current = info.muted;
+                setIsMuted(info.muted);
+              }
+              if (typeof info.volume === 'number' && info.muted !== true) {
+                const vol = info.volume / 100;
+                volumeRef.current = vol;
+                setVolume(vol);
+                if (vol > 0) lastVolumeRef.current = vol;
+              }
             }
           }
         }
 
         if (data.event === 'onStateChange') {
-          setIsPlaying(data.info === 1);
+          const wantPlay = data.info === 1;
+          const intent = userIntentRef.current;
+          if (!(intent && Date.now() - intent.at < 800 && (intent.action === 'play') !== wantPlay)) {
+            isPlayingRef.current = wantPlay;
+            setIsPlaying(wantPlay);
+          }
         }
       }
     };
@@ -934,6 +1034,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       if (detected.provider === 'vimeo') {
         postVimeo({ method: 'getCurrentTime' });
         postVimeo({ method: 'getDuration' });
+        postVimeo({ method: 'getPaused' });
       } else if (detected.provider === 'youtube') {
         postYouTube({ event: 'command', func: 'getCurrentTime', args: [] });
         postYouTube({ event: 'command', func: 'getDuration', args: [] });
@@ -989,9 +1090,15 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
     const onVolumeChange = () => {
-      setVolume(video.volume);
-      setIsMuted(video.muted || video.volume === 0);
-      if (video.volume > 0) lastVolumeRef.current = video.volume;
+      if (Date.now() < volumeLockUntilRef.current || isVolumeDraggingRef.current) return;
+      const muted = video.muted || video.volume === 0;
+      isMutedRef.current = muted;
+      setIsMuted(muted);
+      if (!video.muted) {
+        volumeRef.current = video.volume;
+        setVolume(video.volume);
+        if (video.volume > 0) lastVolumeRef.current = video.volume;
+      }
     };
 
     video.addEventListener('loadedmetadata', onLoadedMetadata);
@@ -1076,6 +1183,77 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       });
     };
   }, [viewportExpanded]);
+
+  /* Keep the player over its slot, and cover the iPad screen when maximized. */
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    const el = containerRef.current;
+    if (!host || !el) return;
+
+    const place = () => {
+      const fs = getFullscreenElement();
+      if (fs === el) {
+        el.style.position = 'absolute';
+        el.style.inset = '0';
+        el.style.top = '0';
+        el.style.left = '0';
+        el.style.width = '100%';
+        el.style.height = '100%';
+        el.style.zIndex = '500';
+        return;
+      }
+      if (viewportExpandedRef.current) {
+        const vv = window.visualViewport;
+        el.style.position = 'fixed';
+        el.style.top = `${vv?.offsetTop ?? 0}px`;
+        el.style.left = `${vv?.offsetLeft ?? 0}px`;
+        el.style.width = `${vv?.width ?? window.innerWidth}px`;
+        el.style.height = `${vv?.height ?? window.innerHeight}px`;
+        el.style.right = 'auto';
+        el.style.bottom = 'auto';
+        el.style.zIndex = '500';
+        el.style.margin = '0';
+        return;
+      }
+      const rect = host.getBoundingClientRect();
+      el.style.position = 'fixed';
+      el.style.top = `${rect.top}px`;
+      el.style.left = `${rect.left}px`;
+      el.style.width = `${rect.width}px`;
+      el.style.height = `${rect.height}px`;
+      el.style.right = 'auto';
+      el.style.bottom = 'auto';
+      el.style.zIndex = '25';
+      el.style.margin = '0';
+    };
+
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(host);
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    window.visualViewport?.addEventListener('resize', place);
+    window.visualViewport?.addEventListener('scroll', place);
+
+    const blockScroll = (event: Event) => {
+      if (!viewportExpandedRef.current) return;
+      const target = event.target as Node | null;
+      if (target && el.contains(target)) return;
+      event.preventDefault();
+    };
+    document.addEventListener('touchmove', blockScroll, { passive: false });
+    document.addEventListener('wheel', blockScroll, { passive: false });
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+      window.visualViewport?.removeEventListener('resize', place);
+      window.visualViewport?.removeEventListener('scroll', place);
+      document.removeEventListener('touchmove', blockScroll);
+      document.removeEventListener('wheel', blockScroll);
+    };
+  }, [viewportExpanded, isFullscreen]);
 
   /* Sync native <video> webkit fullscreen on iOS. */
   useEffect(() => {
@@ -1165,18 +1343,13 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       setShowSpeedMenu(false);
       return true;
     }
-    if (showVolumeControl) {
-      setShowVolumeControl(false);
-      return true;
-    }
     return false;
   };
 
   const handleOverlayClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    // iPhone: play/pause handled via touch end (avoids scroll + double-fire).
-    if (iosLike || (typeof window !== 'undefined' && 'ontouchstart' in window)) return;
     if (dismissOverlayMenus()) return;
+    // touchend already toggled; this click is the delayed duplicate on iPad.
     togglePlayPause();
   };
 
@@ -1205,7 +1378,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const handleOverlayDoubleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    // Double-tap zooms the page on iPhone — fullscreen only via the button there.
+    // Double-tap zooms on iPhone/iPad and was restarting playback. Use the maximize button.
     if (iosLike) return;
     toggleFullscreen();
     if (isDirectVideo) {
@@ -1223,23 +1396,15 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
   const isExpanded = isFullscreen || viewportExpanded;
 
-  return (
-    <div
-      ref={hostRef}
-      className={
-        viewportExpanded
-          ? 'relative w-full aspect-video min-h-[220px] sm:min-h-[280px]'
-          : 'relative w-full h-full min-h-[220px] sm:min-h-[280px]'
-      }
-    >
+  const player = (
     <div
       ref={containerRef}
       className={`
-        relative w-full h-full bg-black overflow-hidden select-none group
+        video-player-shell bg-black overflow-hidden select-none group
         touch-manipulation [-webkit-touch-callout:none] [-webkit-user-select:none]
         ${isExpanded
-          ? 'fixed inset-0 z-[300] w-[100dvw] h-[100dvh] max-w-none max-h-none rounded-none aspect-auto min-h-0 touch-none overscroll-none'
-          : 'min-h-[220px] sm:min-h-[280px] aspect-video rounded'}
+          ? 'fixed z-[500] max-w-none max-h-none rounded-none aspect-auto min-h-0 touch-none overscroll-none'
+          : 'min-h-[220px] sm:min-h-[280px] rounded'}
       `}
       style={
         isExpanded
@@ -1383,9 +1548,15 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             {/* Play/Pause */}
             <button
               type="button"
-              onClick={(e) => {
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
                 e.stopPropagation();
                 togglePlayPause();
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
               }}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -1446,93 +1617,33 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
               +10
             </button>
 
-            {/* Volume: mute + slider + increase/decrease */}
+            {/* Volume: mute button + always-visible slider (no hover popup) */}
             <div
               ref={volumeControlRef}
-              className="relative flex items-center ml-1"
-              onMouseEnter={openVolumeControl}
-              onMouseLeave={scheduleHideVolumeControl}
+              className="flex items-center gap-1 ml-0.5"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
             >
-              {showVolumeControl && (
-                <div
-                  className="absolute bottom-full left-0 pb-2 z-30"
-                  onMouseEnter={openVolumeControl}
-                  onMouseLeave={scheduleHideVolumeControl}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                  onMouseDown={(e) => e.stopPropagation()}
-                >
-                  <div className="flex items-center gap-1.5 bg-black/95 border border-white/10 rounded-md px-2 py-2">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        adjustVolume(-VOLUME_STEP);
-                      }}
-                      className="flex items-center justify-center w-6 h-6 text-white/80 hover:text-white transition-colors"
-                      title="Decrease volume"
-                      aria-label="Decrease volume"
-                    >
-                      <Minus size={14} />
-                    </button>
-                    <div
-                      ref={volumeBarRef}
-                      className="
-                        w-24 h-2 bg-white/20 rounded-full cursor-pointer
-                        relative group/vol shrink-0
-                      "
-                      onPointerDown={handleVolumePointerDown}
-                      role="slider"
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={Math.round((isMuted ? 0 : volume) * 100)}
-                      aria-label="Volume"
-                      title={`Volume ${Math.round((isMuted ? 0 : volume) * 100)}% — drag or scroll`}
-                    >
-                      <div
-                        className="h-full bg-cyan-400 rounded-full relative pointer-events-none"
-                        style={{ width: `${(isMuted ? 0 : volume) * 100}%` }}
-                      >
-                        <div
-                          className="
-                            absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2
-                            w-3 h-3 bg-cyan-400 rounded-full shadow-md
-                          "
-                        />
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        adjustVolume(VOLUME_STEP);
-                      }}
-                      className="flex items-center justify-center w-6 h-6 text-white/80 hover:text-white transition-colors"
-                      title="Increase volume"
-                      aria-label="Increase volume"
-                    >
-                      <Plus size={14} />
-                    </button>
-                  </div>
-                </div>
-              )}
               <button
                 type="button"
-                onClick={(e) => {
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  e.preventDefault();
                   e.stopPropagation();
                   toggleMute();
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                 }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
                 }}
                 className="
-                  flex items-center justify-center w-7 h-7
+                  flex items-center justify-center w-10 h-10 sm:w-7 sm:h-7
                   text-white/80 hover:text-white
-                  transition-colors cursor-pointer
+                  transition-colors cursor-pointer shrink-0
                 "
                 title={isMuted ? 'Unmute (M)' : 'Mute (M) · scroll or ↑↓ for volume'}
                 aria-label={isMuted ? 'Unmute' : 'Mute'}
@@ -1545,6 +1656,28 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
                   <Volume2 size={16} />
                 )}
               </button>
+              <div
+                ref={volumeBarRef}
+                className="relative w-14 sm:w-24 h-8 flex items-center cursor-pointer touch-none shrink-0"
+                onPointerDown={handleVolumePointerDown}
+                role="slider"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round((isMuted ? 0 : volume) * 100)}
+                aria-label="Volume"
+                title={`Volume ${Math.round((isMuted ? 0 : volume) * 100)}%`}
+              >
+                <div className="relative w-full h-1.5 bg-white/25 rounded-full pointer-events-none">
+                  <div
+                    className="h-full bg-cyan-400 rounded-full"
+                    style={{ width: `${(isMuted ? 0 : volume) * 100}%` }}
+                  />
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow"
+                    style={{ left: `${(isMuted ? 0 : volume) * 100}%` }}
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Time display */}
@@ -1669,7 +1802,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
                 e.stopPropagation();
               }}
               className="
-                flex items-center justify-center w-7 h-7
+                flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7
                 text-white/80 hover:text-white
                 transition-colors cursor-pointer
               "
@@ -1682,6 +1815,15 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         </div>
       </div>
     </div>
-    </div>
+  );
+
+  return (
+    <>
+      <div
+        ref={hostRef}
+        className="relative w-full h-full min-h-[220px] sm:min-h-[280px] aspect-video"
+      />
+      {typeof document !== 'undefined' ? createPortal(player, document.body) : player}
+    </>
   );
 }
