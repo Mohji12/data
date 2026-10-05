@@ -198,6 +198,8 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const userIntentRef = useRef<{ action: 'play' | 'pause'; at: number } | null>(null);
   const viewportExpandedRef = useRef(false);
   const overlayTouchRef = useRef<{ x: number; y: number; t: number } | null>(null);
+  const lastChromeToggleRef = useRef(0);
+  const controlsPointerDownRef = useRef(false);
   const flushWatchProgressRef = useRef<(force?: boolean) => void>(() => {});
   const iosLike = typeof navigator !== 'undefined' && isIosLike();
 
@@ -222,6 +224,8 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const [currentSpeed, setCurrentSpeed] = useState<number>(1);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [viewportExpanded, setViewportExpanded] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [controlsActivity, setControlsActivity] = useState(0);
 
   const isDirectVideo = isDirectVideoFileUrl(videoUrl);
   const detected = isDirectVideo ? null : detectProvider(videoUrl);
@@ -257,6 +261,23 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   useEffect(() => {
     viewportExpandedRef.current = viewportExpanded;
   }, [viewportExpanded]);
+
+  // Hide the seek line and controls after 5s unless the user is using them.
+  useEffect(() => {
+    if (!controlsVisible) return;
+    let timer = 0;
+    const arm = () => {
+      timer = window.setTimeout(() => {
+        if (controlsPointerDownRef.current || isSeekingRef.current || isVolumeDraggingRef.current) {
+          arm();
+          return;
+        }
+        setControlsVisible(false);
+      }, 5000);
+    };
+    arm();
+    return () => window.clearTimeout(timer);
+  }, [controlsVisible, controlsActivity]);
 
   useEffect(() => {
     isSeekingRef.current = isSeeking;
@@ -1346,11 +1367,18 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     return false;
   };
 
+  const toggleControlsChrome = () => {
+    const now = Date.now();
+    // One tap fires touchend and a delayed click. Ignore the second.
+    if (now - lastChromeToggleRef.current < 450) return;
+    lastChromeToggleRef.current = now;
+    setControlsVisible((visible) => !visible);
+  };
+
   const handleOverlayClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (dismissOverlayMenus()) return;
-    // touchend already toggled; this click is the delayed duplicate on iPad.
-    togglePlayPause();
+    toggleControlsChrome();
   };
 
   const handleOverlayTouchStart = (e: React.TouchEvent) => {
@@ -1372,7 +1400,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     if (dx > 14 || dy > 14) return;
     if (Date.now() - start.t > 450) return;
     if (dismissOverlayMenus()) return;
-    togglePlayPause();
+    toggleControlsChrome();
   };
 
   const handleOverlayDoubleClick = (e: React.MouseEvent) => {
@@ -1496,14 +1524,23 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           pt-10 px-3
           pb-[max(0.5rem,env(safe-area-inset-bottom))]
           transition-opacity duration-300 ease-in-out
-          ${isExpanded ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
-          [@media(hover:none)]:opacity-100
+          ${controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}
         `}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
         }}
-        onPointerDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          controlsPointerDownRef.current = true;
+          setControlsActivity((n) => n + 1);
+        }}
+        onPointerUp={() => {
+          controlsPointerDownRef.current = false;
+        }}
+        onPointerCancel={() => {
+          controlsPointerDownRef.current = false;
+        }}
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
