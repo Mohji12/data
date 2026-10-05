@@ -169,6 +169,16 @@ body.no-user-copy [contenteditable='true'] {
   animation: marquee 25s linear infinite;
 }
 
+/* Copyright ticker on the video. Two equal copies; shift by half so the loop is seamless. */
+@keyframes copyright-line {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.animate-copyright-line {
+  animation: copyright-line 28s linear infinite;
+  width: max-content;
+}
+
 /* Hide spin buttons in number inputs */
 input::-webkit-outer-spin-button,
 input::-webkit-inner-spin-button {

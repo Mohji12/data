@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Maximize2, Minimize2, Play, Pause, Settings, Volume1, Volume2, VolumeX } from 'lucide-react';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
 import { apiClient } from '@/lib/apiClient';
+import { useAuthStore } from '@/store/authStore';
 import {
   buildVimeoPlayerEmbedUrl,
   buildYouTubeEmbedUrl,
@@ -202,6 +203,16 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const controlsPointerDownRef = useRef(false);
   const flushWatchProgressRef = useRef<(force?: boolean) => void>(() => {});
   const iosLike = typeof navigator !== 'undefined' && isIosLike();
+  const viewer = useAuthStore((s) => s.user);
+  const copyrightNotice = [
+    '© Dr Harish Critical Care Classes',
+    'This video is protected by copyright',
+    'Recording or sharing is not allowed',
+    viewer?.name,
+    viewer?.email,
+  ]
+    .filter(Boolean)
+    .join('   ·   ');
 
   const VOLUME_STEP = 0.1;
 
@@ -1515,6 +1526,23 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         onTouchEnd={handleOverlayTouchEnd}
         onDragStart={(e) => e.preventDefault()}
       />
+
+      {/* Copyright line stays on the picture. It is not part of the control bar, so it does not hide with it. */}
+      <div
+        className="pointer-events-none absolute inset-x-0 top-[42%] z-[15] overflow-hidden"
+        aria-hidden
+      >
+        <div className="animate-copyright-line flex">
+          {[0, 1].map((copy) => (
+            <span
+              key={copy}
+              className="shrink-0 px-10 text-[13px] font-semibold leading-none tracking-wide text-red-600 [text-shadow:0_0_2px_#000,0_1px_2px_#000]"
+            >
+              {copyrightNotice}
+            </span>
+          ))}
+        </div>
+      </div>
 
       {/* ─── Custom controls bar ─── */}
       <div
