@@ -1529,7 +1529,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
       {/* Copyright line stays on the picture. It is not part of the control bar, so it does not hide with it. */}
       <div
-        className="pointer-events-none absolute inset-x-0 top-[42%] z-[15] overflow-hidden"
+        className={`pointer-events-none absolute inset-x-0 z-[15] overflow-hidden transition-[bottom] duration-300 ${
+          controlsVisible ? 'bottom-24 sm:bottom-20' : 'bottom-1'
+        }`}
         aria-hidden
       >
         <div className="animate-copyright-line flex">
