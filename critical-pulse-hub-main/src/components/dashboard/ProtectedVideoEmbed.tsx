@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Maximize2, Minimize2, Play, Pause, Settings, Volume1, Volume2, VolumeX } from 'lucide-react';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
 import { apiClient } from '@/lib/apiClient';
@@ -433,8 +432,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       }
     }
 
-    // iPhone cannot fullscreen an iframe. iPad uses the Fullscreen API, then CSS.
-    if (isIphone()) {
+    // iPhone and iPad cannot reliably fullscreen an iframe. A native request
+    // often leaves the picture and the lower half of the screen untappable.
+    if (isIosLike()) {
       enterCssExpandedView();
       return;
     }
@@ -1247,15 +1247,16 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         el.style.margin = '0';
         return;
       }
-      const rect = host.getBoundingClientRect();
-      el.style.position = 'fixed';
-      el.style.top = `${rect.top}px`;
-      el.style.left = `${rect.left}px`;
-      el.style.width = `${rect.width}px`;
-      el.style.height = `${rect.height}px`;
-      el.style.right = 'auto';
-      el.style.bottom = 'auto';
-      el.style.zIndex = '25';
+      // Stay inside the video slot. A fixed layer on iPhone/iPad is offset from
+      // the picture, so taps below the middle never reach the player.
+      el.style.position = 'absolute';
+      el.style.top = '0';
+      el.style.left = '0';
+      el.style.right = '0';
+      el.style.bottom = '0';
+      el.style.width = '100%';
+      el.style.height = '100%';
+      el.style.zIndex = '1';
       el.style.margin = '0';
     };
 
@@ -1529,9 +1530,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
       {/* Copyright line stays on the picture. It is not part of the control bar, so it does not hide with it. */}
       <div
-        className={`pointer-events-none absolute inset-x-0 z-[15] overflow-hidden transition-[bottom] duration-300 ${
-          controlsVisible ? 'bottom-24 sm:bottom-20' : 'bottom-1'
-        }`}
+        className="pointer-events-none absolute inset-x-0 bottom-1 z-[15] overflow-hidden"
         aria-hidden
       >
         <div className="animate-copyright-line flex">
@@ -1549,9 +1548,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       {/* ─── Custom controls bar ─── */}
       <div
         className={`
-          absolute bottom-0 left-0 right-0 z-20 pointer-events-auto
+          absolute bottom-6 left-0 right-0 z-20 pointer-events-none
           bg-gradient-to-t from-black/80 via-black/40 to-transparent
-          pt-10 px-3
+          pt-3 px-3
           pb-[max(0.5rem,env(safe-area-inset-bottom))]
           transition-opacity duration-300 ease-in-out
           ${controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}
@@ -1584,7 +1583,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           aria-valuemax={Math.round(duration || 0)}
           aria-valuenow={Math.round(currentTime || 0)}
           className="
-            relative w-full h-11 flex items-center cursor-pointer mb-1
+            pointer-events-auto relative w-full h-11 flex items-center cursor-pointer mb-1
             touch-none select-none
           "
           onPointerDown={handleSeekPointerDown}
@@ -1610,7 +1609,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         </div>
 
         {/* Bottom row: play/pause + time on left, fullscreen on right */}
-        <div className="flex items-center justify-between">
+        <div className="pointer-events-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
             {/* Play/Pause */}
             <button
@@ -1885,12 +1884,11 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   );
 
   return (
-    <>
-      <div
-        ref={hostRef}
-        className="relative w-full h-full min-h-[220px] sm:min-h-[280px] aspect-video"
-      />
-      {typeof document !== 'undefined' ? createPortal(player, document.body) : player}
-    </>
+    <div
+      ref={hostRef}
+      className="relative w-full h-full min-h-[220px] sm:min-h-[280px] aspect-video"
+    >
+      {player}
+    </div>
   );
 }
