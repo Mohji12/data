@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
-import { openAuthenticatedExport, resolvePublicUploadUrl } from '@/lib/apiBase';
+import { openAuthenticatedExport, resolveVideoThumbnailUrl } from '@/lib/apiBase';
 import { useIsTechAdmin } from '@/store/authStore';
 import { toast } from 'sonner';
 import { Pencil, Trash2, Plus, X, ChevronDown, Search } from 'lucide-react';
@@ -516,8 +516,8 @@ export default function AdminVideos() {
               </button>
             </div>
             <p className="text-xs text-ink-muted">
-              Same rules as PHP admin: batches are subscription names (comma-separated). Folders are folder IDs (comma-separated). Set{' '}
-              <span className="font-mono">LEGACY_UPLOAD_BASE_URL</span> so thumbnails match <span className="font-mono">/upload/video/image/</span> on the public site.
+              Same rules as PHP admin: batches are subscription names (comma-separated). Folders are folder IDs (comma-separated). Thumbnails are served from the API at{' '}
+              <span className="font-mono">/upload/video/image/</span>.
             </p>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block sm:col-span-2">
@@ -575,7 +575,7 @@ export default function AdminVideos() {
                     <img src={localPreview} alt="New Preview" className="w-full h-full object-cover" />
                   ) : form.imageFilename ? (
                     <img 
-                      src={resolvePublicUploadUrl(`/upload/video/image/${form.imageFilename}`) || ''} 
+                      src={resolveVideoThumbnailUrl(`/upload/video/image/${form.imageFilename}`) || ''} 
                       alt="Current" 
                       className="w-full h-full object-cover"
                       onError={(e) => {
@@ -762,7 +762,7 @@ export default function AdminVideos() {
                 <td className="px-4 py-3 w-24 align-top">
                   {v.image_url || v.image ? (
                     <img
-                      src={resolvePublicUploadUrl(v.image_url) || resolvePublicUploadUrl(`/upload/video/image/${v.image}`) || ''}
+                      src={resolveVideoThumbnailUrl(v.image_url) || resolveVideoThumbnailUrl(v.image ? `/upload/video/image/${v.image}` : '') || ''}
                       alt=""
                       className="w-20 h-14 object-cover rounded-sm border border-border-soft"
                     />

@@ -4,6 +4,7 @@ import os
 import uuid
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import HTTPException, UploadFile
 
@@ -75,6 +76,59 @@ def save_batch_video(file: UploadFile) -> str:
 def video_thumbnail_upload_dir() -> Path:
     """Matches legacy PHP path segment: upload/video/image/"""
     return Path(__file__).resolve().parent.parent.parent / "uploads" / "video" / "image"
+
+
+# These hosts do not serve uploads/video/image. krintixsample returns HTML; the
+# marketing site is the public website, not the API.
+_BLOCKED_THUMBNAIL_HOSTS = {
+    "krintixsample.site",
+    "www.krintixsample.site",
+    "harishcriticalcareclasses.com",
+    "www.harishcriticalcareclasses.com",
+}
+_VIDEO_THUMBNAIL_API = "https://api.harishcriticalcareclasses.com"
+
+
+def _usable_thumbnail_base(url: str) -> Optional[str]:
+    base = (url or "").strip().rstrip("/")
+    if not base:
+        return None
+    host = (urlparse(base).hostname or "").lower()
+    if not host or host in {"127.0.0.1", "localhost", "0.0.0.0"}:
+        return None
+    if host in _BLOCKED_THUMBNAIL_HOSTS:
+        return None
+    return base
+
+
+def public_video_thumbnail_url(image: Optional[str]) -> Optional[str]:
+    """URL for a file stored under uploads/video/image and served at /upload/video/image/.
+
+    Those files live on the API host. krintixsample.site and the marketing site
+    return a web page for this path, so they are never used.
+    """
+    raw = (image or "").strip().replace("\\", "/")
+    if not raw:
+        return None
+    marker = "/upload/video/image/"
+    if raw.startswith("http://") or raw.startswith("https://"):
+        idx = raw.find(marker)
+        name = raw[idx + len(marker):] if idx >= 0 else raw.split("/")[-1]
+    else:
+        name = raw.split("/")[-1]
+    name = name.split("?")[0].split("#")[0].strip()
+    if not name or name in {".", ".."} or "/" in name:
+        return None
+    settings = get_settings()
+    base = _usable_thumbnail_base(settings.api_public_base_url) or _usable_thumbnail_base(
+        settings.legacy_upload_base_url
+    )
+    if not base:
+        configured = f"{settings.api_public_base_url} {settings.legacy_upload_base_url}".lower()
+        if "127.0.0.1" in configured or "localhost" in configured:
+            return f"/upload/video/image/{name}"
+        base = _VIDEO_THUMBNAIL_API
+    return f"{base}/upload/video/image/{name}"
 
 
 def question_image_upload_dir() -> Path:

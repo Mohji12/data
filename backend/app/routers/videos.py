@@ -8,7 +8,6 @@ from sqlalchemy import cast, func
 from sqlalchemy.orm import Session
 from sqlalchemy.types import Integer
 
-from app.core.config import get_settings
 from app.db import get_db
 from app.models import Audit, FolderMaster, User, Video, VideoQuestion
 from app.schemas import (
@@ -24,6 +23,7 @@ from app.schemas import (
 from app.security import get_current_user
 from app.services.access import can_access_video_library
 from app.services.batch_match import find_in_set_sql
+from app.services.uploads import public_video_thumbnail_url
 from app.services.video_progress import (
     WATCHED_THRESHOLD_SECONDS,
     is_video_watched,
@@ -34,12 +34,7 @@ router = APIRouter(prefix="/videos", tags=["videos"])
 
 
 def _public_video_thumbnail_url(image: Optional[str]) -> Optional[str]:
-    if not image or not str(image).strip():
-        return None
-    base = get_settings().legacy_upload_base_url.strip().rstrip("/")
-    if base:
-        return f"{base}/upload/video/image/{str(image).strip()}"
-    return None
+    return public_video_thumbnail_url(image)
 
 
 def _folder_label_from_video_csv(db: Session, video: Video) -> tuple[Optional[int], Optional[str]]:

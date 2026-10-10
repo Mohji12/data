@@ -11,26 +11,21 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, load_only
 
 from app.admin_security import get_current_admin, require_admin_type
-from app.core.config import get_settings
 from app.db import get_db
 from app.models import Audit, FolderMaster, User, Video, VideoQuestion
-from app.services.uploads import save_admin_image, save_video_thumbnail, video_thumbnail_upload_dir
+from app.services.uploads import (
+    public_video_thumbnail_url,
+    save_admin_image,
+    save_video_thumbnail,
+    video_thumbnail_upload_dir,
+)
 
 router = APIRouter(prefix="/admin/content", tags=["admin-content"], dependencies=[Depends(get_current_admin)])
 
 
 def _admin_video_image_url(filename: Optional[str]) -> Optional[str]:
-    if not filename or not str(filename).strip():
-        return None
-    settings = get_settings()
-    # Thumbnails are served by the API (`/upload/video/image` mount), not the static SPA host.
-    base = (
-        (settings.legacy_upload_base_url or "").strip().rstrip("/")
-        or (settings.api_public_base_url or "").strip().rstrip("/")
-    )
-    if not base:
-        return None
-    return f"{base}/upload/video/image/{str(filename).strip()}"
+    # Served by the API mount `/upload/video/image`, not the marketing website.
+    return public_video_thumbnail_url(filename)
 
 
 def _remove_stored_video_thumbnail(filename: Optional[str]) -> None:

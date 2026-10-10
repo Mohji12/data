@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { PlayCircle, FolderOpen, ArrowLeft, ChevronLeft, ChevronRight, Search, X } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
+import { resolveVideoThumbnailUrl } from '@/lib/apiBase';
 
 const PAGE_SIZE = 12;
 const MIN_SEARCH_CHARS = 3;
@@ -99,8 +100,8 @@ function VideoGrid({
           className="flex items-start gap-4 bg-chalk border border-border-soft rounded-sm p-4 hover:border-mint/30 hover:shadow-sm transition-all group"
         >
           <div className="w-14 h-14 rounded-sm bg-monitor-bg shrink-0 overflow-hidden flex items-center justify-center border border-border-soft">
-            {v.thumbnail_url ? (
-              <img src={v.thumbnail_url} alt="" className="w-full h-full object-cover" />
+            {resolveVideoThumbnailUrl(v.thumbnail_url) ? (
+              <img src={resolveVideoThumbnailUrl(v.thumbnail_url) || ''} alt="" className="w-full h-full object-cover" />
             ) : (
               <PlayCircle size={20} className="text-chalk/60" />
             )}

@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { LogOut } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiClient } from '@/lib/apiClient';
+import { useAuthStore } from '@/store/authStore';
 
 type SubscriptionPeriodInfo = {
   plan_type: string;
@@ -79,6 +82,12 @@ function toFormState(profile: DashboardProfile): ProfileFormState {
 
 export default function Profile() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
+  const logout = useAuthStore((s) => s.logout);
+
+  const handleLogout = () => {
+    void logout().finally(() => navigate('/'));
+  };
   const { data, isLoading } = useQuery({
     queryKey: ['dashboardProfile'],
     queryFn: () => apiClient('/dashboard/profile') as Promise<DashboardProfile>,
@@ -150,7 +159,17 @@ export default function Profile() {
 
   return (
     <div className="p-6 lg:p-8">
-      <h1 className="font-display font-bold text-3xl text-slate mb-8">Profile</h1>
+      <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
+        <h1 className="font-display font-bold text-3xl text-slate">Profile</h1>
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="inline-flex items-center gap-2 border border-border-soft rounded-sm px-5 py-3 font-sans text-sm font-semibold text-ink-secondary hover:bg-chalk-warm hover:text-blush transition-colors"
+        >
+          <LogOut size={16} />
+          Log out
+        </button>
+      </div>
       <div className="max-w-[860px] bg-chalk border border-border-soft rounded-sm p-8">
         <div className="flex items-center gap-4 mb-8">
           <div className="w-16 h-16 rounded-sm bg-mint-pale border border-mint/30 flex items-center justify-center font-mono text-xl text-slate font-bold">
@@ -314,9 +333,19 @@ export default function Profile() {
               </div>
             )}
           </div>
-          <button type="submit" disabled={saveMut.isPending} className="magnetic bg-slate text-chalk rounded-sm px-6 py-3 font-sans font-semibold text-sm hover:bg-slate-light transition-all disabled:opacity-60">
-            {saveMut.isPending ? 'Saving...' : 'Save Changes'}
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <button type="submit" disabled={saveMut.isPending} className="magnetic bg-slate text-chalk rounded-sm px-6 py-3 font-sans font-semibold text-sm hover:bg-slate-light transition-all disabled:opacity-60">
+              {saveMut.isPending ? 'Saving...' : 'Save Changes'}
+            </button>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="inline-flex items-center gap-2 border border-border-soft rounded-sm px-6 py-3 font-sans font-semibold text-sm text-ink-secondary hover:bg-chalk-warm hover:text-blush transition-colors"
+            >
+              <LogOut size={16} />
+              Log out
+            </button>
+          </div>
         </form>
       </div>
     </div>

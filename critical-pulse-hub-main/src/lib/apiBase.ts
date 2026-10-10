@@ -43,6 +43,20 @@ export function resolvePublicUploadUrl(pathOrUrl: string | null | undefined): st
   return `${base}${path}`;
 }
 
+/** Video thumbnails are files on the API (`/upload/video/image/`), even if a stored URL points at the website. */
+export function resolveVideoThumbnailUrl(url: string | null | undefined): string | null {
+  const raw = (url || '').trim();
+  if (!raw) return null;
+  const marker = '/upload/video/image/';
+  const idx = raw.indexOf(marker);
+  if (idx >= 0) {
+    const name = raw.slice(idx + marker.length).split(/[?#]/)[0];
+    if (!name) return null;
+    return resolvePublicUploadUrl(`${marker}${name}`);
+  }
+  return resolvePublicUploadUrl(raw);
+}
+
 function resolveApiUrl(pathWithQuery: string): string {
   const path = pathWithQuery.startsWith('/') ? pathWithQuery : `/${pathWithQuery}`;
   return `${getApiBaseUrl()}${path}`;
