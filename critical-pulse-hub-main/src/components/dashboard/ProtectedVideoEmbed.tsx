@@ -189,6 +189,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const playerReadyRef = useRef(false);
   const lastVolumeRef = useRef(1);
   const isSeekingRef = useRef(false);
+  /** After a committed seek, ignore stale getCurrentTime/timeupdate until the player catches up. */
+  const pendingSeekTargetRef = useRef<number | null>(null);
+  const pendingSeekUntilRef = useRef(0);
   const watchAnchorMsRef = useRef<number | null>(null);
   const currentTimeRef = useRef(0);
   const durationRef = useRef(0);
@@ -629,14 +632,42 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
   /* ─── Seek ─── */
 
-  const seekTo = useCallback(
+  const clampSeekSeconds = useCallback(
     (seconds: number) => {
       const dur = durationRef.current > 0 ? durationRef.current : duration;
-      const clamped = Math.max(0, Math.min(seconds, dur > 0 ? dur : Infinity));
+      return Math.max(0, Math.min(seconds, dur > 0 ? dur : Infinity));
+    },
+    [duration],
+  );
 
-      // Optimistic UI — critical while paused (no timeupdate until play).
-      setCurrentTime(clamped);
-      currentTimeRef.current = clamped;
+  const shouldAcceptExternalTime = useCallback((next: number) => {
+    if (isSeekingRef.current) return false;
+    const target = pendingSeekTargetRef.current;
+    if (target == null || Date.now() > pendingSeekUntilRef.current) {
+      pendingSeekTargetRef.current = null;
+      return true;
+    }
+    if (Math.abs(next - target) <= 1.5) {
+      pendingSeekTargetRef.current = null;
+      return true;
+    }
+    const ui = currentTimeRef.current;
+    if (Math.abs(ui - target) <= 2 && Math.abs(next - target) > 2) {
+      return false;
+    }
+    return true;
+  }, []);
+
+  const updateSeekUi = useCallback((seconds: number) => {
+    const clamped = clampSeekSeconds(seconds);
+    setCurrentTime(clamped);
+    currentTimeRef.current = clamped;
+    return clamped;
+  }, [clampSeekSeconds]);
+
+  const commitSeekToPlayer = useCallback(
+    (seconds: number) => {
+      const clamped = updateSeekUi(seconds);
 
       if (isDirectVideo) {
         const video = videoRef.current;
@@ -647,19 +678,30 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             /* iOS can throw if metadata not ready */
           }
         }
-        return;
+        return clamped;
       }
 
       const iframe = iframeRef.current;
-      if (!iframe?.contentWindow || !detected) return;
+      if (!iframe?.contentWindow || !detected) return clamped;
+
+      pendingSeekTargetRef.current = clamped;
+      pendingSeekUntilRef.current = Date.now() + 2500;
 
       if (detected.provider === 'vimeo') {
         postVimeo({ method: 'setCurrentTime', value: clamped });
       } else if (detected.provider === 'youtube') {
         postYouTube({ event: 'command', func: 'seekTo', args: [clamped, true] });
       }
+      return clamped;
     },
-    [detected, duration, isDirectVideo, postVimeo, postYouTube],
+    [detected, isDirectVideo, postVimeo, postYouTube, updateSeekUi],
+  );
+
+  const seekTo = useCallback(
+    (seconds: number) => {
+      commitSeekToPlayer(seconds);
+    },
+    [commitSeekToPlayer],
   );
 
   /* ─── Quality ─── */
@@ -721,17 +763,20 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       // clientX after capture is not, and that was slamming the line to the end.
       const left = rect.left + window.scrollX;
       const pct = Math.max(0, Math.min(1, (pageX - left) / rect.width));
-      seekTo(pct * dur);
+      if (isSeekingRef.current) {
+        updateSeekUi(pct * dur);
+        return;
+      }
+      commitSeekToPlayer(pct * dur);
     },
-    [isDirectVideo, seekTo],
+    [commitSeekToPlayer, isDirectVideo, updateSeekUi],
   );
 
   const finishSeek = useCallback(() => {
+    const target = currentTimeRef.current;
     endSeekGesture();
-    if (detected?.provider === 'vimeo') {
-      postVimeo({ method: 'getCurrentTime' });
-    }
-  }, [detected?.provider, endSeekGesture, postVimeo]);
+    commitSeekToPlayer(target);
+  }, [commitSeekToPlayer, endSeekGesture]);
 
   const handleSeekPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
@@ -924,8 +969,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         if (data.event === 'timeupdate') {
           const td = data.data as Record<string, number> | undefined;
           if (td) {
-            if (!isSeekingRef.current && typeof td.seconds === 'number') {
+            if (typeof td.seconds === 'number' && shouldAcceptExternalTime(td.seconds)) {
               setCurrentTime(td.seconds);
+              currentTimeRef.current = td.seconds;
             }
             if (typeof td.duration === 'number' && td.duration > 0) {
               setDuration((prev) => Math.max(prev, td.duration));
@@ -935,8 +981,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
         if (data.method === 'getCurrentTime') {
           const t = data.value as number;
-          if (typeof t === 'number' && !isSeekingRef.current) {
+          if (typeof t === 'number' && shouldAcceptExternalTime(t)) {
             setCurrentTime(t);
+            currentTimeRef.current = t;
           }
         }
 
@@ -1044,8 +1091,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         if (data.event === 'infoDelivery') {
           const info = data.info as Record<string, any> | undefined;
           if (info) {
-            if (typeof info.currentTime === 'number' && !isSeekingRef.current) {
+            if (typeof info.currentTime === 'number' && shouldAcceptExternalTime(info.currentTime)) {
               setCurrentTime(info.currentTime);
+              currentTimeRef.current = info.currentTime;
             }
             if (typeof info.duration === 'number' && info.duration > 0) {
               setDuration((prev) => Math.max(prev, info.duration));
@@ -1108,7 +1156,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [currentSpeed]);
+  }, [currentSpeed, shouldAcceptExternalTime]);
 
   /* Poll playback position — timeupdate postMessage can stop after long playback without api=1 */
   useEffect(() => {
@@ -1116,6 +1164,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
     const poll = () => {
       if (!playerReadyRef.current || isSeekingRef.current) return;
+      if (pendingSeekTargetRef.current != null && Date.now() < pendingSeekUntilRef.current) return;
       if (detected.provider === 'vimeo') {
         postVimeo({ method: 'getCurrentTime' });
         postVimeo({ method: 'getDuration' });
@@ -1135,6 +1184,8 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
   useEffect(() => {
     playerReadyRef.current = false;
+    pendingSeekTargetRef.current = null;
+    pendingSeekUntilRef.current = 0;
     setCurrentTime(0);
     setDuration(0);
     setIsPlaying(false);
