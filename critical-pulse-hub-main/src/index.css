@@ -44,6 +44,12 @@ body {
   font-family: 'Times New Roman', Times, serif;
 }
 
+/* Hidden chrome must not steal taps, including the seek row (pointer-events-auto). */
+.player-chrome[data-open='false'],
+.player-chrome[data-open='false'] * {
+  pointer-events: none !important;
+}
+
 /* iPad/Safari fullscreen: the player must fill the screen, not the video slot. */
 .video-player-shell:fullscreen,
 .video-player-shell:-webkit-full-screen {

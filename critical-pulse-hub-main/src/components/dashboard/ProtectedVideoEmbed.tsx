@@ -199,6 +199,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const viewportExpandedRef = useRef(false);
   const overlayTouchRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const lastChromeToggleRef = useRef(0);
+  const lastFullscreenToggleRef = useRef(0);
   const controlsPointerDownRef = useRef(false);
   const flushWatchProgressRef = useRef<(force?: boolean) => void>(() => {});
   const iosLike = typeof navigator !== 'undefined' && isIosLike();
@@ -704,8 +705,8 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     setIsSeeking(false);
   }, []);
 
-  const seekFromClientX = useCallback(
-    (clientX: number) => {
+  const seekFromPageX = useCallback(
+    (pageX: number) => {
       const bar = seekBarRef.current;
       const dur =
         durationRef.current > 0
@@ -713,17 +714,30 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           : isDirectVideo
             ? videoRef.current?.duration || 0
             : 0;
-      if (!bar || !(dur > 0) || !Number.isFinite(dur)) return;
+      if (!bar || !(dur > 0) || !Number.isFinite(dur) || !Number.isFinite(pageX)) return;
       const rect = bar.getBoundingClientRect();
-      if (rect.width <= 0) return;
-      const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      if (rect.width < 8) return;
+      // pageX and rect.left + scrollX stay in the same space. iPhone pointer
+      // clientX after capture is not, and that was slamming the line to the end.
+      const left = rect.left + window.scrollX;
+      const pct = Math.max(0, Math.min(1, (pageX - left) / rect.width));
       seekTo(pct * dur);
     },
     [isDirectVideo, seekTo],
   );
 
+  const finishSeek = useCallback(() => {
+    endSeekGesture();
+    if (detected?.provider === 'vimeo') {
+      postVimeo({ method: 'getCurrentTime' });
+    }
+  }, [detected?.provider, endSeekGesture, postVimeo]);
+
   const handleSeekPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
+      // iPhone touch drags are handled by touch events. Pointer capture on
+      // Safari reports coordinates that map to the end of the bar.
+      if (e.pointerType === 'touch') return;
       e.stopPropagation();
       e.preventDefault();
 
@@ -734,21 +748,25 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         /* older Safari */
       }
 
+      controlsPointerDownRef.current = true;
       isSeekingRef.current = true;
       setIsSeeking(true);
-      seekFromClientX(e.clientX);
+      setControlsVisible(true);
+      seekFromPageX(e.pageX);
 
       const safetyId = window.setTimeout(() => {
-        endSeekGesture();
+        controlsPointerDownRef.current = false;
+        finishSeek();
       }, 4000);
 
       const onMove = (ev: PointerEvent) => {
         if (ev.cancelable) ev.preventDefault();
-        seekFromClientX(ev.clientX);
+        seekFromPageX(ev.pageX);
       };
 
       const onUp = (ev: PointerEvent) => {
         window.clearTimeout(safetyId);
+        controlsPointerDownRef.current = false;
         try {
           if (target.hasPointerCapture?.(ev.pointerId)) {
             target.releasePointerCapture(ev.pointerId);
@@ -756,11 +774,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         } catch {
           /* ignore */
         }
-        endSeekGesture();
-        // Confirm position after scrub (especially while paused on iOS).
-        if (detected?.provider === 'vimeo') {
-          postVimeo({ method: 'getCurrentTime' });
-        }
+        finishSeek();
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
         document.removeEventListener('pointercancel', onUp);
@@ -770,7 +784,46 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       document.addEventListener('pointerup', onUp);
       document.addEventListener('pointercancel', onUp);
     },
-    [detected?.provider, endSeekGesture, postVimeo, seekFromClientX],
+    [finishSeek, seekFromPageX],
+  );
+
+  const handleSeekTouchStart = useCallback(
+    (e: React.TouchEvent<HTMLDivElement>) => {
+      e.stopPropagation();
+      const touch = e.touches[0];
+      if (!touch) return;
+
+      controlsPointerDownRef.current = true;
+      isSeekingRef.current = true;
+      setIsSeeking(true);
+      setControlsVisible(true);
+      seekFromPageX(touch.pageX);
+
+      const safetyId = window.setTimeout(() => {
+        controlsPointerDownRef.current = false;
+        finishSeek();
+      }, 4000);
+
+      const onMove = (ev: TouchEvent) => {
+        const next = ev.touches[0];
+        if (!next) return;
+        if (ev.cancelable) ev.preventDefault();
+        seekFromPageX(next.pageX);
+      };
+      const onEnd = () => {
+        window.clearTimeout(safetyId);
+        controlsPointerDownRef.current = false;
+        finishSeek();
+        document.removeEventListener('touchmove', onMove);
+        document.removeEventListener('touchend', onEnd);
+        document.removeEventListener('touchcancel', onEnd);
+      };
+
+      document.addEventListener('touchmove', onMove, { passive: false });
+      document.addEventListener('touchend', onEnd);
+      document.addEventListener('touchcancel', onEnd);
+    },
+    [finishSeek, seekFromPageX],
   );
 
   /* ─── PostMessage listener: play/pause state + time updates ─── */
@@ -1508,9 +1561,10 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         </div>
       )}
 
-      {/* Full-area overlay — blocks iframe gestures; tap vs scroll aware on iPhone */}
+      {/* Full-area overlay — blocks iframe gestures; tap vs scroll aware on iPhone.
+          A faint background is required or iPhone skips hit-testing a clear layer. */}
       <div
-        className="absolute inset-0 z-10 cursor-pointer touch-manipulation"
+        className="absolute inset-0 z-10 h-full w-full cursor-pointer touch-manipulation bg-black/[0.012] [transform:translate3d(0,0,0)]"
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -1547,13 +1601,14 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
       {/* ─── Custom controls bar ─── */}
       <div
+        data-open={controlsVisible ? 'true' : 'false'}
         className={`
-          absolute bottom-6 left-0 right-0 z-20 pointer-events-none
+          player-chrome absolute bottom-6 left-0 right-0 z-20 max-w-full pointer-events-none
           bg-gradient-to-t from-black/80 via-black/40 to-transparent
           pt-3 px-3
           pb-[max(0.5rem,env(safe-area-inset-bottom))]
           transition-opacity duration-300 ease-in-out
-          ${controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}
+          ${controlsVisible ? 'opacity-100' : 'opacity-0'}
         `}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -1583,10 +1638,11 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           aria-valuemax={Math.round(duration || 0)}
           aria-valuenow={Math.round(currentTime || 0)}
           className="
-            pointer-events-auto relative w-full h-11 flex items-center cursor-pointer mb-1
+            pointer-events-auto relative w-full max-w-full h-11 flex items-center cursor-pointer mb-1
             touch-none select-none
           "
           onPointerDown={handleSeekPointerDown}
+          onTouchStart={handleSeekTouchStart}
           onContextMenu={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -1608,9 +1664,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           </div>
         </div>
 
-        {/* Bottom row: play/pause + time on left, fullscreen on right */}
-        <div className="pointer-events-auto flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        {/* Bottom row wraps on a narrow iPhone so volume and fullscreen both stay on screen. */}
+        <div className="pointer-events-auto flex flex-wrap items-center justify-between gap-x-2 gap-y-1 min-w-0 w-full">
+          <div className="flex items-center gap-1 min-w-0">
             {/* Play/Pause */}
             <button
               type="button"
@@ -1724,7 +1780,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
               </button>
               <div
                 ref={volumeBarRef}
-                className="relative w-14 sm:w-24 h-8 flex items-center cursor-pointer touch-none shrink-0"
+                className="relative w-16 sm:w-24 h-8 flex items-center cursor-pointer touch-none shrink-0"
                 onPointerDown={handleVolumePointerDown}
                 role="slider"
                 aria-valuemin={0}
@@ -1747,13 +1803,12 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             </div>
 
             {/* Time display */}
-            <span className="text-[11px] font-mono text-white/60 ml-1">
+            <span className="text-[11px] font-mono text-white/80 ml-1 truncate">
               {formatTime(currentTime)} / {formatTime(duration)}
             </span>
           </div>
 
-          {/* Right side: Speed, Quality & Fullscreen */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5 shrink-0 ml-auto">
             {/* Speed Menu */}
             <div className="relative flex items-center">
               {showSpeedMenu && (
@@ -1859,17 +1914,26 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             {/* Fullscreen */}
             <button
               type="button"
-              onClick={(e) => {
+              onPointerDown={(e) => {
+                if (e.pointerType === 'mouse' && e.button !== 0) return;
+                e.preventDefault();
                 e.stopPropagation();
+                const now = Date.now();
+                if (now - lastFullscreenToggleRef.current < 450) return;
+                lastFullscreenToggleRef.current = now;
                 toggleFullscreen();
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
               }}
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
               }}
               className="
-                flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7
-                text-white/80 hover:text-white
+                flex items-center justify-center w-11 h-11 shrink-0
+                text-white hover:text-white
                 transition-colors cursor-pointer
               "
               title={isExpanded ? 'Exit Fullscreen (F)' : 'Fullscreen (F)'}
