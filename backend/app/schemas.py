@@ -290,6 +290,15 @@ class DashboardStats(BaseModel):
     folder_remaining: Optional[int] = None
 
 
+class AssistantMessageRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=500)
+
+
+class AssistantMessageResponse(BaseModel):
+    reply: str
+    suggestions: list[str] = []
+
+
 class AdminUserVideoProgressItem(BaseModel):
     video_id: int
     title: str

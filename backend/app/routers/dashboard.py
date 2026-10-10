@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import User, UserPackagePayment
 from app.schemas import (
+    AssistantMessageRequest,
+    AssistantMessageResponse,
     DashboardPaymentItem,
     DashboardProfile,
     DashboardProfileUpdateRequest,
@@ -25,6 +27,7 @@ from app.services.access import (
     get_subscription_period_for_profile,
     is_certificate_only_user,
 )
+from app.services.student_assistant import answer_student
 from app.services.video_progress import build_dashboard_stats
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -82,6 +85,16 @@ def dashboard_summary(
         extension=get_extension_offer(db, current_user),
         batch_access=batch_access,
     )
+
+
+@router.post("/assistant", response_model=AssistantMessageResponse)
+def dashboard_assistant(
+    payload: AssistantMessageRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> AssistantMessageResponse:
+    """Course, progress, and scores for the logged-in student only."""
+    return AssistantMessageResponse(**answer_student(db, current_user, payload.message))
 
 
 @router.get("/stats", response_model=DashboardStats)

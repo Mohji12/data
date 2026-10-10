@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session, load_only
 
 from app.admin_security import get_current_admin, require_admin_type
 from app.db import get_db
-from app.models import BatchMaster, EmailTemplateMaster, LoginActivity, Option, Testimonial, User, Video, VideoQuestion
+from app.models import Admin, BatchMaster, EmailTemplateMaster, LoginActivity, Option, Testimonial, User, Video, VideoQuestion
+from app.schemas import AssistantMessageRequest, AssistantMessageResponse
+from app.services.admin_assistant import answer_admin
 from app.services.batch_rename import rename_batch_references
 from app.services.registration import build_registration_catalog
 from app.services.uploads import save_batch_brochure, save_batch_video
@@ -61,6 +63,16 @@ def _upsert_option(db: Session, option_name: str, option_value: str) -> None:
     else:
         row.option_value = option_value
     db.add(row)
+
+
+@router.post("/assistant", response_model=AssistantMessageResponse)
+def admin_assistant(
+    payload: AssistantMessageRequest,
+    admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> AssistantMessageResponse:
+    """Dashboard totals and a single user lookup for the logged-in admin."""
+    return AssistantMessageResponse(**answer_admin(db, admin, payload.message))
 
 
 @router.get("/summary")

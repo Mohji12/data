@@ -1493,7 +1493,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     <div
       ref={containerRef}
       className={`
-        video-player-shell bg-black overflow-hidden select-none group
+        video-player-shell relative h-full w-full bg-black overflow-hidden select-none group
         touch-manipulation [-webkit-touch-callout:none] [-webkit-user-select:none]
         ${isExpanded
           ? 'fixed z-[500] max-w-none max-h-none rounded-none aspect-auto min-h-0 touch-none overscroll-none'
@@ -1582,31 +1582,16 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         onDragStart={(e) => e.preventDefault()}
       />
 
-      {/* Copyright line stays on the picture. It is not part of the control bar, so it does not hide with it. */}
-      <div
-        className="pointer-events-none absolute inset-x-0 bottom-1 z-[15] overflow-hidden"
-        aria-hidden
-      >
-        <div className="animate-copyright-line flex">
-          {[0, 1].map((copy) => (
-            <span
-              key={copy}
-              className="shrink-0 px-10 text-[13px] font-semibold leading-none tracking-wide text-red-600 [text-shadow:0_0_2px_#000,0_1px_2px_#000]"
-            >
-              {copyrightNotice}
-            </span>
-          ))}
-        </div>
-      </div>
-
+      {/* iPhone ignores `bottom` on this bar and leaves it in the middle.
+          A full-size column with justify-end keeps the bar on the bottom edge. */}
+      <div className="pointer-events-none absolute top-0 right-0 bottom-0 left-0 z-20 flex h-full w-full flex-col justify-end">
       {/* ─── Custom controls bar ─── */}
       <div
         data-open={controlsVisible ? 'true' : 'false'}
         className={`
-          player-chrome absolute bottom-6 left-0 right-0 z-20 max-w-full pointer-events-none
+          player-chrome relative mt-auto w-full max-w-full shrink-0 pointer-events-none
           bg-gradient-to-t from-black/80 via-black/40 to-transparent
-          pt-3 px-3
-          pb-[max(0.5rem,env(safe-area-inset-bottom))]
+          pt-2 px-2
           transition-opacity duration-300 ease-in-out
           ${controlsVisible ? 'opacity-100' : 'opacity-0'}
         `}
@@ -1665,8 +1650,8 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         </div>
 
         {/* Bottom row wraps on a narrow iPhone so volume and fullscreen both stay on screen. */}
-        <div className="pointer-events-auto flex flex-wrap items-center justify-between gap-x-2 gap-y-1 min-w-0 w-full">
-          <div className="flex items-center gap-1 min-w-0">
+        <div className="pointer-events-auto flex flex-wrap items-center gap-x-1 gap-y-0.5 w-full">
+          <div className="flex flex-wrap items-center gap-1 min-w-0">
             {/* Play/Pause */}
             <button
               type="button"
@@ -1803,7 +1788,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             </div>
 
             {/* Time display */}
-            <span className="text-[11px] font-mono text-white/80 ml-1 truncate">
+            <span className="shrink-0 text-[11px] font-mono text-white/80 ml-1">
               {formatTime(currentTime)} / {formatTime(duration)}
             </span>
           </div>
@@ -1943,6 +1928,21 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             </button>
           </div>
         </div>
+      </div>
+
+      {/* Copyright stays on the bottom edge and does not hide with the controls. */}
+      <div className="pointer-events-none shrink-0 w-full overflow-hidden pb-1" aria-hidden>
+        <div className="animate-copyright-line flex">
+          {[0, 1].map((copy) => (
+            <span
+              key={copy}
+              className="shrink-0 px-10 text-[13px] font-semibold leading-none tracking-wide text-red-600 [text-shadow:0_0_2px_#000,0_1px_2px_#000]"
+            >
+              {copyrightNotice}
+            </span>
+          ))}
+        </div>
+      </div>
       </div>
     </div>
   );

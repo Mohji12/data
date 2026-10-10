@@ -11,8 +11,6 @@ import { isSessionInvalidError, notifySessionInvalidated } from '@/lib/sessionEv
 type ApiClientOptions = RequestInit & { _retried?: boolean };
 
 async function tryRefreshStudentToken(): Promise<boolean> {
-  // Do not refresh while an admin session is active in this tab.
-  if (sessionStorage.getItem(ADMIN_TOKEN_KEY)) return false;
   const current = localStorage.getItem(STUDENT_TOKEN_KEY);
   if (!current) return false;
 
@@ -38,8 +36,15 @@ export async function refreshStudentSession(): Promise<boolean> {
   return tryRefreshStudentToken();
 }
 
+function tokenForEndpoint(endpoint: string): string | null {
+  const path = endpoint.split('?')[0];
+  const adminCall = path.startsWith('/admin') || path.startsWith('admin/');
+  if (adminCall) return sessionStorage.getItem(ADMIN_TOKEN_KEY);
+  return localStorage.getItem(STUDENT_TOKEN_KEY);
+}
+
 export async function apiClient(endpoint: string, options: ApiClientOptions = {}) {
-  const token = getAuthBearerToken();
+  const token = tokenForEndpoint(endpoint);
 
   const headers = new Headers(options.headers || {});
   if (token) {

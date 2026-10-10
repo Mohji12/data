@@ -42,7 +42,15 @@ export function useSingleDeviceSession() {
         }
         // Renew quietly — do not kick the student out during a mock exam for TTL expiry.
         if (isExpiredTokenError(error)) {
-          await refreshStudentSession();
+          const renewed = await refreshStudentSession();
+          if (!renewed) {
+            await signOutOtherDevice('Your session expired. Please sign in again.');
+          }
+          return;
+        }
+        const message = error instanceof Error ? error.message : '';
+        if (/missing authorization token|user session not found|invalid or expired token/i.test(message)) {
+          await signOutOtherDevice('Please sign in again.');
         }
       }
     };
