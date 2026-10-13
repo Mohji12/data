@@ -63,8 +63,11 @@ from app.services.registration import (
 )
 from app.services.uploads import save_registration_document
 from app.services.promo_badge import get_promo_badge_config
+from app.services.cache import cached_json
 
 router = APIRouter(prefix="/registration", tags=["registration"])
+
+_REG_CACHE_TTL = 300
 
 
 # ── Country list (was missing – the React form queries this) ──────────────
@@ -97,26 +100,40 @@ def registration_promo_badge(db: Session = Depends(get_db)) -> PromoBadgeOut:
 @router.get("/countries", response_model=list[CountryOut])
 def registration_countries(db: Session = Depends(get_db)) -> list[CountryOut]:
     """Country list for registration (legacy PHP loads all rows from `country`, no status filter)."""
-    rows = db.query(Country).order_by(Country.name).all()
-    if not rows:
-        return []
-    out: list[CountryOut] = []
-    for r in rows:
-        name = (r.name or "").strip()
-        if not name:
-            continue
-        status = str(r.status).strip() if r.status is not None else ""
-        if status and status not in {"1", "true", "yes", "on"}:
-            continue
-        out.append(CountryOut(id=r.id, name=name))
-    if not out:
-        out = [CountryOut(id=r.id, name=(r.name or "").strip()) for r in rows if (r.name or "").strip()]
-    return out
+
+    def _load() -> list[dict]:
+        rows = db.query(Country).order_by(Country.name).all()
+        if not rows:
+            return []
+        out: list[dict] = []
+        for r in rows:
+            name = (r.name or "").strip()
+            if not name:
+                continue
+            status = str(r.status).strip() if r.status is not None else ""
+            if status and status not in {"1", "true", "yes", "on"}:
+                continue
+            out.append({"id": r.id, "name": name})
+        if not out:
+            out = [
+                {"id": r.id, "name": (r.name or "").strip()}
+                for r in rows
+                if (r.name or "").strip()
+            ]
+        return out
+
+    payload = cached_json("reg:countries", _REG_CACHE_TTL, _load)
+    return [CountryOut(**item) for item in payload]
 
 
 @router.get("/batches", response_model=list[BatchDefinition])
 def registration_batches(db: Session = Depends(get_db)) -> list[BatchDefinition]:
-    return list_batches(db)
+    payload = cached_json(
+        "reg:batches",
+        _REG_CACHE_TTL,
+        lambda: [b.model_dump() for b in list_batches(db)],
+    )
+    return [BatchDefinition(**item) for item in payload]
 
 
 @router.get("/catalog", response_model=list[RegistrationCatalogItem])
@@ -124,7 +141,13 @@ def registration_catalog(
     include_inactive: bool = Query(False),
     db: Session = Depends(get_db),
 ) -> list[RegistrationCatalogItem]:
-    return build_registration_catalog(db, include_inactive=include_inactive)
+    key = f"reg:catalog:include_inactive={int(include_inactive)}"
+    payload = cached_json(
+        key,
+        _REG_CACHE_TTL,
+        lambda: [i.model_dump() for i in build_registration_catalog(db, include_inactive=include_inactive)],
+    )
+    return [RegistrationCatalogItem(**item) for item in payload]
 
 
 # ── Package list for a batch + country (React Step 3 uses this) ───────────
@@ -251,7 +274,13 @@ def registration_packages(
 @router.get("/fee-structure", response_model=FeeStructureResponse)
 def registration_fee_structure(batch_slug: str, db: Session = Depends(get_db)) -> FeeStructureResponse:
     """All active pricing tiers for a batch (for public fee pages). Uses `package` + `batch_master.registration_fee_structure` notice."""
-    return build_fee_structure_response(db, batch_slug)
+    slug = (batch_slug or "").strip().lower()
+    payload = cached_json(
+        f"reg:fee-structure:{slug}",
+        _REG_CACHE_TTL,
+        lambda: build_fee_structure_response(db, batch_slug).model_dump(),
+    )
+    return FeeStructureResponse(**payload)
 
 
 # ── Old student discount check ────────────────────────────────────────────

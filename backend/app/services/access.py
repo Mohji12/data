@@ -27,8 +27,21 @@ _option_cache: dict[str, tuple[str, float]] = {}
 _OPTION_CACHE_TTL_SEC = 60.0
 
 
+def clear_local_option_cache(option_name: str | None = None) -> None:
+    if option_name:
+        _option_cache.pop(option_name, None)
+    else:
+        _option_cache.clear()
+
+
 def get_option_value(db: Session, option_name: str) -> str:
     """Read site option with short TTL cache and retry on transient DB drops."""
+    from app.services.cache import cache_get, cache_set
+
+    redis_hit = cache_get(f"opt:{option_name}")
+    if isinstance(redis_hit, str):
+        return redis_hit
+
     now = time.monotonic()
     cached = _option_cache.get(option_name)
     if cached is not None:
@@ -43,6 +56,7 @@ def get_option_value(db: Session, option_name: str) -> str:
             row = db.query(Option).filter(Option.option_name == option_name).first()
             value = (row.option_value or "").strip() if row else ""
             _option_cache[option_name] = (value, now + _OPTION_CACHE_TTL_SEC)
+            cache_set(f"opt:{option_name}", value, ttl_sec=int(_OPTION_CACHE_TTL_SEC))
             return value
         except OperationalError as exc:
             last_exc = exc

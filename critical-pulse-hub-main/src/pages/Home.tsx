@@ -9,7 +9,7 @@ import { useScramble } from '@/hooks/useScramble';
 import { useOdometer } from '@/hooks/useOdometer';
 import { useInView } from '@/hooks/useInView';
 import { fadeUp, scaleIn, stagger, wordReveal } from '@/lib/motion';
-import { courses, testimonials, features, buildPublicBatchPills } from '@/lib/mockData';
+import { courses, testimonials, features, buildPublicBatchPills, ICU_ID_CERTIFICATION_COURSE } from '@/lib/mockData';
 import {
   filterPublicBatches,
   filterRegistrationCatalogBatches,
@@ -105,20 +105,63 @@ function HeroSection({
     <section className="min-h-screen flex flex-col relative">
       <div className="flex flex-col lg:flex-row flex-1 min-h-0 relative overflow-visible">
         {/* Small seal: top of the gap between left copy and right image */}
-        <div className="hidden lg:block absolute left-[50%] top-2 z-30 -translate-x-1/2 pointer-events-auto overflow-visible">
+        <div className="hidden lg:block absolute left-[50%] top-0 z-30 -translate-x-1/2 pointer-events-auto overflow-visible">
           <DiscountOfferBadge />
         </div>
 
         {/* Left */}
-        <div className="lg:w-[52%] bg-chalk-warm flex flex-col justify-start px-8 lg:px-16 pt-16 lg:pt-20 pb-12 lg:pb-16 relative z-10">
+        <div className="lg:w-[52%] bg-chalk-warm flex flex-col justify-start px-8 lg:px-16 pt-3 sm:pt-4 lg:pt-5 pb-12 lg:pb-16 relative z-10">
           <motion.div variants={stagger(0.1)} initial="hidden" animate="show">
             {/* Mobile: compact seal above headline */}
             <div className="lg:hidden mb-5 flex justify-center sm:justify-start">
               <DiscountOfferBadge />
             </div>
 
+            <motion.div variants={fadeUp} className="mb-6 max-w-md">
+              {ICU_ID_CERTIFICATION_COURSE.comingSoon ? (
+                <button
+                  type="button"
+                  disabled
+                  aria-disabled="true"
+                  className="inline-flex w-full sm:w-auto cursor-not-allowed items-center gap-3 rounded-sm border border-[#24628d]/10 bg-gradient-to-r from-[#1e5278]/75 via-[#24628d]/75 to-[#2f7aab]/75 px-4 py-3 text-chalk opacity-90 shadow-[0_8px_24px_-12px_rgba(36,98,141,0.35)]"
+                >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-white/10 ring-1 ring-white/15">
+                    <Stethoscope size={18} strokeWidth={1.75} />
+                  </span>
+                  <span className="min-w-0 flex-1 text-left">
+                    <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-chalk/70">New programme</span>
+                    <span className="mt-0.5 block font-display text-base font-bold leading-tight sm:text-lg">
+                      {ICU_ID_CERTIFICATION_COURSE.title}
+                    </span>
+                  </span>
+                  <span className="shrink-0 rounded-full bg-white/15 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-wider text-chalk">
+                    Coming soon
+                  </span>
+                </button>
+              ) : (
+                <Link
+                  to={ICU_ID_CERTIFICATION_COURSE.registerTo}
+                  className="group magnetic inline-flex w-full sm:w-auto items-center gap-3 rounded-sm border border-[#24628d]/15 bg-gradient-to-r from-[#1e5278] via-[#24628d] to-[#2f7aab] px-4 py-3 text-chalk shadow-[0_10px_28px_-10px_rgba(36,98,141,0.5)] transition-all duration-300 hover:shadow-[0_14px_32px_-8px_rgba(36,98,141,0.55)] hover:brightness-[1.03]"
+                >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-white/12 ring-1 ring-white/20">
+                    <Stethoscope size={18} strokeWidth={1.75} />
+                  </span>
+                  <span className="min-w-0 flex-1 text-left">
+                    <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-chalk/75">New programme</span>
+                    <span className="mt-0.5 block font-display text-base font-bold leading-tight sm:text-lg">
+                      {ICU_ID_CERTIFICATION_COURSE.title}
+                    </span>
+                  </span>
+                  <ArrowUpRight
+                    size={18}
+                    className="shrink-0 opacity-90 transition-transform duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+                  />
+                </Link>
+              )}
+            </motion.div>
+
             {/* H1 */}
-            <h1 className="font-display font-black text-slate leading-[0.88] tracking-[-0.01em] mb-0" style={{ fontSize: 'clamp(56px, 9vw, 70px)' }}>
+            <h1 className="font-display font-black text-slate leading-[0.9] tracking-[-0.01em] mb-0" style={{ fontSize: 'clamp(44px, 7.25vw, 58px)' }}>
               <div className="overflow-hidden">
                 {words.map((w, i) => (
                   <motion.span key={i} variants={wordReveal} className="inline-block mr-[0.25em]">
@@ -155,7 +198,7 @@ function HeroSection({
 
         {/* Right */}
         <div className="lg:w-[48%] lg:flex-1 bg-chalk-warm flex flex-col items-end relative overflow-hidden min-h-[60vh] lg:min-h-0">
-          <div className="relative w-full mt-16 lg:mt-20 h-[280px] sm:h-[340px] lg:h-[430px]">
+          <div className="relative w-full mt-3 sm:mt-4 lg:mt-5 h-[280px] sm:h-[340px] lg:h-[430px]">
             <HeroImageCarousel />
 
             {/* ECG on animated image */}
@@ -177,7 +220,9 @@ function HeroSection({
         style={{ backgroundColor: batchBarBg }}
       >
         <div className="max-w-[1400px] mx-auto flex flex-wrap justify-center gap-2.5 sm:gap-3">
-          {heroPills.map((pill) => (
+          {heroPills
+            .filter((pill) => !pill.to.includes('icu-id-certification-course'))
+            .map((pill) => (
             <Link
               key={pill.label}
               to={pill.to}

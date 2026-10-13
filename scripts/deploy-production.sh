@@ -9,6 +9,7 @@ BUILD_FRONTEND="${BUILD_FRONTEND:-1}"
 FRONTEND_DIR="${FRONTEND_DIR:-$APP_ROOT/critical-pulse-hub-main}"
 WEB_ROOT="${WEB_ROOT:-/var/www/criticalcare}"
 API_SERVICE="${API_SERVICE:-criticalcare-api}"
+WORKER_SERVICE="${WORKER_SERVICE:-criticalcare-worker}"
 
 echo "==> Deploy from $APP_ROOT (branch $BRANCH)"
 cd "$APP_ROOT"
@@ -27,8 +28,17 @@ else
   source venv/bin/activate
 fi
 pip install -r requirements.txt -q
+if systemctl is-active --quiet redis-server 2>/dev/null; then
+  echo "Redis: running"
+else
+  echo "WARN: redis-server not running — set REDIS_ENABLED=false or install Redis (see deploy/redis-ec2-setup.md)"
+fi
 sudo systemctl restart "$API_SERVICE"
 sudo systemctl status "$API_SERVICE" --no-pager || true
+if systemctl list-unit-files "$WORKER_SERVICE.service" --no-legend 2>/dev/null | grep -q "$WORKER_SERVICE"; then
+  sudo systemctl restart "$WORKER_SERVICE"
+  sudo systemctl status "$WORKER_SERVICE" --no-pager || true
+fi
 
 if [[ "$BUILD_FRONTEND" == "1" && -d "$FRONTEND_DIR" ]]; then
   echo "==> Frontend ($FRONTEND_DIR)"
@@ -51,6 +61,7 @@ fi
 
 echo "==> Health check"
 curl -sf "http://127.0.0.1:8000/health" >/dev/null && echo "API OK" || echo "API health check failed — check journalctl -u $API_SERVICE"
+curl -s "http://127.0.0.1:8000/health" 2>/dev/null || true
 
 echo "Deploy finished. Latest commit:"
 git -C "$APP_ROOT" log -1 --oneline

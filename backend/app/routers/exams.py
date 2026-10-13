@@ -37,6 +37,7 @@ from app.services.exam_flow import (
     parse_id_list,
 )
 from app.services.mock_test_attempts import DEFAULT_MAX_ATTEMPTS, get_max_attempts_for_user
+from app.services.module_exam_gate import exam_module_unlocked
 from app.services.pdfs import build_quiz_review_pdf
 
 
@@ -377,6 +378,15 @@ def list_exams(
             can_retake = attempts_used < max_attempts
             is_finished = attempts_used >= max_attempts and active_attempt is None
 
+        module_locked = False
+        module_unlock_hint = None
+        module_folder_name = None
+        if exam_user:
+            unlocked, hint, folder_name = exam_module_unlocked(db, exam_user, exam)
+            module_locked = not unlocked
+            module_unlock_hint = hint
+            module_folder_name = folder_name
+
         results.append(
             ExamSummary(
                 id=exam.id,
@@ -390,6 +400,9 @@ def list_exams(
                 remaining_attempts=max(0, max_attempts - attempts_used),
                 can_retake=can_retake,
                 has_active_attempt=has_active_attempt,
+                module_locked=module_locked,
+                module_unlock_hint=module_unlock_hint,
+                module_folder_name=module_folder_name,
             )
         )
     return results
@@ -422,6 +435,12 @@ def start_exam(
     _ensure_exam_access(db, current_user)
     user_id = _resolve_user_id(current_user, user_id)
     exam = _get_exam_or_404(db, exam_id)
+    unlocked, hint, _folder = exam_module_unlocked(db, current_user, exam)
+    if not unlocked:
+        raise HTTPException(
+            status_code=403,
+            detail=hint or "Complete all videos in this module before starting the test.",
+        )
     max_attempts = get_max_attempts_for_user(db, current_user)
     attempts = _list_user_exam_attempts(db, exam.id, user_id)
     ue = _find_active_attempt(attempts)

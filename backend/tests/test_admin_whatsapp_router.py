@@ -59,7 +59,15 @@ def test_bulk_send_returns_summary_and_audits(monkeypatch):
             ],
         }
 
-    monkeypatch.setattr(admin_whatsapp_router, "send_bulk_text", fake_bulk_send)
+    monkeypatch.setattr(admin_whatsapp_router, "redis_enabled", lambda: False)
+    import app.services.whatsapp_bulk_dispatch as dispatch_mod
+
+    monkeypatch.setattr(dispatch_mod, "send_bulk_text", fake_bulk_send)
+    monkeypatch.setattr(
+        dispatch_mod,
+        "split_phones_by_free_text_window",
+        lambda _db, phones: (phones, []),
+    )
 
     payload = admin_whatsapp_router.WhatsAppBulkSendPayload(
         send_mode="text",

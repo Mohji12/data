@@ -53,5 +53,10 @@ def save_auditorium(req: AuditoriumSaveRequest, db: Session = Depends(get_db)) -
     _upsert("display_auditorium_link", req.display_auditorium_link)
     _upsert("access_auditorium_link", ",".join([s.strip() for s in req.access_auditorium_link if s and s.strip()]))
     db.commit()
+    from app.services.cache import invalidate_option_cache
+
+    invalidate_option_cache("auditorium_link")
+    invalidate_option_cache("display_auditorium_link")
+    invalidate_option_cache("access_auditorium_link")
     return {"status": "ok"}
 

@@ -51,6 +51,13 @@ BATCH_DEFINITIONS: dict[str, BatchDefinition] = {
     "cp-10": BatchDefinition(slug="cp-10", title="Critical Pearls 10", registration_type="CP", requires_document=True, coupon_enabled=True),
     "edic-10": BatchDefinition(slug="edic-10", title="EDIC 10", registration_type="EDIC", requires_document=True, coupon_enabled=True),
     "ccm-2": BatchDefinition(slug="ccm-2", title="CCM 2", registration_type="CCM", requires_document=True, coupon_enabled=True),
+    "icu-id-certification-course": BatchDefinition(
+        slug="icu-id-certification-course",
+        title="ICU-ID Certification Course",
+        registration_type="Batch",
+        requires_document=True,
+        coupon_enabled=True,
+    ),
 }
 
 # Alternate URL slugs from React routes → canonical slug used for matching batch_master rows.

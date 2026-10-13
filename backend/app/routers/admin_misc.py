@@ -57,12 +57,15 @@ def _brochure_option_key(batch_name: str) -> str:
 
 
 def _upsert_option(db: Session, option_name: str, option_value: str) -> None:
+    from app.services.cache import invalidate_option_cache
+
     row = db.query(Option).filter(Option.option_name == option_name).first()
     if not row:
         row = Option(option_name=option_name, option_value=option_value)
     else:
         row.option_value = option_value
     db.add(row)
+    invalidate_option_cache(option_name)
 
 
 @router.post("/assistant", response_model=AssistantMessageResponse)
@@ -454,6 +457,10 @@ def create_batch(payload: BatchPayload, db: Session = Depends(get_db)) -> dict:
     if (not has_brochure) and name:
         _upsert_option(db, _brochure_option_key(name), brochure_file or "")
     db.commit()
+    from app.services.cache import cache_delete_prefix, invalidate_batch_active_cache
+
+    invalidate_batch_active_cache()
+    cache_delete_prefix("reg:")
     db.refresh(b)
     return {"id": b.id}
 
@@ -491,6 +498,10 @@ def update_batch(batch_id: int, payload: BatchPayload, db: Session = Depends(get
         b.package_subscription = (payload.package_subscription or "").strip() or None
     db.add(b)
     db.commit()
+    from app.services.cache import cache_delete_prefix, invalidate_batch_active_cache
+
+    invalidate_batch_active_cache()
+    cache_delete_prefix("reg:")
     result: dict = {"status": "ok"}
     if rename_counts is not None:
         result["rename"] = rename_counts

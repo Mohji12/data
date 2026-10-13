@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.redis_client import redis_health
 from app.db import engine, get_db
 from app.models import (
     EmailTemplateMaster,
@@ -167,6 +168,16 @@ app.mount(
 @app.get("/")
 def root() -> dict:
     return {"message": "Welcome to Critical Care Classes Mock Test Backend"}
+
+
+@app.get("/health")
+def health(db: Session = Depends(get_db)) -> dict:
+    db_status = "ok"
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception:
+        db_status = "down"
+    return {"api": "ok", "db": db_status, "redis": redis_health()}
 
 
 @app.get("/health/db")

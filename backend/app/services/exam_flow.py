@@ -37,7 +37,11 @@ def build_exam_question_list(db: Session, exam: QuizExam) -> List[int]:
     row = result.fetchone()
     if not row or not row.question_id_list:
         return []
-    return parse_id_list(row.question_id_list)
+    question_ids = parse_id_list(row.question_id_list)
+    cap = int(exam.total_questions or 0)
+    if cap > 0 and len(question_ids) > cap:
+        return question_ids[:cap]
+    return question_ids
 
 
 def get_question_id_by_display(question_ids: Sequence[int], display_question_id: int) -> int:

@@ -12,3 +12,6 @@ openpyxl
 tzdata
 email-validator
 python-multipart
+redis[hiredis]>=5.0.0
+rq>=2.0.0
+fakeredis>=2.21.0

@@ -18,6 +18,9 @@ class ExamSummary(BaseModel):
     remaining_attempts: int = 2
     can_retake: bool = False
     has_active_attempt: bool = False
+    module_locked: bool = False
+    module_unlock_hint: Optional[str] = None
+    module_folder_name: Optional[str] = None
 
 
 class ExamDetail(ExamSummary):
@@ -226,6 +229,9 @@ class VideoFolderItem(BaseModel):
     id: int
     name: str
     display_order: int
+    videos_total: Optional[int] = None
+    videos_watched: Optional[int] = None
+    module_test_unlocked: Optional[bool] = None
 
 
 class VideoListItem(BaseModel):

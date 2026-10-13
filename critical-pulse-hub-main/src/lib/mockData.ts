@@ -33,10 +33,23 @@ export const marketingBatches = [
     pillTo: '/register/batch-16-mccm',
     slugCandidates: ['batch-16-mccm', 'batch-16', 'batch-16-mccm'],
   },
+  {
+    label: 'ICU-ID Certification',
+    pillTo: '/register/icu-id-certification-course',
+    slugCandidates: ['icu-id-certification-course'],
+  },
 ] as const;
 
 /** Hero / navbar batch pills */
 export const homeHeroBatchPills = marketingBatches.map((m) => ({ label: m.label, to: m.pillTo }));
+
+/** Public registration route once the batch exists in Admin → Batches (slug: icu-id-certification-course). */
+export const ICU_ID_CERTIFICATION_COURSE = {
+  title: 'ICU-ID Certification Course',
+  registerTo: '/register/icu-id-certification-course',
+  /** When true, home hero CTA is disabled (registration not open yet). */
+  comingSoon: true,
+};
 
 export type RegistrationBatchPick<T> = T & { displayTitle: string };
 

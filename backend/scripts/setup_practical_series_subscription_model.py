@@ -118,7 +118,9 @@ def main() -> int:
             # Clear option cache after commit.
             from app.services import access as access_mod
 
-            access_mod._option_cache.clear()
+            from app.services.cache import invalidate_option_cache
+
+            invalidate_option_cache(None)
             print(f"Updated: {', '.join(changed)}")
         else:
             print("No changes needed (already configured).")

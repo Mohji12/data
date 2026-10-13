@@ -24,6 +24,7 @@ from app.security import get_current_user
 from app.services.access import can_access_video_library
 from app.services.batch_match import find_in_set_sql
 from app.services.uploads import public_video_thumbnail_url
+from app.services.module_exam_gate import exam_id_for_folder, folder_video_completion
 from app.services.video_progress import (
     WATCHED_THRESHOLD_SECONDS,
     is_video_watched,
@@ -90,10 +91,21 @@ def list_video_folders(
         .order_by(FolderMaster.display_order.asc(), FolderMaster.id.asc())
         .all()
     )
-    return [
-        VideoFolderItem(id=f.id, name=f.name, display_order=f.display_order or 0)
-        for f in folders
-    ]
+    items: list[VideoFolderItem] = []
+    for f in folders:
+        stats = folder_video_completion(db, current_user.id, f.id, subscription=subscription)
+        mapped_exam = exam_id_for_folder(db, f.id)
+        items.append(
+            VideoFolderItem(
+                id=f.id,
+                name=f.name,
+                display_order=f.display_order or 0,
+                videos_total=stats["videos_total"],
+                videos_watched=stats["videos_watched"],
+                module_test_unlocked=stats["complete"] if mapped_exam else None,
+            )
+        )
+    return items
 
 
 @router.get("", response_model=VideoListPage)

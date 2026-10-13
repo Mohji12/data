@@ -22,6 +22,11 @@ from app.security import (
 from app.services.batch_access import ensure_user_batch_active
 from app.services.password_crypto import password_matches_stored, php_password_for_db
 from app.services.password_reset_otp import request_password_reset_otp, reset_password_with_otp
+from app.services.rate_limit import (
+    enforce_login_rate_limit,
+    enforce_otp_request_rate_limit,
+    enforce_otp_verify_rate_limit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +103,7 @@ class LoginResponse(UserResponse):
 
 @router.post("/login", response_model=LoginResponse)
 def login(
-    _request: Request,
+    http_request: Request,
     body: Annotated[
         dict[str, Any],
         Body(
@@ -122,15 +127,16 @@ def login(
     ],
     db: Session = Depends(get_db),
 ):
+    enforce_login_rate_limit(http_request)
     try:
-        request = LoginRequest.model_validate(body)
+        login_body = LoginRequest.model_validate(body)
     except ValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=e.errors(),
         ) from e
 
-    email = request.email.strip()
+    email = login_body.email.strip()
     user = (
         db.query(User)
         .filter(func.lower(func.trim(User.email)) == email.lower())
@@ -150,7 +156,7 @@ def login(
             detail="Login is disabled for this subscription.",
         )
 
-    pwd = (request.password or "").strip()
+    pwd = (login_body.password or "").strip()
     if pwd:
         if not password_matches_stored(user.password, pwd):
             logger.info("login failed: bad password for email=%s", email)
@@ -196,6 +202,9 @@ def login(
     user.is_login = "Yes"
     db.add(user)
     db.commit()
+    from app.services.cache import invalidate_batch_active_cache
+
+    invalidate_batch_active_cache(user.id)
     db.refresh(user)
 
     token = create_access_token(user_id=user.id, email=user.email, session_id=session_id)
@@ -292,10 +301,12 @@ class ResetPasswordOtpRequest(BaseModel):
 
 @router.post("/forgot-password/request-otp")
 def forgot_password_request_otp(
+    http_request: Request,
     body: ForgotPasswordOtpRequest,
     db: Session = Depends(get_db),
 ) -> dict:
     """Send a numeric OTP to approved accounts (no reset link)."""
+    enforce_otp_request_rate_limit(str(body.email))
     try:
         return request_password_reset_otp(db, str(body.email))
     except ValueError as exc:
@@ -306,10 +317,12 @@ def forgot_password_request_otp(
 
 @router.post("/forgot-password/reset")
 def forgot_password_reset_with_otp(
+    http_request: Request,
     body: ResetPasswordOtpRequest,
     db: Session = Depends(get_db),
 ) -> dict:
     """Verify OTP and set a new password (PHP-compatible encryption)."""
+    enforce_otp_verify_rate_limit(http_request)
     try:
         return reset_password_with_otp(db, str(body.email), body.otp, body.password)
     except ValueError as exc:

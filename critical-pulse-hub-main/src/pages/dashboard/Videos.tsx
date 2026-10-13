@@ -377,7 +377,14 @@ export default function Videos() {
             </div>
             <div className="flex-1 min-w-0">
               <div className="font-sans text-[15px] font-medium text-ink truncate">{f.name}</div>
-              <div className="font-mono text-[11px] text-ink-faint mt-1 uppercase tracking-wider">Enter Folder</div>
+              {typeof f.videos_total === 'number' && f.videos_total > 0 ? (
+                <div className="font-mono text-[11px] text-ink-faint mt-1">
+                  {f.videos_watched ?? 0}/{f.videos_total} videos watched
+                  {f.module_test_unlocked ? ' · Test unlocked' : ''}
+                </div>
+              ) : (
+                <div className="font-mono text-[11px] text-ink-faint mt-1 uppercase tracking-wider">Enter Folder</div>
+              )}
             </div>
           </button>
         ))}

@@ -288,12 +288,15 @@ def approve_event_registration(
 
 
 def _upsert_option(db: Session, option_name: str, option_value: str) -> None:
+    from app.services.cache import invalidate_option_cache
+
     row = db.query(Option).filter(Option.option_name == option_name).first()
     if not row:
         row = Option(option_name=option_name, option_value=option_value)
     else:
         row.option_value = option_value
     db.add(row)
+    invalidate_option_cache(option_name)
 
 
 @router.get(f"/{_EVENT_SLUG}/brochure")
