@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react';
-import { Maximize2, Minimize2, Play, Pause, Settings, Volume1, Volume2, VolumeX } from 'lucide-react';
+import { Maximize2, Minimize2, Play, Pause, Settings, Volume1, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
 import { apiClient } from '@/lib/apiClient';
 import { useAuthStore } from '@/store/authStore';
@@ -123,6 +123,19 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+const VIDEO_ZOOM_MIN = 1;
+const VIDEO_ZOOM_MAX = 3;
+const VIDEO_ZOOM_STEP = 0.2;
+
+function touchPinchDistance(touches: React.TouchList | TouchList): number {
+  if (touches.length < 2) return 0;
+  const a = touches[0];
+  const b = touches[1];
+  const dx = a.clientX - b.clientX;
+  const dy = a.clientY - b.clientY;
+  return Math.hypot(dx, dy);
+}
+
 /** Block right-click context menus on the video page at all times. */
 function useBlockRightClick() {
   useEffect(() => {
@@ -167,7 +180,7 @@ function useBlockRightClick() {
  *  - Quality settings
  *  - Playback speed settings
  *  - Fullscreen button
- *  - Keyboard: ← → = ±10s, Space = play/pause, F = fullscreen
+ *  - Keyboard: ← → = ±10s, Space = play/pause, F = fullscreen, +/- = zoom (fullscreen)
  */
 export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: ProtectedVideoEmbedProps) {
   useBlockRightClick();
@@ -201,6 +214,10 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const userIntentRef = useRef<{ action: 'play' | 'pause'; at: number } | null>(null);
   const viewportExpandedRef = useRef(false);
   const overlayTouchRef = useRef<{ x: number; y: number; t: number } | null>(null);
+  const pinchZoomRef = useRef<{ dist: number; zoom: number } | null>(null);
+  const panDragRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const isExpandedRef = useRef(false);
+  const videoZoomRef = useRef(1);
   const lastChromeToggleRef = useRef(0);
   const lastFullscreenToggleRef = useRef(0);
   const controlsPointerDownRef = useRef(false);
@@ -240,6 +257,8 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const [viewportExpanded, setViewportExpanded] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [controlsActivity, setControlsActivity] = useState(0);
+  const [videoZoom, setVideoZoom] = useState(1);
+  const [videoPan, setVideoPan] = useState({ x: 0, y: 0 });
 
   const isDirectVideo = isDirectVideoFileUrl(videoUrl);
   const detected = isDirectVideo ? null : detectProvider(videoUrl);
@@ -275,6 +294,32 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   useEffect(() => {
     viewportExpandedRef.current = viewportExpanded;
   }, [viewportExpanded]);
+
+  useEffect(() => {
+    videoZoomRef.current = videoZoom;
+  }, [videoZoom]);
+
+  const resetVideoZoom = useCallback(() => {
+    setVideoZoom(1);
+    setVideoPan({ x: 0, y: 0 });
+    pinchZoomRef.current = null;
+    panDragRef.current = null;
+  }, []);
+
+  const clampZoom = useCallback((value: number) => {
+    return Math.min(VIDEO_ZOOM_MAX, Math.max(VIDEO_ZOOM_MIN, value));
+  }, []);
+
+  const adjustVideoZoom = useCallback(
+    (delta: number) => {
+      setVideoZoom((z) => {
+        const next = clampZoom(Math.round((z + delta) * 100) / 100);
+        if (next <= 1) setVideoPan({ x: 0, y: 0 });
+        return next;
+      });
+    },
+    [clampZoom],
+  );
 
   // Hide the seek line and controls after 5s unless the user is using them.
   useEffect(() => {
@@ -392,6 +437,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   );
 
   const exitExpandedView = useCallback(async () => {
+    resetVideoZoom();
     setViewportExpanded(false);
     setIsFullscreen(false);
     document.documentElement.style.overflow = '';
@@ -399,7 +445,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     if (getFullscreenElement()) {
       await exitDocumentFullscreen();
     }
-  }, []);
+  }, [resetVideoZoom]);
 
   /* ─── Fullscreen (native API on our container + mobile CSS fallback) ─── */
   /* Do NOT post requestFullscreen to Vimeo — postMessage loses user activation
@@ -1399,6 +1445,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
     const onBegin = () => setIsFullscreen(true);
     const onEnd = () => {
+      resetVideoZoom();
       setIsFullscreen(false);
       setViewportExpanded(false);
       document.body.style.overflow = '';
@@ -1409,7 +1456,29 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       video.removeEventListener('webkitbeginfullscreen', onBegin);
       video.removeEventListener('webkitendfullscreen', onEnd);
     };
-  }, [isDirectVideo, directVideoSrc]);
+  }, [isDirectVideo, directVideoSrc, resetVideoZoom]);
+
+  useEffect(() => {
+    isExpandedRef.current = isFullscreen || viewportExpanded;
+    if (!isFullscreen && !viewportExpanded) {
+      resetVideoZoom();
+    }
+  }, [isFullscreen, viewportExpanded, resetVideoZoom]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (!isExpandedRef.current) return;
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? VIDEO_ZOOM_STEP : -VIDEO_ZOOM_STEP;
+      adjustVideoZoom(delta);
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [adjustVideoZoom]);
 
   /* ─── Keyboard: ← → seek, Space play/pause, F fullscreen ─── */
 
@@ -1417,6 +1486,13 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     const handleKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      if (isExpandedRef.current && (e.key === '+' || e.key === '=' || e.key === '-')) {
+        e.preventDefault();
+        if (e.key === '-') adjustVideoZoom(-VIDEO_ZOOM_STEP);
+        else adjustVideoZoom(VIDEO_ZOOM_STEP);
+        return;
+      }
 
       switch (e.key) {
         case 'ArrowRight':
@@ -1456,7 +1532,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [currentTime, seekTo, togglePlayPause, toggleFullscreen, toggleMute, adjustVolume]);
+  }, [currentTime, seekTo, togglePlayPause, toggleFullscreen, toggleMute, adjustVolume, adjustVideoZoom]);
 
   /* ─── No video fallback ─── */
 
@@ -1491,6 +1567,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     setControlsVisible((visible) => !visible);
   };
 
+  const isExpanded = isFullscreen || viewportExpanded;
+  isExpandedRef.current = isExpanded;
+
   const handleOverlayClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (dismissOverlayMenus()) return;
@@ -1498,13 +1577,65 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   };
 
   const handleOverlayTouchStart = (e: React.TouchEvent) => {
+    const expanded = isExpandedRef.current;
+    if (expanded && e.touches.length >= 2) {
+      const dist = touchPinchDistance(e.touches);
+      if (dist > 0) {
+        pinchZoomRef.current = { dist, zoom: videoZoomRef.current };
+        panDragRef.current = null;
+        overlayTouchRef.current = null;
+      }
+      return;
+    }
+    if (expanded && videoZoomRef.current > 1 && e.touches.length === 1) {
+      const t = e.touches[0];
+      panDragRef.current = {
+        x: t.clientX,
+        y: t.clientY,
+        panX: videoPan.x,
+        panY: videoPan.y,
+      };
+      overlayTouchRef.current = null;
+      return;
+    }
     const t = e.touches[0];
     if (!t) return;
     overlayTouchRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
   };
 
+  const handleOverlayTouchMove = (e: React.TouchEvent) => {
+    if (!isExpandedRef.current) return;
+    if (e.touches.length >= 2 && pinchZoomRef.current) {
+      e.preventDefault();
+      const dist = touchPinchDistance(e.touches);
+      if (dist <= 0) return;
+      const ratio = dist / pinchZoomRef.current.dist;
+      const next = Math.min(
+        VIDEO_ZOOM_MAX,
+        Math.max(VIDEO_ZOOM_MIN, Math.round(pinchZoomRef.current.zoom * ratio * 100) / 100),
+      );
+      setVideoZoom(next);
+      if (next <= 1) setVideoPan({ x: 0, y: 0 });
+      return;
+    }
+    if (panDragRef.current && e.touches.length === 1 && videoZoomRef.current > 1) {
+      e.preventDefault();
+      const t = e.touches[0];
+      setVideoPan({
+        x: panDragRef.current.panX + (t.clientX - panDragRef.current.x),
+        y: panDragRef.current.panY + (t.clientY - panDragRef.current.y),
+      });
+    }
+  };
+
   const handleOverlayTouchEnd = (e: React.TouchEvent) => {
     e.stopPropagation();
+    if (pinchZoomRef.current && e.touches.length < 2) {
+      pinchZoomRef.current = null;
+    }
+    if (panDragRef.current && e.touches.length === 0) {
+      panDragRef.current = null;
+    }
     const start = overlayTouchRef.current;
     overlayTouchRef.current = null;
     if (!start) return;
@@ -1538,8 +1669,6 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
   const progress = duration ? (currentTime / duration) * 100 : 0;
 
-  const isExpanded = isFullscreen || viewportExpanded;
-
   const player = (
     <div
       ref={containerRef}
@@ -1566,42 +1695,52 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         e.stopPropagation();
       }}
     >
-      {isDirectVideo ? (
-        <video
-          ref={videoRef}
-          src={directVideoSrc ?? undefined}
-          title={title}
-          className="absolute inset-0 h-full w-full border-0 object-contain bg-black pointer-events-none"
-          playsInline
-          preload="metadata"
-          controlsList="nodownload noplaybackrate"
-          disablePictureInPicture
-          onError={() => {
-            setPlayerError(
-              'This video file could not be loaded. The file may be missing or the link may be incorrect.',
-            );
+      <div className="absolute inset-0 overflow-hidden bg-black">
+        <div
+          className="absolute inset-0 h-full w-full will-change-transform"
+          style={{
+            transform: `translate3d(${videoPan.x}px, ${videoPan.y}px, 0) scale(${videoZoom})`,
+            transformOrigin: 'center center',
           }}
-        />
-      ) : embedSrc ? (
-        <iframe
-          ref={iframeRef}
-          id={vimeoPlayerId}
-          src={embedSrc}
-          title={title}
-          className="absolute inset-0 h-full w-full border-0 pointer-events-none"
-          allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
-          referrerPolicy="strict-origin-when-cross-origin"
-        />
-      ) : (
-        <div className="absolute inset-0 flex items-center justify-center bg-black p-6 text-center">
-          <div className="max-w-md">
-            <p className="text-white font-display font-bold mb-2">Video unavailable</p>
-            <p className="text-white/80 text-sm font-sans">
-              No playable video URL was provided for this lesson.
-            </p>
-          </div>
+        >
+          {isDirectVideo ? (
+            <video
+              ref={videoRef}
+              src={directVideoSrc ?? undefined}
+              title={title}
+              className="absolute inset-0 h-full w-full border-0 object-contain bg-black pointer-events-none"
+              playsInline
+              preload="metadata"
+              controlsList="nodownload noplaybackrate"
+              disablePictureInPicture
+              onError={() => {
+                setPlayerError(
+                  'This video file could not be loaded. The file may be missing or the link may be incorrect.',
+                );
+              }}
+            />
+          ) : embedSrc ? (
+            <iframe
+              ref={iframeRef}
+              id={vimeoPlayerId}
+              src={embedSrc}
+              title={title}
+              className="absolute inset-0 h-full w-full border-0 pointer-events-none"
+              allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+              referrerPolicy="strict-origin-when-cross-origin"
+            />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center bg-black p-6 text-center">
+              <div className="max-w-md">
+                <p className="text-white font-display font-bold mb-2">Video unavailable</p>
+                <p className="text-white/80 text-sm font-sans">
+                  No playable video URL was provided for this lesson.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       {playerError && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/85 p-6 text-center pointer-events-none">
@@ -1629,6 +1768,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         onClick={handleOverlayClick}
         onDoubleClick={iosLike ? undefined : handleOverlayDoubleClick}
         onTouchStart={handleOverlayTouchStart}
+        onTouchMove={handleOverlayTouchMove}
         onTouchEnd={handleOverlayTouchEnd}
         onDragStart={(e) => e.preventDefault()}
       />
@@ -1943,6 +2083,50 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
                   aria-label="Quality Settings"
                 >
                   <Settings size={16} />
+                </button>
+              </div>
+            )}
+
+            {isExpanded && (
+              <div className="flex items-center gap-0.5 shrink-0">
+                <button
+                  type="button"
+                  disabled={videoZoom <= VIDEO_ZOOM_MIN}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    adjustVideoZoom(-VIDEO_ZOOM_STEP);
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  className="flex items-center justify-center w-9 h-11 shrink-0 text-white/80 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Zoom out (-)"
+                  aria-label="Zoom out"
+                >
+                  <ZoomOut size={16} />
+                </button>
+                <span className="min-w-[2.5rem] text-center font-mono text-[11px] text-white/70 tabular-nums">
+                  {Math.round(videoZoom * 100)}%
+                </span>
+                <button
+                  type="button"
+                  disabled={videoZoom >= VIDEO_ZOOM_MAX}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    adjustVideoZoom(VIDEO_ZOOM_STEP);
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  className="flex items-center justify-center w-9 h-11 shrink-0 text-white/80 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Zoom in (+)"
+                  aria-label="Zoom in"
+                >
+                  <ZoomIn size={16} />
                 </button>
               </div>
             )}
