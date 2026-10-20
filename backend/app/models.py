@@ -435,6 +435,8 @@ class MailCampaign(Base):
     send_batch_size = Column(Integer, nullable=False, default=100)
     send_pause_seconds = Column(Integer, nullable=False, default=300)
     next_wave_at = Column(DateTime, nullable=True)
+    skip_previously_bounced = Column(Boolean, nullable=False, default=True)
+    audience_snapshot_json = Column(Text, nullable=False, default="{}")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -458,6 +460,8 @@ class MailCampaignRecipient(Base):
     attempt_count = Column(Integer, nullable=False, default=0)
     last_error = Column(Text, nullable=True)
     accepted_at = Column(DateTime, nullable=True)
+    delivery_status = Column(String(32), nullable=True)
+    bounced_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -477,10 +481,40 @@ class MailClickEvent(Base):
 
 class MailSuppression(Base):
     __tablename__ = "mail_suppression"
+    __table_args__ = (Index("ix_mail_suppression_reason", "reason"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     email = Column(String(255), nullable=False, unique=True)
     reason = Column(String(64), nullable=False, default="unsubscribe")
+    source = Column(String(64), nullable=False, default="unsubscribe_link")
+    diagnostic = Column(Text, nullable=True)
+    bounce_count = Column(Integer, nullable=False, default=0)
+    last_event_at = Column(DateTime, nullable=True)
+    created_by_admin_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MailProviderEvent(Base):
+    __tablename__ = "mail_provider_event"
+    __table_args__ = (
+        UniqueConstraint("webhook_request_id", name="uq_mail_provider_event_webhook_id"),
+        Index("ix_mail_provider_event_email_name", "email", "event_name"),
+        Index("ix_mail_provider_event_campaign_name", "campaign_id", "event_name"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    webhook_request_id = Column(String(191), nullable=False)
+    event_name = Column(String(64), nullable=False)
+    email = Column(String(255), nullable=False, default="")
+    campaign_id = Column(Integer, nullable=True)
+    recipient_id = Column(Integer, nullable=True)
+    request_id = Column(String(191), nullable=True)
+    client_reference = Column(String(255), nullable=True)
+    reason = Column(String(128), nullable=True)
+    diagnostic = Column(Text, nullable=True)
+    occurred_at = Column(DateTime, nullable=True)
+    payload_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

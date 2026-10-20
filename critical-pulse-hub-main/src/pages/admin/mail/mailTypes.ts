@@ -34,6 +34,7 @@ export type MailCampaign = {
   send_pause_seconds?: number;
   send_pause_minutes?: number;
   next_wave_at?: string | null;
+  skip_previously_bounced?: boolean;
   created_at?: string | null;
   template?: MailTemplate | null;
 };
@@ -49,20 +50,53 @@ export type MailDashboard = {
 
 export type AudiencePreview = {
   count: number;
-  preview: { email: string; name?: string; batch?: string }[];
+  eligible?: number;
+  preview: { email: string; name?: string; batch?: string; flag?: string }[];
   invalid: string[];
   invalid_count: number;
   duplicate_count: number;
+  unverified?: string[];
+  unverified_count?: number;
+  previously_bounced_count?: number;
+  disposable_count?: number;
+  unsubscribed_count?: number;
+  complaints_count?: number;
+  role_warning_count?: number;
+  flagged?: { email: string; flag?: string; name?: string }[];
 };
 
 export type MailAnalytics = {
   campaign: MailCampaign;
   sent: number;
+  accepted?: number;
+  delivered?: number;
+  bounced?: number;
   failed: number;
+  suppressed?: number;
   unique_opens: number;
   total_clicks: number;
   open_rate: number;
   recent_clicks: { email: string; dest_url: string; at: string | null }[];
+};
+
+export type MailSuppression = {
+  id: number;
+  email: string;
+  reason: string;
+  source: string;
+  diagnostic: string;
+  bounce_count: number;
+  last_event_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type MailSuppressionList = {
+  total: number;
+  page: number;
+  page_size: number;
+  reasons: string[];
+  items: MailSuppression[];
 };
 
 export function formatIst(iso?: string | null): string {

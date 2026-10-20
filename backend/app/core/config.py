@@ -161,6 +161,20 @@ class Settings:
         self.auto_create_whatsapp_webhook_table: bool = os.getenv(
             "AUTO_CREATE_WHATSAPP_WEBHOOK_TABLE", "true"
         ).lower() in ("1", "true", "yes")
+        self.zeptomail_webhook_auth_key: str = os.getenv("ZEPTOMAIL_WEBHOOK_AUTH_KEY", "").strip()
+        self.zeptomail_webhook_authorization_header: str = (
+            os.getenv("ZEPTOMAIL_WEBHOOK_AUTHORIZATION_HEADER", "Authorization").strip() or "Authorization"
+        )
+        self.zeptomail_webhook_authorization_value: str = os.getenv(
+            "ZEPTOMAIL_WEBHOOK_AUTHORIZATION_VALUE", ""
+        ).strip()
+        self.zeptomail_webhook_max_skew_sec: int = max(
+            60, int(os.getenv("ZEPTOMAIL_WEBHOOK_MAX_SKEW_SEC", "900"))
+        )
+        self.mail_soft_bounce_suppress_after: int = max(
+            1, int(os.getenv("MAIL_SOFT_BOUNCE_SUPPRESS_AFTER", "3"))
+        )
+        self.mail_dns_timeout_sec: float = max(0.5, float(os.getenv("MAIL_DNS_TIMEOUT_SEC", "2")))
         self.redis_enabled: bool = os.getenv("REDIS_ENABLED", "false").lower() in (
             "1",
             "true",

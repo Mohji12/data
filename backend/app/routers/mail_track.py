@@ -7,9 +7,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import MailCampaignRecipient, MailClickEvent, MailSuppression
+from app.models import MailCampaignRecipient, MailClickEvent
 from app.services.mail_campaign_audience import normalize_email
 from app.services.mail_campaign_render import dest_url_is_allowed
+from app.services.mail_suppression import upsert_suppression
 
 router = APIRouter(tags=["mail-track"])
 
@@ -42,11 +43,13 @@ def mail_click_track(
 def mail_unsubscribe(token: str, db: Session = Depends(get_db)):
     rec = db.query(MailCampaignRecipient).filter(MailCampaignRecipient.tracking_token == token).first()
     if rec and rec.email:
-        email = normalize_email(rec.email)
-        existing = db.query(MailSuppression).filter(MailSuppression.email == email).first()
-        if not existing:
-            db.add(MailSuppression(email=email, reason="unsubscribe"))
-            db.commit()
+        upsert_suppression(
+            db,
+            normalize_email(rec.email),
+            "unsubscribe",
+            source="unsubscribe_link",
+            commit=True,
+        )
     return HTMLResponse(
         "<html><body style='font-family:sans-serif;padding:40px;'>"
         "<h1>Unsubscribed</h1><p>You will no longer receive campaign emails from this list.</p>"

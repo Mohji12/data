@@ -25,6 +25,8 @@ export default function AdminMailCampaignNew() {
   const [pauseMinutes, setPauseMinutes] = useState(5);
   const [preview, setPreview] = useState<AudiencePreview | null>(null);
   const [createdId, setCreatedId] = useState<number | null>(null);
+  const [skipBounced, setSkipBounced] = useState(true);
+  const [excludeEmails, setExcludeEmails] = useState<string[]>([]);
 
   const templates = useQuery({
     queryKey: ['adminMailTemplates'],
@@ -45,7 +47,13 @@ export default function AdminMailCampaignNew() {
     mutationFn: () =>
       apiClient('/admin/mail/audience/preview', {
         method: 'POST',
-        body: JSON.stringify({ audience_type: audienceType, audience }),
+        body: JSON.stringify({
+          audience_type: audienceType,
+          audience,
+          skip_previously_bounced: skipBounced,
+          exclude_emails: excludeEmails,
+          check_dns: true,
+        }),
       }) as Promise<AudiencePreview>,
     onSuccess: (res) => setPreview(res),
     onError: (e: Error) => toast.error(e.message),
@@ -65,6 +73,8 @@ export default function AdminMailCampaignNew() {
           scheduled_at_ist: sendMode === 'later' ? scheduledAt : null,
           send_batch_size: batchSize,
           send_pause_minutes: pauseMinutes,
+          skip_previously_bounced: skipBounced,
+          exclude_emails: excludeEmails,
         }),
       }) as Promise<MailCampaign>,
     onSuccess: (row) => {
@@ -205,6 +215,11 @@ export default function AdminMailCampaignNew() {
               </p>
             </label>
           )}
+          <label className="flex items-center gap-2 text-sm text-slate">
+            <input type="checkbox" checked={skipBounced} onChange={(e) => { setSkipBounced(e.target.checked); setPreview(null); }} />
+            Skip previously bounced
+          </label>
+          <p className="text-xs text-slate/55">Unsubscribed and complaint addresses are always skipped. Unverified is not the same as invalid.</p>
           <div className="flex flex-wrap gap-2">
             <button type="button" className="font-mono text-[11px] uppercase border border-border-soft px-4 py-2.5 rounded-sm" onClick={() => setStep(1)}>
               Back
@@ -226,17 +241,42 @@ export default function AdminMailCampaignNew() {
             </button>
           </div>
           {preview && (
-            <div className="text-sm font-sans text-slate">
-              <strong>{preview.count}</strong> eligible
-              {preview.duplicate_count ? ` · ${preview.duplicate_count} duplicates skipped` : ''}
-              {preview.invalid_count ? ` · ${preview.invalid_count} invalid` : ''}
+            <div className="text-sm font-sans text-slate space-y-2">
+              <p>
+                <strong>{preview.count}</strong> eligible
+                {preview.duplicate_count ? ` · ${preview.duplicate_count} duplicates` : ''}
+                {preview.invalid_count ? ` · ${preview.invalid_count} invalid` : ''}
+                {preview.unverified_count ? ` · ${preview.unverified_count} unverified (DNS)` : ''}
+                {preview.previously_bounced_count ? ` · ${preview.previously_bounced_count} bounced` : ''}
+                {preview.disposable_count ? ` · ${preview.disposable_count} disposable` : ''}
+                {preview.unsubscribed_count ? ` · ${preview.unsubscribed_count} unsubscribed` : ''}
+                {preview.complaints_count ? ` · ${preview.complaints_count} complaints` : ''}
+                {preview.role_warning_count ? ` · ${preview.role_warning_count} role warnings` : ''}
+              </p>
               <ul className="mt-2 font-mono text-[11px] text-slate/60 space-y-1">
                 {preview.preview.map((r) => (
-                  <li key={r.email}>
-                    {r.email} {r.name ? `· ${r.name}` : ''} {r.batch ? `· ${r.batch}` : ''}
+                  <li key={`${r.email}-${r.flag || 'ok'}`} className="flex flex-wrap items-center gap-2">
+                    <span>
+                      {r.email} {r.name ? `· ${r.name}` : ''} {r.flag ? `· ${r.flag}` : ''}
+                    </span>
+                    {r.flag && r.flag !== 'invalid' && r.flag !== 'unsubscribed' && r.flag !== 'complaint' && r.flag !== 'disposable' && r.flag !== 'previously_bounced' && (
+                      <button
+                        type="button"
+                        className="uppercase text-[10px] text-blush"
+                        onClick={() => {
+                          setExcludeEmails((cur) => (cur.includes(r.email) ? cur : [...cur, r.email]));
+                          setPreview(null);
+                        }}
+                      >
+                        Exclude
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
+              {excludeEmails.length > 0 && (
+                <p className="text-xs text-slate/55">Excluded: {excludeEmails.join(', ')}</p>
+              )}
             </div>
           )}
         </section>

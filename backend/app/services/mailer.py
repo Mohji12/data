@@ -29,6 +29,7 @@ def send_html_email(
     bcc: str | Sequence[str] | None = None,
     reply_to: str | None = None,
     inline_images: Sequence[tuple[bytes, str, str]] | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> None:
     settings = get_settings()
     if not settings.smtp_host:
@@ -55,6 +56,11 @@ def send_html_email(
         msg["Bcc"] = ", ".join(bcc_list)
     if reply_to or settings.smtp_reply_to:
         msg["Reply-To"] = (reply_to or settings.smtp_reply_to).strip()
+    for header, value in (extra_headers or {}).items():
+        name = (header or "").strip()
+        val = (value or "").strip()
+        if name and val:
+            msg[name] = val
     msg.set_content("This email requires HTML support.")
     msg.add_alternative(html, subtype="html")
     if inline_images:

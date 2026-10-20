@@ -11,8 +11,9 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, or_
 
 from app.db import SessionLocal
-from app.models import MailCampaign, MailCampaignRecipient, MailCampaignTemplate, MailSuppression
+from app.models import MailCampaign, MailCampaignRecipient, MailCampaignTemplate
 from app.services.mail_campaign_render import parse_cta_list, render_campaign_email
+from app.services.mail_suppression import lookup_suppression, should_skip_send
 from app.services.mailer import send_html_email
 
 logger = logging.getLogger(__name__)
@@ -38,14 +39,14 @@ def _is_transient_smtp(exc: Exception) -> bool:
     return any(token in msg for token in ("timeout", "temporarily", "connection", "421", "450", "451", "452"))
 
 
-def _deliver(to_email: str, subject: str, html: str, inline_images=None) -> None:
+def _deliver(to_email: str, subject: str, html: str, inline_images=None, extra_headers=None) -> None:
     try:
-        send_html_email(to_email, subject, html, inline_images=inline_images)
+        send_html_email(to_email, subject, html, inline_images=inline_images, extra_headers=extra_headers)
     except Exception as exc:
         if not _is_transient_smtp(exc):
             raise
         time.sleep(0.4)
-        send_html_email(to_email, subject, html, inline_images=inline_images)
+        send_html_email(to_email, subject, html, inline_images=inline_images, extra_headers=extra_headers)
 
 
 def _enqueue_self_poll() -> None:
@@ -242,10 +243,7 @@ def _send_claimed_campaign(db, camp: MailCampaign) -> dict:
     subject = (camp.subject_override or tpl.subject or "").strip()
     preview = (camp.preview_text_override or tpl.preview_text or "").strip()
     cta = parse_cta_list(tpl.cta_json)
-    blocked = {
-        (r[0] or "").strip().lower()
-        for r in db.query(MailSuppression.email).all()
-    }
+    skip_bounced = bool(getattr(camp, "skip_previously_bounced", True))
     wave_size, pause_sec = _wave_settings(camp)
 
     while True:
@@ -270,7 +268,7 @@ def _send_claimed_campaign(db, camp: MailCampaign) -> dict:
                 break
             processed_this_wave += 1
             email = (rec.email or "").strip().lower()
-            if email in blocked:
+            if should_skip_send(lookup_suppression(db, email), skip_bounced):
                 rec.status = "suppressed"
                 db.add(rec)
                 _refresh_counts(db, camp)
@@ -291,7 +289,13 @@ def _send_claimed_campaign(db, camp: MailCampaign) -> dict:
                 tracking_token=rec.tracking_token,
             )
             try:
-                _deliver(rec.email, subject, html, inline)
+                _deliver(
+                    rec.email,
+                    subject,
+                    html,
+                    inline,
+                    extra_headers={"X-TM-CLIENT-REF": f"{campaign_id}:{rec.id}"},
+                )
                 rec.status = "accepted"
                 rec.accepted_at = datetime.utcnow()
                 rec.last_error = None

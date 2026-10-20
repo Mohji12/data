@@ -4,6 +4,7 @@ const items = [
   { to: '/admin/mail', label: 'Dashboard', match: 'exact' as const },
   { to: '/admin/mail/templates', label: 'Templates' },
   { to: '/admin/mail/campaigns', label: 'Campaigns' },
+  { to: '/admin/mail/suppressions', label: 'Suppressions' },
 ];
 
 export default function AdminMailNav() {

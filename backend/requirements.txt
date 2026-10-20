@@ -16,3 +16,4 @@ redis[hiredis]>=5.0.0
 rq>=2.0.0
 fakeredis>=2.21.0
 bleach>=6.0.0
+dnspython>=2.6.0

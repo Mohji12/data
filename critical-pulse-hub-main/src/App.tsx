@@ -74,6 +74,7 @@ const AdminMailTemplateEditor = lazy(() => import('@/pages/admin/mail/AdminMailT
 const AdminMailCampaigns = lazy(() => import('@/pages/admin/mail/AdminMailCampaigns'));
 const AdminMailCampaignNew = lazy(() => import('@/pages/admin/mail/AdminMailCampaignNew'));
 const AdminMailCampaignAnalytics = lazy(() => import('@/pages/admin/mail/AdminMailCampaignAnalytics'));
+const AdminMailSuppressions = lazy(() => import('@/pages/admin/mail/AdminMailSuppressions'));
 
 const WHATSAPP_BULK_URL = 'https://wapp.sakshisoftware.in/';
 
@@ -202,6 +203,7 @@ const App = () => {
             <Route path="mail/campaigns" element={<AdminMailCampaigns />} />
             <Route path="mail/campaigns/new" element={<AdminMailCampaignNew />} />
             <Route path="mail/campaigns/:id" element={<AdminMailCampaignAnalytics />} />
+            <Route path="mail/suppressions" element={<AdminMailSuppressions />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>

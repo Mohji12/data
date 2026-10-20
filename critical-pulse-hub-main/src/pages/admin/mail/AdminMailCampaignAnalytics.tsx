@@ -18,6 +18,15 @@ export default function AdminMailCampaignAnalytics() {
     refetchInterval: 4000,
   });
 
+  const suppressFailMut = useMutation({
+    mutationFn: () => apiClient(`/admin/mail/campaigns/${campaignId}/suppress-smtp-failures`, { method: 'POST' }),
+    onSuccess: (res: { added?: number }) => {
+      toast.success(`Suppressed ${res.added ?? 0} SMTP failures`);
+      void qc.invalidateQueries({ queryKey: ['adminMailAnalytics', campaignId] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const cancelMut = useMutation({
     mutationFn: () => apiClient(`/admin/mail/campaigns/${campaignId}/cancel`, { method: 'POST' }),
     onSuccess: () => {
@@ -35,7 +44,7 @@ export default function AdminMailCampaignAnalytics() {
         <div>
           <h1 className="font-display font-bold text-3xl text-slate">{camp?.name || 'Campaign'}</h1>
           <p className="font-mono text-[11px] text-slate/55 mt-1.5 uppercase tracking-[0.14em]">
-            Sent / failed from SMTP · opened = unique click
+            Accepted is SMTP · bounced/delivered come from ZeptoMail · opened = unique click
           </p>
         </div>
         <Link to="/admin/mail/campaigns" className="font-mono text-[11px] uppercase tracking-wider border border-border-soft px-4 py-2.5 rounded-sm">
@@ -57,6 +66,11 @@ export default function AdminMailCampaignAnalytics() {
             {camp.next_wave_at && (
               <span className="font-mono text-[11px] text-slate/55">Next wave {formatIst(camp.next_wave_at)} IST</span>
             )}
+            {isTech && (data.failed ?? 0) > 0 && (
+              <button type="button" className="font-mono text-[10px] uppercase text-slate/70" onClick={() => suppressFailMut.mutate()}>
+                Suppress SMTP 5xx
+              </button>
+            )}
             {isTech && !['sent', 'failed', 'cancelled'].includes(camp.status) && (
               <button type="button" className="font-mono text-[10px] uppercase text-blush ml-auto" onClick={() => cancelMut.mutate()}>
                 Cancel
@@ -72,12 +86,14 @@ export default function AdminMailCampaignAnalytics() {
               ? ` · ${camp.accepted_count + camp.failed_count + camp.suppressed_count}/${camp.queued_count} processed`
               : ''}
           </p>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-8">
             {[
-              { label: 'Sent', value: data.sent },
-              { label: 'Failed', value: data.failed },
+              { label: 'Accepted (SMTP)', value: data.accepted ?? data.sent },
+              { label: 'Delivered', value: data.delivered ?? 0 },
+              { label: 'Bounced', value: data.bounced ?? 0 },
+              { label: 'Failed (SMTP)', value: data.failed },
+              { label: 'Suppressed', value: data.suppressed ?? 0 },
               { label: 'Unique opens', value: data.unique_opens },
-              { label: 'Open rate', value: `${data.open_rate}%` },
             ].map((s) => (
               <div key={s.label} className="rounded-sm border border-border-soft bg-chalk px-4 py-4">
                 <div className="font-mono text-[10px] text-slate/50 uppercase tracking-wider">{s.label}</div>

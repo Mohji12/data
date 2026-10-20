@@ -23,6 +23,7 @@ from app.models import (
     MailCampaignRecipient,
     MailCampaignTemplate,
     MailClickEvent,
+    MailProviderEvent,
     MailSuppression,
     RegistrationPaymentTxn,
     WhatsAppWebhookEvent,
@@ -48,6 +49,7 @@ from app.routers.admin_extension_requests import router as admin_extension_reque
 from app.routers.whatsapp_webhook import router as whatsapp_webhook_router
 from app.routers.admin_mail_campaigns import router as admin_mail_router
 from app.routers.mail_track import router as mail_track_router
+from app.routers.mail_zepto_webhook import router as mail_zepto_webhook_router
 
 
 def _ensure_event_registration_fee_columns() -> None:
@@ -73,27 +75,57 @@ def _ensure_event_registration_fee_columns() -> None:
                 conn.execute(text(f"ALTER TABLE event_registration ADD COLUMN {name} {ddl}"))
 
 
-def _ensure_mail_campaign_throttle_columns() -> None:
-    columns = {
-        "send_batch_size": "INT NOT NULL DEFAULT 100",
-        "send_pause_seconds": "INT NOT NULL DEFAULT 300",
-        "next_wave_at": "DATETIME DEFAULT NULL",
-    }
-    with engine.begin() as conn:
-        existing = {
-            row[0]
-            for row in conn.execute(
-                text(
-                    "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
-                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'mail_campaign'"
-                )
+def _table_columns(conn, table: str) -> set[str]:
+    return {
+        row[0]
+        for row in conn.execute(
+            text(
+                "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                f"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}'"
             )
-        }
+        )
+    }
+
+
+def _ensure_columns(table: str, columns: dict[str, str]) -> None:
+    with engine.begin() as conn:
+        existing = _table_columns(conn, table)
         if not existing:
             return
         for name, ddl in columns.items():
             if name not in existing:
-                conn.execute(text(f"ALTER TABLE mail_campaign ADD COLUMN {name} {ddl}"))
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+
+
+def _ensure_mail_campaign_throttle_columns() -> None:
+    _ensure_columns(
+        "mail_campaign",
+        {
+            "send_batch_size": "INT NOT NULL DEFAULT 100",
+            "send_pause_seconds": "INT NOT NULL DEFAULT 300",
+            "next_wave_at": "DATETIME DEFAULT NULL",
+            "skip_previously_bounced": "TINYINT(1) NOT NULL DEFAULT 1",
+            "audience_snapshot_json": "TEXT",
+        },
+    )
+    _ensure_columns(
+        "mail_campaign_recipient",
+        {
+            "delivery_status": "VARCHAR(32) DEFAULT NULL",
+            "bounced_at": "DATETIME DEFAULT NULL",
+        },
+    )
+    _ensure_columns(
+        "mail_suppression",
+        {
+            "source": "VARCHAR(64) NOT NULL DEFAULT 'unsubscribe_link'",
+            "diagnostic": "TEXT",
+            "bounce_count": "INT NOT NULL DEFAULT 0",
+            "last_event_at": "DATETIME DEFAULT NULL",
+            "created_by_admin_id": "INT DEFAULT NULL",
+            "updated_at": "DATETIME DEFAULT NULL",
+        },
+    )
 
 
 @asynccontextmanager
@@ -113,6 +145,7 @@ async def lifespan(app: FastAPI):
     MailCampaignRecipient.__table__.create(bind=engine, checkfirst=True)
     MailClickEvent.__table__.create(bind=engine, checkfirst=True)
     MailSuppression.__table__.create(bind=engine, checkfirst=True)
+    MailProviderEvent.__table__.create(bind=engine, checkfirst=True)
     _ensure_mail_campaign_throttle_columns()
     try:
         from app.core.job_queue import enqueue_mail_poll
@@ -176,6 +209,7 @@ app.include_router(admin_extension_requests_router)
 app.include_router(whatsapp_webhook_router)
 app.include_router(admin_mail_router)
 app.include_router(mail_track_router)
+app.include_router(mail_zepto_webhook_router)
 
 # Same URL shape as PHP: files saved under uploads/registration (see uploads.save_registration_document).
 registration_uploads = Path(__file__).resolve().parent.parent / "uploads" / "registration"

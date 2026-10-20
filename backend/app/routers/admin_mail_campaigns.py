@@ -22,8 +22,10 @@ from app.models import (
     MailCampaignRecipient,
     MailCampaignTemplate,
     MailClickEvent,
+    MailSuppression,
 )
-from app.services.mail_campaign_audience import parse_audience_json, resolve_audience
+from app.services.mail_campaign_audience import parse_audience_json, parse_pasted_list, resolve_audience
+from app.services.mail_suppression import REASONS, serialize_suppression, upsert_suppression
 from app.services.mail_campaign_render import parse_cta_list, render_campaign_email, render_campaign_html
 from app.services.mail_campaign_time import parse_ist_to_naive_utc
 from app.services.mailer import send_html_email
@@ -117,6 +119,8 @@ def _serialize_campaign(row: MailCampaign) -> dict[str, Any]:
         "send_pause_seconds": pause_sec,
         "send_pause_minutes": pause_sec // 60,
         "next_wave_at": row.next_wave_at.isoformat() + "Z" if row.next_wave_at else None,
+        "skip_previously_bounced": bool(getattr(row, "skip_previously_bounced", True)),
+        "audience_snapshot": parse_audience_json(getattr(row, "audience_snapshot_json", None)),
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
@@ -162,6 +166,9 @@ class TestSendPayload(BaseModel):
 class AudiencePreviewPayload(BaseModel):
     audience_type: str
     audience: dict[str, Any] = Field(default_factory=dict)
+    skip_previously_bounced: bool = True
+    exclude_emails: list[str] = Field(default_factory=list)
+    check_dns: bool = True
 
 
 class CampaignCreatePayload(BaseModel):
@@ -176,6 +183,13 @@ class CampaignCreatePayload(BaseModel):
     send_batch_size: int = 100
     send_pause_minutes: Optional[int] = 5
     send_pause_seconds: Optional[int] = None
+    skip_previously_bounced: bool = True
+    exclude_emails: list[str] = Field(default_factory=list)
+
+
+class SuppressionCreatePayload(BaseModel):
+    pasted: str = ""
+    reason: str = "manual_block"
 
 
 class CampaignConfirmPayload(BaseModel):
@@ -355,7 +369,14 @@ def test_send_template(template_id: int, payload: TestSendPayload, db: Session =
 @router.post("/audience/preview")
 def audience_preview(payload: AudiencePreviewPayload, db: Session = Depends(get_db)):
     try:
-        result = resolve_audience(db, payload.audience_type, payload.audience)
+        result = resolve_audience(
+            db,
+            payload.audience_type,
+            payload.audience,
+            skip_previously_bounced=payload.skip_previously_bounced,
+            exclude_emails=payload.exclude_emails,
+            check_dns=payload.check_dns,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
@@ -364,6 +385,16 @@ def audience_preview(payload: AudiencePreviewPayload, db: Session = Depends(get_
         "invalid": result["invalid"],
         "invalid_count": result["invalid_count"],
         "duplicate_count": result["duplicate_count"],
+        "unverified": result.get("unverified") or [],
+        "unverified_count": result.get("unverified_count") or 0,
+        "previously_bounced_count": result.get("previously_bounced_count") or 0,
+        "disposable_count": result.get("disposable_count") or 0,
+        "unsubscribed_count": result.get("unsubscribed_count") or 0,
+        "complaints_count": result.get("complaints_count") or 0,
+        "role_warning_count": result.get("role_warning_count") or 0,
+        "flagged": result.get("flagged") or [],
+        "snapshot": result.get("snapshot") or {},
+        "eligible": result["count"],
     }
 
 
@@ -427,19 +458,29 @@ def create_campaign(
         if not scheduled_at:
             raise HTTPException(status_code=422, detail="scheduled_at_ist is required")
         status = "draft"
+    audience = dict(payload.audience or {})
+    if payload.exclude_emails:
+        audience["exclude_emails"] = [e.strip().lower() for e in payload.exclude_emails if e.strip()]
     row = MailCampaign(
         name=name,
         template_id=tpl.id,
         subject_override=(payload.subject_override or "").strip() or None,
         preview_text_override=(payload.preview_text_override or "").strip() or None,
         audience_type=(payload.audience_type or "").strip().lower(),
-        audience_json=json.dumps(payload.audience or {}),
+        audience_json=json.dumps(audience),
         status=status,
         scheduled_at=scheduled_at,
         send_batch_size=_clamp_batch_size(payload.send_batch_size),
         send_pause_seconds=_clamp_pause_seconds(
             seconds=payload.send_pause_seconds,
             minutes=payload.send_pause_minutes,
+        ),
+        skip_previously_bounced=bool(payload.skip_previously_bounced),
+        audience_snapshot_json=json.dumps(
+            {
+                "skip_previously_bounced": bool(payload.skip_previously_bounced),
+                "exclude_emails": [e.strip().lower() for e in payload.exclude_emails if e.strip()],
+            }
         ),
         created_by_admin_id=admin.id,
     )
@@ -469,8 +510,19 @@ def confirm_campaign(campaign_id: int, payload: CampaignConfirmPayload, db: Sess
         raise HTTPException(status_code=404, detail="Campaign not found")
     if camp.status not in {"draft"}:
         raise HTTPException(status_code=409, detail="Campaign already confirmed")
+    audience = parse_audience_json(camp.audience_json)
+    snapshot = parse_audience_json(getattr(camp, "audience_snapshot_json", None))
+    skip_bounced = bool(getattr(camp, "skip_previously_bounced", True))
+    exclude = snapshot.get("exclude_emails") or audience.get("exclude_emails") or []
     try:
-        resolved = resolve_audience(db, camp.audience_type, parse_audience_json(camp.audience_json))
+        resolved = resolve_audience(
+            db,
+            camp.audience_type,
+            audience,
+            skip_previously_bounced=skip_bounced,
+            exclude_emails=list(exclude),
+            check_dns=False,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if resolved["count"] < 1:
@@ -491,6 +543,7 @@ def confirm_campaign(campaign_id: int, payload: CampaignConfirmPayload, db: Sess
             )
         )
     camp.queued_count = resolved["count"]
+    camp.audience_snapshot_json = json.dumps(resolved.get("snapshot") or snapshot)
     if camp.scheduled_at and camp.scheduled_at > datetime.utcnow():
         camp.status = "scheduled"
     else:
@@ -526,7 +579,7 @@ def campaign_analytics(campaign_id: int, db: Session = Depends(get_db)):
     camp = db.query(MailCampaign).filter(MailCampaign.id == campaign_id).first()
     if not camp:
         raise HTTPException(status_code=404, detail="Campaign not found")
-    sent = (
+    accepted = (
         db.query(func.count(MailCampaignRecipient.id))
         .filter(MailCampaignRecipient.campaign_id == campaign_id, MailCampaignRecipient.status == "accepted")
         .scalar()
@@ -535,6 +588,27 @@ def campaign_analytics(campaign_id: int, db: Session = Depends(get_db)):
     failed = (
         db.query(func.count(MailCampaignRecipient.id))
         .filter(MailCampaignRecipient.campaign_id == campaign_id, MailCampaignRecipient.status == "failed")
+        .scalar()
+        or 0
+    )
+    suppressed = (
+        db.query(func.count(MailCampaignRecipient.id))
+        .filter(MailCampaignRecipient.campaign_id == campaign_id, MailCampaignRecipient.status == "suppressed")
+        .scalar()
+        or 0
+    )
+    bounced = (
+        db.query(func.count(MailCampaignRecipient.id))
+        .filter(
+            MailCampaignRecipient.campaign_id == campaign_id,
+            MailCampaignRecipient.delivery_status.in_(["hard_bounce", "soft_bounce"]),
+        )
+        .scalar()
+        or 0
+    )
+    delivered = (
+        db.query(func.count(MailCampaignRecipient.id))
+        .filter(MailCampaignRecipient.campaign_id == campaign_id, MailCampaignRecipient.delivery_status == "delivered")
         .scalar()
         or 0
     )
@@ -555,11 +629,15 @@ def campaign_analytics(campaign_id: int, db: Session = Depends(get_db)):
         .limit(30)
         .all()
     )
-    rate = round((unique_opens / sent) * 100, 1) if sent else 0.0
+    rate = round((unique_opens / accepted) * 100, 1) if accepted else 0.0
     return {
         "campaign": _serialize_campaign(camp),
-        "sent": sent,
+        "sent": accepted,
+        "accepted": accepted,
+        "delivered": delivered,
+        "bounced": bounced,
         "failed": failed,
+        "suppressed": suppressed,
         "unique_opens": unique_opens,
         "total_clicks": total_clicks,
         "open_rate": rate,
@@ -572,3 +650,101 @@ def campaign_analytics(campaign_id: int, db: Session = Depends(get_db)):
             for ev, email in recent
         ],
     }
+
+
+@router.get("/suppressions")
+def list_suppressions(
+    q: str = Query(""),
+    reason: str = Query(""),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    query = db.query(MailSuppression)
+    needle = (q or "").strip().lower()
+    if needle:
+        query = query.filter(MailSuppression.email.contains(needle))
+    reason_key = (reason or "").strip().lower()
+    if reason_key and reason_key in REASONS:
+        query = query.filter(MailSuppression.reason == reason_key)
+    total = query.count()
+    rows = (
+        query.order_by(MailSuppression.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "reasons": list(REASONS),
+        "items": [serialize_suppression(r) for r in rows],
+    }
+
+
+@router.post("/suppressions", dependencies=[Depends(require_admin_type("techadmin"))])
+def create_suppressions(
+    payload: SuppressionCreatePayload,
+    db: Session = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    reason = (payload.reason or "manual_block").strip().lower()
+    if reason not in REASONS:
+        reason = "manual_block"
+    accepted, invalid, _dupes = parse_pasted_list(payload.pasted)
+    added = 0
+    for rec in accepted:
+        row = upsert_suppression(
+            db,
+            rec["email"],
+            reason,
+            source="admin",
+            admin_id=admin.id,
+        )
+        if row:
+            added += 1
+    db.commit()
+    return {"added": added, "invalid": invalid, "invalid_count": len(invalid)}
+
+
+@router.delete("/suppressions/{suppression_id}", dependencies=[Depends(require_admin_type("techadmin"))])
+def delete_suppression(suppression_id: int, db: Session = Depends(get_db)):
+    row = db.query(MailSuppression).filter(MailSuppression.id == suppression_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Suppression not found")
+    db.delete(row)
+    db.commit()
+    return {"status": "ok"}
+
+
+@router.post("/campaigns/{campaign_id}/suppress-smtp-failures", dependencies=[Depends(require_admin_type("techadmin"))])
+def suppress_smtp_failures(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    camp = db.query(MailCampaign).filter(MailCampaign.id == campaign_id).first()
+    if not camp:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    rows = (
+        db.query(MailCampaignRecipient)
+        .filter(MailCampaignRecipient.campaign_id == campaign_id, MailCampaignRecipient.status == "failed")
+        .all()
+    )
+    added = 0
+    for rec in rows:
+        err = (rec.last_error or "").lower()
+        if not any(token in err for token in ("550", "551", "552", "553", "554", "permanent", "user unknown", "mailbox")):
+            continue
+        upsert_suppression(
+            db,
+            rec.email,
+            "hard_bounce",
+            source="smtp_5xx",
+            diagnostic=(rec.last_error or "")[:2000],
+            admin_id=admin.id,
+        )
+        added += 1
+    db.commit()
+    return {"added": added, "reviewed": len(rows)}

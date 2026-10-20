@@ -13,9 +13,12 @@ from app.models import (
     MailCampaignRecipient,
     MailCampaignTemplate,
     MailClickEvent,
+    MailProviderEvent,
     MailSuppression,
     User,
 )
+from app.services.mail_campaign_validate import classify_address, lookup_domain_status
+from app.services.mail_suppression import should_skip_send, upsert_suppression
 from app.routers import mail_track
 from app.services.mail_campaign_audience import parse_pasted_list, resolve_audience
 from app.services.mail_campaign_render import (
@@ -34,6 +37,7 @@ def _session():
     MailCampaignRecipient.__table__.create(bind=engine)
     MailClickEvent.__table__.create(bind=engine)
     MailSuppression.__table__.create(bind=engine)
+    MailProviderEvent.__table__.create(bind=engine)
     User.__table__.create(bind=engine)
     return sessionmaker(bind=engine, autocommit=False, autoflush=False)()
 
@@ -415,4 +419,98 @@ def test_send_campaign_no_pause_sends_all(monkeypatch):
     out = mail_job.send_campaign(cid)
     assert out["status"] == "sent"
     assert sent == ["u0@ex.com", "u1@ex.com", "u2@ex.com"]
+    db.close()
+
+
+def test_classify_syntax_and_disposable(monkeypatch):
+    lookup_domain_status.cache_clear()
+    monkeypatch.setattr("app.services.mail_campaign_validate.lookup_domain_status", lambda _d: "ok")
+    bad = classify_address("not-an-email", check_dns=False)
+    assert bad["flag"] == "invalid"
+    disp = classify_address("a@mailinator.com", check_dns=False)
+    assert disp["disposable"] is True
+    role = classify_address("noreply@hospital.org", check_dns=False)
+    assert role["role_warning"] is True
+
+
+def test_dns_timeout_is_unverified(monkeypatch):
+    lookup_domain_status.cache_clear()
+    monkeypatch.setattr("app.services.mail_campaign_validate.lookup_domain_status", lambda _d: "unverified")
+    out = classify_address("ada@example.com", check_dns=True)
+    assert out["dns_status"] == "unverified"
+    assert out["syntax_ok"] is True
+
+
+def test_dns_nxdomain_is_invalid(monkeypatch):
+    lookup_domain_status.cache_clear()
+    monkeypatch.setattr("app.services.mail_campaign_validate.lookup_domain_status", lambda _d: "invalid")
+    out = classify_address("ada@no-such-domain.invalid", check_dns=True)
+    assert out["flag"] == "invalid"
+
+
+def test_suppression_strength_and_skip_rules():
+    db = _session()
+    row = upsert_suppression(db, "a@ex.com", "hard_bounce", source="zepto_webhook")
+    db.commit()
+    assert should_skip_send(row, True) is True
+    assert should_skip_send(row, False) is False
+    upsert_suppression(db, "a@ex.com", "unsubscribe", source="unsubscribe_link")
+    db.commit()
+    row = db.query(MailSuppression).filter(MailSuppression.email == "a@ex.com").first()
+    assert row.reason == "unsubscribe"
+    upsert_suppression(db, "a@ex.com", "hard_bounce", source="zepto_webhook")
+    db.commit()
+    db.refresh(row)
+    assert row.reason == "unsubscribe"
+    assert should_skip_send(row, False) is True
+    db.close()
+
+
+def test_send_skips_hard_bounce_unless_toggle_off(monkeypatch):
+    db = _session()
+    tpl = MailCampaignTemplate(name="t", subject="Hello", body_html="<p>Hi</p>")
+    db.add(tpl)
+    db.commit()
+    camp = MailCampaign(
+        name="c",
+        template_id=tpl.id,
+        audience_type="list",
+        audience_json="{}",
+        status="queued",
+        skip_previously_bounced=True,
+    )
+    db.add(camp)
+    db.commit()
+    rec = MailCampaignRecipient(campaign_id=camp.id, email="bounce@ex.com", name="B", status="pending", tracking_token="tb")
+    db.add(rec)
+    upsert_suppression(db, "bounce@ex.com", "hard_bounce", source="zepto_webhook")
+    db.commit()
+    sent: list[str] = []
+
+    class KeepOpen:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(mail_job, "SessionLocal", lambda: KeepOpen(db))
+    monkeypatch.setattr(mail_job, "send_html_email", lambda *a, **k: sent.append(a[0]))
+    monkeypatch.setattr(mail_job.time, "sleep", lambda _s: None)
+    mail_job.send_campaign(camp.id)
+    db.refresh(rec)
+    assert rec.status == "suppressed"
+    assert sent == []
+    camp.skip_previously_bounced = False
+    camp.status = "queued"
+    camp.lock_token = None
+    rec.status = "pending"
+    db.commit()
+    mail_job.send_campaign(camp.id)
+    db.refresh(rec)
+    assert rec.status == "accepted"
+    assert sent == ["bounce@ex.com"]
     db.close()
