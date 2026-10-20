@@ -46,6 +46,27 @@ def _event_names(raw: Any) -> list[str]:
     return []
 
 
+def webhook_auth_configured() -> bool:
+    settings = get_settings()
+    return bool(settings.zeptomail_webhook_auth_key or settings.zeptomail_webhook_authorization_value)
+
+
+def is_verify_probe(body: bytes) -> bool:
+    """Zepto Verify only checks that POST returns 200; it is not a bounce event."""
+    raw = (body or b"").strip()
+    if not raw or raw.lower() in {b"{}", b"[]", b"null", b"ok", b'"ok"'}:
+        return True
+    try:
+        data = parse_webhook_body(raw)
+    except Exception:
+        return len(raw) < 64 and b"event" not in raw.lower()
+    if not isinstance(data, dict) or not data:
+        return True
+    names = _event_names(data.get("event_name"))
+    messages = data.get("event_message")
+    return not names and not messages and not str(data.get("webhook_request_id") or "").strip()
+
+
 def verify_zepto_request(body: bytes, headers: dict[str, str]) -> bool:
     settings = get_settings()
     auth_key = settings.zeptomail_webhook_auth_key

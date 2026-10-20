@@ -80,7 +80,7 @@ def _bounce_payload(event_name="hardbounce", email="bad@ex.com", webhook_id="wh-
     return body
 
 
-def test_webhook_rejects_without_auth(monkeypatch):
+def test_verify_probe_returns_200_without_auth(monkeypatch):
     db = _session()
     monkeypatch.setenv("ZEPTOMAIL_WEBHOOK_AUTHORIZATION_VALUE", "")
     monkeypatch.setenv("ZEPTOMAIL_WEBHOOK_AUTH_KEY", "")
@@ -89,6 +89,21 @@ def test_webhook_rejects_without_auth(monkeypatch):
     app.include_router(router)
     app.dependency_overrides[get_db] = lambda: db
     client = TestClient(app)
+    assert client.get("/mail/zepto/webhook").status_code == 200
+    empty = client.post("/mail/zepto/webhook", content=b"", headers={"Content-Type": "application/json"})
+    assert empty.status_code == 200
+    assert empty.json().get("ingested") is False
+    unsigned = client.post("/mail/zepto/webhook", json=_bounce_payload())
+    assert unsigned.status_code == 200
+    assert unsigned.json().get("ingested") is False
+    assert db.query(MailSuppression).count() == 0
+    db.close()
+    get_settings.cache_clear()
+
+
+def test_webhook_rejects_bad_auth_when_configured(monkeypatch):
+    db = _session()
+    client = _client(db, monkeypatch)
     res = client.post("/mail/zepto/webhook", json=_bounce_payload())
     assert res.status_code == 401
     db.close()

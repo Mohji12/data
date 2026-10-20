@@ -6,19 +6,24 @@ This is not complete until a live Agent test bounce is received in the target en
 
 ## Endpoint
 
-`POST https://<API_PUBLIC_HOST>/mail/zepto/webhook`
+Exact URL (do not truncate):
 
-No admin JWT. Authentication is the Zepto Agent webhook secret (below).
+`https://api.harishcriticalcareclasses.com/mail/zepto/webhook`
+
+There is no `/api` prefix. Zepto **Verify** sends POST and requires HTTP **200**. Opening the URL in a browser is GET; that also returns 200 after this endpoint is deployed.
+
+No admin JWT. Bounce/complaint ingest uses the Zepto Agent webhook secret (below).
 
 ## Agent setup
 
 1. ZeptoMail → Agents → your sending Agent → **Webhooks**.
-2. Add webhook URL: `https://<API_PUBLIC_HOST>/mail/zepto/webhook`.
-3. Enable at least: **Hard bounced**, **Soft bounced**, **Feedback loop**, **Delivered**.
-4. Optional: set a per-webhook **Authorization** header (name + value). Put the same values in `.env`.
-5. On the Webhooks page, set **Authentication Key**. Store it as `ZEPTOMAIL_WEBHOOK_AUTH_KEY`. Zepto signs requests with HMAC-SHA256 in the `producer-signature` header.
+2. Add webhook URL: `https://api.harishcriticalcareclasses.com/mail/zepto/webhook` (full path).
+3. Click **Verify**. It must return 200.
+4. Enable at least: **Hard bounced**, **Soft bounced**, **Feedback loop**, **Delivered**.
+5. Optional: set a per-webhook **Authorization** header (name + value). Put the same values in `.env`.
+6. On the Webhooks page, set **Authentication Key**. Store it as `ZEPTOMAIL_WEBHOOK_AUTH_KEY`. Zepto signs requests with HMAC-SHA256 in the `producer-signature` header.
 
-If HMAC is not enabled on the Agent, Authorization-header-only still works. If **neither** secret is set, the API returns 401 and does not ingest events.
+If HMAC is not enabled on the Agent, Authorization-header-only still works. Verify/empty POSTs return 200 without ingesting. Real bounce events are stored only when at least one secret is set and the request authenticates.
 
 ## Backend `.env`
 
