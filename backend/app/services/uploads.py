@@ -219,6 +219,38 @@ def whatsapp_image_public_url(filename: str) -> str:
     return f"{base}/upload/whatsapp/{fn}"
 
 
+def campaign_image_upload_dir() -> Path:
+    return Path(__file__).resolve().parent.parent.parent / "uploads" / "campaigns"
+
+
+def save_campaign_image(file: UploadFile) -> str:
+    return save_admin_image(file, "campaigns")
+
+
+def load_campaign_hero_bytes(filename: str) -> tuple[bytes, str] | None:
+    """Return (bytes, image-subtype) for a stored campaign hero file, if it exists locally."""
+    fn = Path((filename or "").strip()).name
+    if not fn or fn.startswith("."):
+        return None
+    path = campaign_image_upload_dir() / fn
+    if not path.is_file():
+        return None
+    suffix = path.suffix.lower().lstrip(".")
+    subtype = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "gif": "gif", "webp": "webp"}.get(suffix, "jpeg")
+    return path.read_bytes(), subtype
+
+
+def campaign_image_public_url(filename: str) -> str:
+    settings = get_settings()
+    base = (settings.api_public_base_url or "").strip().rstrip("/")
+    fn = Path((filename or "").strip()).name
+    if not fn:
+        return ""
+    if base:
+        return f"{base}/upload/campaigns/{fn}"
+    return f"/upload/campaigns/{fn}"
+
+
 def save_admin_image(file: UploadFile, kind: str) -> str:
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:

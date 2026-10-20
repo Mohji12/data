@@ -1,4 +1,7 @@
 from __future__ import annotations
+
+import logging
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -16,6 +19,11 @@ from app.models import (
     EmailTemplateMaster,
     EventPaymentTxn,
     EventRegistration,
+    MailCampaign,
+    MailCampaignRecipient,
+    MailCampaignTemplate,
+    MailClickEvent,
+    MailSuppression,
     RegistrationPaymentTxn,
     WhatsAppWebhookEvent,
 )
@@ -38,6 +46,8 @@ from app.routers.events import router as events_router
 from app.routers.admin_events import router as admin_events_router
 from app.routers.admin_extension_requests import router as admin_extension_requests_router
 from app.routers.whatsapp_webhook import router as whatsapp_webhook_router
+from app.routers.admin_mail_campaigns import router as admin_mail_router
+from app.routers.mail_track import router as mail_track_router
 
 
 def _ensure_event_registration_fee_columns() -> None:
@@ -63,6 +73,29 @@ def _ensure_event_registration_fee_columns() -> None:
                 conn.execute(text(f"ALTER TABLE event_registration ADD COLUMN {name} {ddl}"))
 
 
+def _ensure_mail_campaign_throttle_columns() -> None:
+    columns = {
+        "send_batch_size": "INT NOT NULL DEFAULT 100",
+        "send_pause_seconds": "INT NOT NULL DEFAULT 300",
+        "next_wave_at": "DATETIME DEFAULT NULL",
+    }
+    with engine.begin() as conn:
+        existing = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'mail_campaign'"
+                )
+            )
+        }
+        if not existing:
+            return
+        for name, ddl in columns.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE mail_campaign ADD COLUMN {name} {ddl}"))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -75,7 +108,34 @@ async def lifespan(app: FastAPI):
         _ensure_event_registration_fee_columns()
     if settings.auto_create_whatsapp_webhook_table:
         WhatsAppWebhookEvent.__table__.create(bind=engine, checkfirst=True)
+    MailCampaignTemplate.__table__.create(bind=engine, checkfirst=True)
+    MailCampaign.__table__.create(bind=engine, checkfirst=True)
+    MailCampaignRecipient.__table__.create(bind=engine, checkfirst=True)
+    MailClickEvent.__table__.create(bind=engine, checkfirst=True)
+    MailSuppression.__table__.create(bind=engine, checkfirst=True)
+    _ensure_mail_campaign_throttle_columns()
+    try:
+        from app.core.job_queue import enqueue_mail_poll
+
+        enqueue_mail_poll(delay_seconds=20)
+    except Exception:
+        pass
+    stop_mail_poll = threading.Event()
+
+    def _mail_poll_loop() -> None:
+        while True:
+            try:
+                from app.jobs.mail_campaign import poll_due_campaigns
+
+                poll_due_campaigns(requeue=False)
+            except Exception:
+                logging.getLogger(__name__).warning("mail poll loop failed", exc_info=True)
+            if stop_mail_poll.wait(20):
+                break
+
+    threading.Thread(target=_mail_poll_loop, name="mail-campaign-poll", daemon=True).start()
     yield
+    stop_mail_poll.set()
 
 
 app = FastAPI(title="Mock Test Backend", lifespan=lifespan)
@@ -114,6 +174,8 @@ app.include_router(events_router)
 app.include_router(admin_events_router)
 app.include_router(admin_extension_requests_router)
 app.include_router(whatsapp_webhook_router)
+app.include_router(admin_mail_router)
+app.include_router(mail_track_router)
 
 # Same URL shape as PHP: files saved under uploads/registration (see uploads.save_registration_document).
 registration_uploads = Path(__file__).resolve().parent.parent / "uploads" / "registration"
@@ -162,6 +224,14 @@ app.mount(
     "/upload/whatsapp",
     StaticFiles(directory=str(whatsapp_uploads)),
     name="whatsapp_images",
+)
+
+campaign_uploads = Path(__file__).resolve().parent.parent / "uploads" / "campaigns"
+campaign_uploads.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/upload/campaigns",
+    StaticFiles(directory=str(campaign_uploads)),
+    name="campaign_images",
 )
 
 

@@ -40,7 +40,7 @@ const navItems = [
     label: 'COMMUNICATION',
     items: [
       { label: 'WhatsApp Bulk', to: 'https://wapp.sakshisoftware.in/', icon: Send },
-      { label: 'Bulk Mail', to: 'https://mail-iota-lilac.vercel.app/', icon: Mail },
+      { label: 'Email Campaigns', to: '/admin/mail', icon: Mail },
     ],
   },
   {

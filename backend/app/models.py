@@ -8,6 +8,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Float,
+    Index,
     Integer,
     String,
     Text,
@@ -393,6 +394,94 @@ class EmailTemplateMaster(Base):
     status = Column(String(1), default="1", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MailCampaignTemplate(Base):
+    __tablename__ = "mail_campaign_template"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+    subject = Column(String(255), nullable=False)
+    preview_text = Column(String(255), nullable=False, default="")
+    hero_image = Column(String(255), nullable=False, default="")
+    body_html = Column(Text, nullable=False, default="")
+    footer_html = Column(Text, nullable=False, default="")
+    cta_json = Column(Text, nullable=False, default="[]")
+    blocks_json = Column(Text, nullable=False, default="{}")
+    status = Column(String(1), nullable=False, default="1")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MailCampaign(Base):
+    __tablename__ = "mail_campaign"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+    template_id = Column(Integer, nullable=False)
+    subject_override = Column(String(255), nullable=True)
+    preview_text_override = Column(String(255), nullable=True)
+    audience_type = Column(String(32), nullable=False)
+    audience_json = Column(Text, nullable=False, default="{}")
+    status = Column(String(32), nullable=False, default="draft")
+    scheduled_at = Column(DateTime, nullable=True)
+    created_by_admin_id = Column(Integer, nullable=True)
+    lock_token = Column(String(64), nullable=True)
+    sent_at = Column(DateTime, nullable=True)
+    queued_count = Column(Integer, nullable=False, default=0)
+    accepted_count = Column(Integer, nullable=False, default=0)
+    failed_count = Column(Integer, nullable=False, default=0)
+    suppressed_count = Column(Integer, nullable=False, default=0)
+    send_batch_size = Column(Integer, nullable=False, default=100)
+    send_pause_seconds = Column(Integer, nullable=False, default=300)
+    next_wave_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MailCampaignRecipient(Base):
+    __tablename__ = "mail_campaign_recipient"
+    __table_args__ = (
+        UniqueConstraint("tracking_token", name="uq_mail_recipient_token"),
+        Index("ix_mail_recipient_campaign_status", "campaign_id", "status"),
+        Index("ix_mail_recipient_campaign_email", "campaign_id", "email"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    campaign_id = Column(Integer, nullable=False)
+    user_id = Column(Integer, nullable=True)
+    email = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=False, default="")
+    batch = Column(String(255), nullable=False, default="")
+    status = Column(String(32), nullable=False, default="pending")
+    tracking_token = Column(String(64), nullable=False)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text, nullable=True)
+    accepted_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MailClickEvent(Base):
+    __tablename__ = "mail_click_event"
+    __table_args__ = (Index("ix_mail_click_campaign_recipient", "campaign_id", "recipient_id"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    recipient_id = Column(Integer, nullable=False)
+    campaign_id = Column(Integer, nullable=False)
+    dest_url = Column(Text, nullable=False)
+    ip = Column(String(64), nullable=True)
+    user_agent = Column(String(512), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class MailSuppression(Base):
+    __tablename__ = "mail_suppression"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String(255), nullable=False, unique=True)
+    reason = Column(String(64), nullable=False, default="unsubscribe")
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class EventRegistration(Base):

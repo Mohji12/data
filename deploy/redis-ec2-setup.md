@@ -9,7 +9,9 @@ REDIS_ENABLED=true
 REDIS_URL=rediss://default:YOUR_TOKEN@YOUR-ENDPOINT.upstash.io:6379
 ```
 
-`redis://` URLs for `*.upstash.io` are auto-upgraded to `rediss://` by the app. You do **not** need `redis-server` on EC2 when using Upstash. Still run the **RQ worker** (`criticalcare-worker`) on EC2 so WhatsApp bulk jobs execute there.
+`redis://` URLs for `*.upstash.io` are auto-upgraded to `rediss://` by the app. You do **not** need `redis-server` on EC2 when using Upstash. Still run the **RQ worker** (`criticalcare-worker`) on EC2 so WhatsApp bulk and **email campaign** jobs execute there.
+
+Email campaigns enqueue on the `email` RQ queue. The API starts a 60s poller for IST schedules when Redis is enabled. Keep `REDIS_ENABLED=true` in production.
 
 Test from your machine:
 
@@ -56,7 +58,13 @@ REDIS_ENABLED=true
 REDIS_URL=redis://:YOUR_STRONG_PASSWORD@127.0.0.1:6379/0
 ```
 
-## Worker (WhatsApp bulk queue)
+## Worker (WhatsApp bulk + email campaign queues)
+
+The unit listens on `default`, `whatsapp`, and `email`:
+
+```
+rq worker --url ${REDIS_URL} default whatsapp email
+```
 
 Install units from this repo:
 

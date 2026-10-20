@@ -35,6 +35,7 @@ else
 fi
 sudo systemctl restart "$API_SERVICE"
 sudo systemctl status "$API_SERVICE" --no-pager || true
+# Restart RQ worker (default + whatsapp + email queues) when the unit is installed.
 if systemctl list-unit-files "$WORKER_SERVICE.service" --no-legend 2>/dev/null | grep -q "$WORKER_SERVICE"; then
   sudo systemctl restart "$WORKER_SERVICE"
   sudo systemctl status "$WORKER_SERVICE" --no-pager || true

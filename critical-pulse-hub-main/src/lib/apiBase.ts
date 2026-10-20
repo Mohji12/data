@@ -43,6 +43,28 @@ export function resolvePublicUploadUrl(pathOrUrl: string | null | undefined): st
   return `${base}${path}`;
 }
 
+/** Campaign hero images live on the API `/upload/campaigns/` mount. Always return an absolute URL so iframe srcDoc can load them. */
+export function resolveCampaignImageUrl(filenameOrUrl: string | null | undefined): string | null {
+  const raw = (filenameOrUrl || '').trim();
+  if (!raw) return null;
+  const marker = '/upload/campaigns/';
+  const idx = raw.replace(/\\/g, '/').indexOf(marker);
+  let fn = raw;
+  if (idx >= 0) {
+    fn = raw.slice(idx + marker.length).split(/[?#]/)[0];
+  } else if (/^https?:\/\//i.test(raw)) {
+    return raw;
+  } else {
+    fn = raw.split(/[\\/]/).pop() || raw;
+  }
+  if (!fn) return null;
+  const path = `${marker}${fn}`;
+  const apiBase = getApiBaseUrl().replace(/\/$/, '');
+  if (apiBase) return `${apiBase}${path}`;
+  if (typeof window !== 'undefined') return `${window.location.origin}${path}`;
+  return `${LOCAL_DEV_API}${path}`;
+}
+
 /** Video thumbnails are files on the API (`/upload/video/image/`), even if a stored URL points at the website. */
 export function resolveVideoThumbnailUrl(url: string | null | undefined): string | null {
   const raw = (url || '').trim();

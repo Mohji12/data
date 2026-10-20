@@ -1,5 +1,5 @@
 [Unit]
-Description=Critical Care RQ worker (WhatsApp bulk)
+Description=Critical Care RQ worker (WhatsApp bulk, email campaigns)
 After=network.target redis-server.service
 
 [Service]
@@ -7,7 +7,7 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/data/backend
 EnvironmentFile=/home/ubuntu/data/backend/.env
-ExecStart=/home/ubuntu/data/backend/venv/bin/rq worker --url ${REDIS_URL} default whatsapp
+ExecStart=/home/ubuntu/data/backend/venv/bin/rq worker --url ${REDIS_URL} default whatsapp email
 Restart=on-failure
 RestartSec=5
 

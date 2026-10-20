@@ -68,6 +68,12 @@ const AdminVideoQuestions = lazy(() => import('@/pages/admin/AdminVideoQuestions
 const AdminExtensions = lazy(() => import('@/pages/admin/AdminExtensions'));
 const AdminExtensionRequests = lazy(() => import('@/pages/admin/AdminExtensionRequests'));
 const AdminEventRegistrations = lazy(() => import('@/pages/admin/AdminEventRegistrations'));
+const AdminMailDashboard = lazy(() => import('@/pages/admin/mail/AdminMailDashboard'));
+const AdminMailTemplates = lazy(() => import('@/pages/admin/mail/AdminMailTemplates'));
+const AdminMailTemplateEditor = lazy(() => import('@/pages/admin/mail/AdminMailTemplateEditor'));
+const AdminMailCampaigns = lazy(() => import('@/pages/admin/mail/AdminMailCampaigns'));
+const AdminMailCampaignNew = lazy(() => import('@/pages/admin/mail/AdminMailCampaignNew'));
+const AdminMailCampaignAnalytics = lazy(() => import('@/pages/admin/mail/AdminMailCampaignAnalytics'));
 
 const WHATSAPP_BULK_URL = 'https://wapp.sakshisoftware.in/';
 
@@ -189,6 +195,13 @@ const App = () => {
             <Route path="settings" element={<AdminSettings />} />
             <Route path="login-activity" element={<AdminLoginActivity />} />
             <Route path="communication/whatsapp" element={<WhatsAppBulkRedirect />} />
+            <Route path="mail" element={<AdminMailDashboard />} />
+            <Route path="mail/templates" element={<AdminMailTemplates />} />
+            <Route path="mail/templates/new" element={<AdminMailTemplateEditor />} />
+            <Route path="mail/templates/:id" element={<AdminMailTemplateEditor />} />
+            <Route path="mail/campaigns" element={<AdminMailCampaigns />} />
+            <Route path="mail/campaigns/new" element={<AdminMailCampaignNew />} />
+            <Route path="mail/campaigns/:id" element={<AdminMailCampaignAnalytics />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>

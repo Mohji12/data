@@ -28,6 +28,7 @@ def send_html_email(
     cc: str | Sequence[str] | None = None,
     bcc: str | Sequence[str] | None = None,
     reply_to: str | None = None,
+    inline_images: Sequence[tuple[bytes, str, str]] | None = None,
 ) -> None:
     settings = get_settings()
     if not settings.smtp_host:
@@ -56,6 +57,16 @@ def send_html_email(
         msg["Reply-To"] = (reply_to or settings.smtp_reply_to).strip()
     msg.set_content("This email requires HTML support.")
     msg.add_alternative(html, subtype="html")
+    if inline_images:
+        html_part = msg.get_payload()[-1]
+        for content, subtype, cid in inline_images:
+            html_part.add_related(
+                content,
+                maintype="image",
+                subtype=subtype or "jpeg",
+                cid=cid,
+                disposition="inline",
+            )
 
     logger.debug("Sending email to=%s subject=%r via %s:%s", to_email, subject, settings.smtp_host, settings.smtp_port)
     try:
