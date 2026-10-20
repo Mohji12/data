@@ -49,11 +49,15 @@ def _row_to_recipient(user: User) -> dict[str, Any]:
     }
 
 
-def parse_pasted_list(raw: str) -> tuple[list[dict[str, Any]], list[str], int]:
-    """Return (accepted, invalid, duplicate_count)."""
+def parse_pasted_list(
+    raw: str,
+    extra_map: dict[str, int] | None = None,
+) -> tuple[list[dict[str, Any]], list[str], int]:
+    """Return (accepted, invalid, duplicate_count). extra_map stores extra copies per email."""
     accepted: list[dict[str, Any]] = []
     invalid: list[str] = []
     seen: set[str] = set()
+    extras = extra_map if extra_map is not None else {}
     dupes = 0
     text = (raw or "").replace("\r\n", "\n").replace(";", "\n")
     for line in text.splitlines():
@@ -77,6 +81,7 @@ def parse_pasted_list(raw: str) -> tuple[list[dict[str, Any]], list[str], int]:
                 continue
             key = normalize_email(email)
             if key in seen:
+                extras[key] = extras.get(key, 0) + 1
                 dupes += 1
                 continue
             seen.add(key)
@@ -98,12 +103,14 @@ def _raw_candidates(
     db: Session,
     audience_type: str,
     audience: dict[str, Any],
-) -> tuple[list[dict[str, Any]], list[str], int]:
+) -> tuple[list[dict[str, Any]], list[str], int, dict[str, int]]:
     kind = (audience_type or "").strip().lower()
     invalid: list[str] = []
     dupes = 0
+    extra_map: dict[str, int] = {}
     if kind == "all":
-        return [_row_to_recipient(user) for user in _eligible_user_query(db).all() if (user.email or "").strip()], invalid, dupes
+        rows = [_row_to_recipient(user) for user in _eligible_user_query(db).all() if (user.email or "").strip()]
+        return rows, invalid, dupes, extra_map
     if kind == "batch":
         names = audience.get("batches") or audience.get("batch_names") or []
         if isinstance(names, str):
@@ -117,7 +124,7 @@ def _raw_candidates(
             rec = _row_to_recipient(user)
             if rec["email"]:
                 rows.append(rec)
-        return rows, invalid, dupes
+        return rows, invalid, dupes, extra_map
     if kind == "list":
         pasted = str(audience.get("pasted") or audience.get("emails") or "")
         if isinstance(audience.get("recipients"), list):
@@ -136,7 +143,8 @@ def _raw_candidates(
                         )
                     )
             pasted = "\n".join(lines)
-        return parse_pasted_list(pasted)
+        accepted, invalid, dupes = parse_pasted_list(pasted, extra_map)
+        return accepted, invalid, dupes, extra_map
     raise ValueError("audience_type must be batch, all, or list")
 
 
@@ -152,7 +160,7 @@ def resolve_audience(
     from app.services.mail_campaign_validate import classify_address
     from app.services.mail_suppression import should_skip_send
 
-    raw, parsed_invalid, dupes = _raw_candidates(db, audience_type, audience)
+    raw, parsed_invalid, dupes, extra_map = _raw_candidates(db, audience_type, audience)
     blocked = suppression_map(db)
     excluded = {normalize_email(e) for e in (exclude_emails or audience.get("exclude_emails") or []) if e}
     unique: list[dict[str, Any]] = []
@@ -172,6 +180,7 @@ def resolve_audience(
         if not key:
             continue
         if key in seen:
+            extra_map[key] = extra_map.get(key, 0) + 1
             dupes += 1
             continue
         seen.add(key)
@@ -210,7 +219,7 @@ def resolve_audience(
                 rec["flag"] = "complaint"
                 flagged.append(rec)
                 continue
-            if skip and reason in {"hard_bounce", "soft_bounce"}:
+            if reason == "hard_bounce" or (skip and reason == "soft_bounce"):
                 previously_bounced.append(key)
                 rec["flag"] = "previously_bounced"
                 flagged.append(rec)
@@ -226,6 +235,10 @@ def resolve_audience(
             role_warnings.append(key)
         eligible.append(rec)
 
+    duplicate_emails = [
+        {"email": email, "extra": extra, "total": extra + 1}
+        for email, extra in sorted(extra_map.items(), key=lambda item: (-item[1], item[0]))
+    ]
     snapshot = {
         "eligible": len(eligible),
         "invalid": len(invalid),
@@ -236,6 +249,7 @@ def resolve_audience(
         "complaints": len(complaints),
         "role_warnings": len(role_warnings),
         "duplicate_count": dupes,
+        "duplicate_address_count": len(extra_map),
         "excluded": len(excluded),
         "skip_previously_bounced": skip_previously_bounced,
         "exclude_emails": sorted(excluded),
@@ -247,6 +261,8 @@ def resolve_audience(
         "invalid": invalid[:50],
         "invalid_count": len(invalid),
         "duplicate_count": dupes,
+        "duplicate_address_count": len(extra_map),
+        "duplicate_emails": duplicate_emails[:50],
         "unverified": unverified[:50],
         "unverified_count": len(unverified),
         "previously_bounced": previously_bounced[:50],

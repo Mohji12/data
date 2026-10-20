@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { apiClient } from '@/lib/apiClient';
 import { useIsTechAdmin } from '@/store/authStore';
 import AdminMailNav from './AdminMailNav';
-import { toIstDatetimeLocal, type AudiencePreview, type MailCampaign, type MailTemplate } from './mailTypes';
+import { summarizePastedEmails, toIstDatetimeLocal, type AudiencePreview, type MailCampaign, type MailTemplate } from './mailTypes';
 
 type BatchRow = { id: number; name: string };
 
@@ -42,6 +42,8 @@ export default function AdminMailCampaignNew() {
     if (audienceType === 'list') return { pasted };
     return {};
   }, [audienceType, batches, pasted]);
+
+  const pasteSummary = useMemo(() => (audienceType === 'list' ? summarizePastedEmails(pasted) : null), [audienceType, pasted]);
 
   const previewMut = useMutation({
     mutationFn: () =>
@@ -213,13 +215,39 @@ export default function AdminMailCampaignNew() {
               <p className="mt-2 text-xs text-slate/55">
                 One per line, or comma / semicolon separated. Optional CSV: email,name,batch.
               </p>
+              {pasteSummary && pasted.trim() && (
+                <div className={`mt-3 rounded-sm border px-3 py-2.5 text-sm ${pasteSummary.duplicateCount ? 'border-amber/30 bg-amber-pale text-amber-900' : 'border-border-soft text-slate'}`}>
+                  <p>
+                    <strong>{pasteSummary.unique}</strong> unique
+                    {' · '}
+                    <strong>{pasteSummary.duplicateCount}</strong> duplicate {pasteSummary.duplicateCount === 1 ? 'entry' : 'entries'}
+                    {pasteSummary.duplicateAddressCount ? ` across ${pasteSummary.duplicateAddressCount} address${pasteSummary.duplicateAddressCount === 1 ? '' : 'es'}` : ''}
+                    {pasteSummary.invalidCount ? ` · ${pasteSummary.invalidCount} invalid` : ''}
+                  </p>
+                  {pasteSummary.duplicateEmails.length > 0 && (
+                    <ul className="mt-2 font-mono text-[11px] space-y-1">
+                      {pasteSummary.duplicateEmails.slice(0, 12).map((row) => (
+                        <li key={row.email}>
+                          {row.email} · {row.total} times ({row.extra} extra)
+                        </li>
+                      ))}
+                      {pasteSummary.duplicateEmails.length > 12 && (
+                        <li>…and {pasteSummary.duplicateEmails.length - 12} more repeated addresses</li>
+                      )}
+                    </ul>
+                  )}
+                  <p className="mt-2 text-xs opacity-80">Duplicates are skipped automatically. Only unique addresses are sent.</p>
+                </div>
+              )}
             </label>
           )}
           <label className="flex items-center gap-2 text-sm text-slate">
             <input type="checkbox" checked={skipBounced} onChange={(e) => { setSkipBounced(e.target.checked); setPreview(null); }} />
-            Skip previously bounced
+            Also skip previous soft bounces
           </label>
-          <p className="text-xs text-slate/55">Unsubscribed and complaint addresses are always skipped. Unverified is not the same as invalid.</p>
+          <p className="text-xs text-slate/55">
+            Hard bounces, invalid domains (no MX), disposable addresses, unsubscribed, and complaints are always skipped so ZeptoMail does not block the sender. Unverified DNS is not treated as invalid.
+          </p>
           <div className="flex flex-wrap gap-2">
             <button type="button" className="font-mono text-[11px] uppercase border border-border-soft px-4 py-2.5 rounded-sm" onClick={() => setStep(1)}>
               Back
@@ -242,17 +270,55 @@ export default function AdminMailCampaignNew() {
           </div>
           {preview && (
             <div className="text-sm font-sans text-slate space-y-2">
-              <p>
-                <strong>{preview.count}</strong> eligible
-                {preview.duplicate_count ? ` · ${preview.duplicate_count} duplicates` : ''}
-                {preview.invalid_count ? ` · ${preview.invalid_count} invalid` : ''}
-                {preview.unverified_count ? ` · ${preview.unverified_count} unverified (DNS)` : ''}
-                {preview.previously_bounced_count ? ` · ${preview.previously_bounced_count} bounced` : ''}
-                {preview.disposable_count ? ` · ${preview.disposable_count} disposable` : ''}
-                {preview.unsubscribed_count ? ` · ${preview.unsubscribed_count} unsubscribed` : ''}
-                {preview.complaints_count ? ` · ${preview.complaints_count} complaints` : ''}
-                {preview.role_warning_count ? ` · ${preview.role_warning_count} role warnings` : ''}
-              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="rounded-sm border border-border-soft px-3 py-2">
+                  <div className="font-mono text-[10px] uppercase tracking-wider text-slate/55">Eligible</div>
+                  <div className="font-display font-bold text-xl">{preview.count}</div>
+                </div>
+                <div className={`rounded-sm border px-3 py-2 ${(preview.duplicate_count || 0) > 0 ? 'border-amber/30 bg-amber-pale' : 'border-border-soft'}`}>
+                  <div className="font-mono text-[10px] uppercase tracking-wider text-slate/55">Duplicates skipped</div>
+                  <div className="font-display font-bold text-xl">{preview.duplicate_count || 0}</div>
+                  {(preview.duplicate_address_count || 0) > 0 && (
+                    <div className="text-[11px] text-slate/60 mt-0.5">{preview.duplicate_address_count} repeated addresses</div>
+                  )}
+                </div>
+                <div className="rounded-sm border border-border-soft px-3 py-2">
+                  <div className="font-mono text-[10px] uppercase tracking-wider text-slate/55">Invalid</div>
+                  <div className="font-display font-bold text-xl">{preview.invalid_count || 0}</div>
+                </div>
+                <div className="rounded-sm border border-border-soft px-3 py-2">
+                  <div className="font-mono text-[10px] uppercase tracking-wider text-slate/55">Other skipped</div>
+                  <div className="font-display font-bold text-xl">
+                    {(preview.previously_bounced_count || 0) +
+                      (preview.disposable_count || 0) +
+                      (preview.unsubscribed_count || 0) +
+                      (preview.complaints_count || 0)}
+                  </div>
+                </div>
+              </div>
+              {(() => {
+                const extra = [
+                  preview.unverified_count ? `${preview.unverified_count} unverified (DNS)` : '',
+                  preview.previously_bounced_count ? `${preview.previously_bounced_count} bounced` : '',
+                  preview.disposable_count ? `${preview.disposable_count} disposable` : '',
+                  preview.unsubscribed_count ? `${preview.unsubscribed_count} unsubscribed` : '',
+                  preview.complaints_count ? `${preview.complaints_count} complaints` : '',
+                  preview.role_warning_count ? `${preview.role_warning_count} role warnings` : '',
+                ].filter(Boolean);
+                return extra.length ? <p>{extra.join(' · ')}</p> : null;
+              })()}
+              {(preview.duplicate_emails || []).length > 0 && (
+                <div className="rounded-sm border border-amber/25 bg-amber-pale/60 px-3 py-2">
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-amber-900 mb-1">Repeated in this list</p>
+                  <ul className="font-mono text-[11px] text-slate/80 space-y-1">
+                    {preview.duplicate_emails!.slice(0, 15).map((row) => (
+                      <li key={row.email}>
+                        {row.email} · {row.total} times ({row.extra} extra, not sent)
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <ul className="mt-2 font-mono text-[11px] text-slate/60 space-y-1">
                 {preview.preview.map((r) => (
                   <li key={`${r.email}-${r.flag || 'ok'}`} className="flex flex-wrap items-center gap-2">
@@ -329,7 +395,9 @@ export default function AdminMailCampaignNew() {
             </label>
           </div>
           <p className="text-sm text-slate/70">
-            {preview?.count ?? 0} recipients · send {batchSize} emails
+            {preview?.count ?? 0} recipients
+            {(preview?.duplicate_count || 0) > 0 ? ` · ${preview?.duplicate_count} duplicate entries skipped` : ''}
+            {' · '}send {batchSize} emails
             {pauseMinutes > 0 ? `, then wait ${pauseMinutes} min, repeat` : ' without pausing'} · template #{templateId}
           </p>
           <div className="flex gap-2">
@@ -351,7 +419,8 @@ export default function AdminMailCampaignNew() {
       {step === 4 && createdId && (
         <section className="rounded-sm border border-border-soft bg-chalk p-5 space-y-4 max-w-xl">
           <p className="text-sm text-slate">
-            Confirm sending <strong>{preview?.count ?? 0}</strong> emails
+            Confirm sending <strong>{preview?.count ?? 0}</strong> unique emails
+            {(preview?.duplicate_count || 0) > 0 ? ` (${preview?.duplicate_count} duplicate entries skipped)` : ''}
             {sendMode === 'later' ? ` at ${scheduledAt} IST` : ' now'}, in waves of <strong>{batchSize}</strong>
             {pauseMinutes > 0 ? ` with ${pauseMinutes} min between waves` : ' with no pause'}. This cannot be undone once sending starts.
           </p>

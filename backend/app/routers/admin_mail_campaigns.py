@@ -25,7 +25,12 @@ from app.models import (
     MailSuppression,
 )
 from app.services.mail_campaign_audience import parse_audience_json, parse_pasted_list, resolve_audience
-from app.services.mail_suppression import REASONS, serialize_suppression, upsert_suppression
+from app.services.mail_suppression import (
+    REASONS,
+    is_permanent_smtp_error,
+    serialize_suppression,
+    upsert_suppression,
+)
 from app.services.mail_campaign_render import parse_cta_list, render_campaign_email, render_campaign_html
 from app.services.mail_campaign_time import parse_ist_to_naive_utc
 from app.services.mailer import send_html_email
@@ -385,6 +390,8 @@ def audience_preview(payload: AudiencePreviewPayload, db: Session = Depends(get_
         "invalid": result["invalid"],
         "invalid_count": result["invalid_count"],
         "duplicate_count": result["duplicate_count"],
+        "duplicate_address_count": result.get("duplicate_address_count") or 0,
+        "duplicate_emails": result.get("duplicate_emails") or [],
         "unverified": result.get("unverified") or [],
         "unverified_count": result.get("unverified_count") or 0,
         "previously_bounced_count": result.get("previously_bounced_count") or 0,
@@ -521,7 +528,7 @@ def confirm_campaign(campaign_id: int, payload: CampaignConfirmPayload, db: Sess
             audience,
             skip_previously_bounced=skip_bounced,
             exclude_emails=list(exclude),
-            check_dns=False,
+            check_dns=True,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -734,8 +741,7 @@ def suppress_smtp_failures(
     )
     added = 0
     for rec in rows:
-        err = (rec.last_error or "").lower()
-        if not any(token in err for token in ("550", "551", "552", "553", "554", "permanent", "user unknown", "mailbox")):
+        if not is_permanent_smtp_error(rec.last_error or ""):
             continue
         upsert_suppression(
             db,

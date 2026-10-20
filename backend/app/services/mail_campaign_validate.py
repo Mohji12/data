@@ -40,6 +40,21 @@ ROLE_LOCAL_PARTS = frozenset(
         "spam",
     }
 )
+HIGH_RISK_ROLE_LOCAL_PARTS = frozenset(
+    {
+        "noreply",
+        "no-reply",
+        "no_reply",
+        "donotreply",
+        "do-not-reply",
+        "test",
+        "testing",
+        "mailer-daemon",
+        "postmaster",
+        "abuse",
+        "spam",
+    }
+)
 
 _DOMAIN_FILE = Path(__file__).resolve().parent.parent / "data" / "disposable_email_domains.txt"
 
@@ -70,6 +85,14 @@ def is_role_address(email: str) -> bool:
         return False
     local = key.split("@", 1)[0]
     return local in ROLE_LOCAL_PARTS
+
+
+def is_high_risk_role(email: str) -> bool:
+    key = normalize_email(email)
+    if "@" not in key:
+        return False
+    local = key.split("@", 1)[0]
+    return local in HIGH_RISK_ROLE_LOCAL_PARTS
 
 
 @functools.lru_cache(maxsize=2048)
@@ -138,11 +161,24 @@ def classify_address(email: str, *, check_dns: bool = True) -> dict[str, Any]:
     result["role_warning"] = is_role_address(key)
     if result["disposable"]:
         result["flag"] = "disposable"
+    elif is_high_risk_role(key):
+        result["flag"] = "invalid"
     domain = key.rsplit("@", 1)[-1]
     if check_dns:
         result["dns_status"] = lookup_domain_status(domain)
-        if result["dns_status"] == "invalid" and not result["flag"]:
+        if result["dns_status"] == "invalid" and result["flag"] not in {"disposable"}:
             result["flag"] = "invalid"
         elif result["dns_status"] == "unverified" and not result["flag"]:
             result["flag"] = "unverified"
     return result
+
+
+def pre_send_reject_reason(email: str) -> str | None:
+    """Never attempt SMTP for addresses that commonly hard-bounce on ZeptoMail."""
+    classified = classify_address(email, check_dns=True)
+    flag = classified.get("flag") or ""
+    if not classified.get("syntax_ok") or flag == "invalid" or classified.get("dns_status") == "invalid":
+        return "invalid"
+    if classified.get("disposable") or flag == "disposable":
+        return "disposable"
+    return None

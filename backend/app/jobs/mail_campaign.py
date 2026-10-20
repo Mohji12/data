@@ -13,7 +13,13 @@ from sqlalchemy import func, or_
 from app.db import SessionLocal
 from app.models import MailCampaign, MailCampaignRecipient, MailCampaignTemplate
 from app.services.mail_campaign_render import parse_cta_list, render_campaign_email
-from app.services.mail_suppression import lookup_suppression, should_skip_send
+from app.services.mail_campaign_validate import pre_send_reject_reason
+from app.services.mail_suppression import (
+    is_permanent_smtp_error,
+    lookup_suppression,
+    should_skip_send,
+    upsert_suppression,
+)
 from app.services.mailer import send_html_email
 
 logger = logging.getLogger(__name__)
@@ -274,6 +280,21 @@ def _send_claimed_campaign(db, camp: MailCampaign) -> dict:
                 _refresh_counts(db, camp)
                 db.commit()
                 continue
+            reject = pre_send_reject_reason(email)
+            if reject:
+                upsert_suppression(
+                    db,
+                    email,
+                    reject,
+                    source="send_time_validation",
+                    diagnostic="pre-send MX/syntax/disposable check",
+                )
+                rec.status = "suppressed"
+                rec.last_error = f"blocked:{reject}"
+                db.add(rec)
+                _refresh_counts(db, camp)
+                db.commit()
+                continue
             rec.attempt_count = int(rec.attempt_count or 0) + 1
             rec.status = "queued"
             db.add(rec)
@@ -303,6 +324,15 @@ def _send_claimed_campaign(db, camp: MailCampaign) -> dict:
                 rec.status = "failed"
                 rec.last_error = str(exc)[:2000]
                 logger.warning("campaign %s send failed %s: %s", campaign_id, rec.email, exc)
+                if is_permanent_smtp_error(str(exc)):
+                    upsert_suppression(
+                        db,
+                        rec.email,
+                        "hard_bounce",
+                        source="smtp_5xx",
+                        diagnostic=str(exc)[:2000],
+                    )
+                    rec.status = "suppressed"
             db.add(rec)
             _refresh_counts(db, camp)
             db.commit()

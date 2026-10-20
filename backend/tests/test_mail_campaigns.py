@@ -119,10 +119,18 @@ def test_audience_dedupe_and_suppression():
     assert "blocked@ex.com" not in emails
     assert "unpaid@ex.com" not in emails
 
-    pasted, invalid, dupes = parse_pasted_list("a@b.com\na@b.com\nnot-an-email\nc@d.com,Ada,B15")
+    extra: dict[str, int] = {}
+    pasted, invalid, dupes = parse_pasted_list("a@b.com\na@b.com\nnot-an-email\nc@d.com,Ada,B15", extra)
     assert [r["email"] for r in pasted] == ["a@b.com", "c@d.com"]
     assert dupes == 1
+    assert extra == {"a@b.com": 1}
     assert invalid == ["not-an-email"]
+
+    listed_dupes = resolve_audience(db, "list", {"pasted": "keep@ex.com\nkeep@ex.com\nkeep@ex.com\nother@ex.com"})
+    assert listed_dupes["duplicate_count"] == 2
+    assert listed_dupes["duplicate_address_count"] == 1
+    assert listed_dupes["duplicate_emails"][0]["email"] == "keep@ex.com"
+    assert listed_dupes["duplicate_emails"][0]["total"] == 3
 
     bulk, bulk_invalid, bulk_dupes = parse_pasted_list("one@ex.com, two@ex.com; three@ex.com\nfour@ex.com")
     assert [r["email"] for r in bulk] == ["one@ex.com", "two@ex.com", "three@ex.com", "four@ex.com"]
@@ -225,6 +233,7 @@ def test_send_skips_suppressed_and_does_not_double_send(monkeypatch):
 
     monkeypatch.setattr(mail_job, "SessionLocal", lambda: KeepOpen(db))
     monkeypatch.setattr(mail_job, "send_html_email", fake_send)
+    monkeypatch.setattr(mail_job, "pre_send_reject_reason", lambda _e: None)
     monkeypatch.setattr(mail_job.time, "sleep", lambda _s: None)
 
     first = mail_job.send_campaign(cid)
@@ -284,6 +293,7 @@ def test_send_campaign_pauses_between_waves(monkeypatch):
 
     monkeypatch.setattr(mail_job, "SessionLocal", lambda: KeepOpen(db))
     monkeypatch.setattr(mail_job, "send_html_email", fake_send)
+    monkeypatch.setattr(mail_job, "pre_send_reject_reason", lambda _e: None)
     monkeypatch.setattr(mail_job.time, "sleep", lambda _s: None)
     monkeypatch.setattr("app.core.job_queue.enqueue_mail_send", lambda campaign_id, delay_seconds=0: delayed.append(delay_seconds) or True)
 
@@ -359,6 +369,7 @@ def test_poll_due_sends_scheduled_campaign(monkeypatch):
 
     monkeypatch.setattr(mail_job, "SessionLocal", lambda: KeepOpen(db))
     monkeypatch.setattr(mail_job, "send_html_email", fake_send)
+    monkeypatch.setattr(mail_job, "pre_send_reject_reason", lambda _e: None)
     monkeypatch.setattr(mail_job.time, "sleep", lambda _s: None)
     monkeypatch.setattr(mail_job, "_enqueue_self_poll", lambda: None)
     monkeypatch.setattr("app.core.job_queue.enqueue_mail_send", lambda *a, **k: True)
@@ -414,6 +425,7 @@ def test_send_campaign_no_pause_sends_all(monkeypatch):
 
     monkeypatch.setattr(mail_job, "SessionLocal", lambda: KeepOpen(db))
     monkeypatch.setattr(mail_job, "send_html_email", fake_send)
+    monkeypatch.setattr(mail_job, "pre_send_reject_reason", lambda _e: None)
     monkeypatch.setattr(mail_job.time, "sleep", lambda _s: None)
 
     out = mail_job.send_campaign(cid)
@@ -431,6 +443,7 @@ def test_classify_syntax_and_disposable(monkeypatch):
     assert disp["disposable"] is True
     role = classify_address("noreply@hospital.org", check_dns=False)
     assert role["role_warning"] is True
+    assert role["flag"] == "invalid"
 
 
 def test_dns_timeout_is_unverified(monkeypatch):
@@ -453,7 +466,7 @@ def test_suppression_strength_and_skip_rules():
     row = upsert_suppression(db, "a@ex.com", "hard_bounce", source="zepto_webhook")
     db.commit()
     assert should_skip_send(row, True) is True
-    assert should_skip_send(row, False) is False
+    assert should_skip_send(row, False) is True
     upsert_suppression(db, "a@ex.com", "unsubscribe", source="unsubscribe_link")
     db.commit()
     row = db.query(MailSuppression).filter(MailSuppression.email == "a@ex.com").first()
@@ -466,7 +479,7 @@ def test_suppression_strength_and_skip_rules():
     db.close()
 
 
-def test_send_skips_hard_bounce_unless_toggle_off(monkeypatch):
+def test_send_never_delivers_hard_bounce(monkeypatch):
     db = _session()
     tpl = MailCampaignTemplate(name="t", subject="Hello", body_html="<p>Hi</p>")
     db.add(tpl)
@@ -499,6 +512,7 @@ def test_send_skips_hard_bounce_unless_toggle_off(monkeypatch):
 
     monkeypatch.setattr(mail_job, "SessionLocal", lambda: KeepOpen(db))
     monkeypatch.setattr(mail_job, "send_html_email", lambda *a, **k: sent.append(a[0]))
+    monkeypatch.setattr(mail_job, "pre_send_reject_reason", lambda _e: None)
     monkeypatch.setattr(mail_job.time, "sleep", lambda _s: None)
     mail_job.send_campaign(camp.id)
     db.refresh(rec)
@@ -511,6 +525,53 @@ def test_send_skips_hard_bounce_unless_toggle_off(monkeypatch):
     db.commit()
     mail_job.send_campaign(camp.id)
     db.refresh(rec)
-    assert rec.status == "accepted"
-    assert sent == ["bounce@ex.com"]
+    assert rec.status == "suppressed"
+    assert sent == []
+    db.close()
+
+
+def test_send_blocks_invalid_domain_and_smtp_5xx(monkeypatch):
+    db = _session()
+    tpl = MailCampaignTemplate(name="t", subject="Hello", body_html="<p>Hi</p>")
+    db.add(tpl)
+    db.commit()
+    camp = MailCampaign(name="c", template_id=tpl.id, audience_type="list", audience_json="{}", status="queued")
+    db.add(camp)
+    db.commit()
+    rec_bad = MailCampaignRecipient(
+        campaign_id=camp.id, email="ghost@no-mx.invalid", name="G", status="pending", tracking_token="tbad"
+    )
+    rec_smtp = MailCampaignRecipient(
+        campaign_id=camp.id, email="gone@ex.com", name="S", status="pending", tracking_token="tsmtp"
+    )
+    db.add_all([rec_bad, rec_smtp])
+    db.commit()
+
+    class KeepOpen:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def close(self):
+            return None
+
+    def fake_send(to_email, subject, html, **kwargs):
+        if to_email == "gone@ex.com":
+            raise RuntimeError("550 5.1.1 user unknown")
+
+    monkeypatch.setattr(mail_job, "SessionLocal", lambda: KeepOpen(db))
+    monkeypatch.setattr(mail_job, "send_html_email", fake_send)
+    monkeypatch.setattr(mail_job, "pre_send_reject_reason", lambda email: "invalid" if email.endswith(".invalid") else None)
+    monkeypatch.setattr(mail_job.time, "sleep", lambda _s: None)
+    mail_job.send_campaign(camp.id)
+    db.refresh(rec_bad)
+    db.refresh(rec_smtp)
+    assert rec_bad.status == "suppressed"
+    assert rec_smtp.status == "suppressed"
+    blocked = db.query(MailSuppression).filter(MailSuppression.email == "gone@ex.com").first()
+    assert blocked is not None
+    assert blocked.reason == "hard_bounce"
+    assert blocked.source == "smtp_5xx"
     db.close()

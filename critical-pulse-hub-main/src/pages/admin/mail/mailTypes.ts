@@ -48,6 +48,8 @@ export type MailDashboard = {
   recent: MailCampaign[];
 };
 
+export type DuplicateEmail = { email: string; extra: number; total: number };
+
 export type AudiencePreview = {
   count: number;
   eligible?: number;
@@ -55,6 +57,8 @@ export type AudiencePreview = {
   invalid: string[];
   invalid_count: number;
   duplicate_count: number;
+  duplicate_address_count?: number;
+  duplicate_emails?: DuplicateEmail[];
   unverified?: string[];
   unverified_count?: number;
   previously_bounced_count?: number;
@@ -143,4 +147,52 @@ export function campaignStatusLabel(row: Pick<MailCampaign, 'status' | 'next_wav
   const s = (row.status || '').toLowerCase();
   if (s === 'sending' && row.next_wave_at) return 'waiting';
   return (row.status || '').replace(/_/g, ' ');
+}
+
+const PASTE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function summarizePastedEmails(raw: string): {
+  unique: number;
+  duplicateCount: number;
+  duplicateAddressCount: number;
+  invalidCount: number;
+  duplicateEmails: DuplicateEmail[];
+} {
+  const seen = new Set<string>();
+  const extras = new Map<string, number>();
+  let invalidCount = 0;
+  const text = (raw || '').replace(/\r\n/g, '\n').replace(/;/g, '\n');
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const tokens = trimmed.split(',').map((part) => part.trim()).filter(Boolean);
+    const groups =
+      tokens.length > 1 && tokens.every((token) => PASTE_EMAIL_RE.test(token.toLowerCase()))
+        ? tokens.map((token) => [token])
+        : [tokens];
+    for (const parts of groups) {
+      const email = (parts[0] || '').trim().toLowerCase();
+      if (!email) continue;
+      if (!PASTE_EMAIL_RE.test(email)) {
+        invalidCount += 1;
+        continue;
+      }
+      if (seen.has(email)) {
+        extras.set(email, (extras.get(email) || 0) + 1);
+        continue;
+      }
+      seen.add(email);
+    }
+  }
+  const duplicateEmails = [...extras.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 50)
+    .map(([email, extra]) => ({ email, extra, total: extra + 1 }));
+  return {
+    unique: seen.size,
+    duplicateCount: [...extras.values()].reduce((sum, n) => sum + n, 0),
+    duplicateAddressCount: extras.size,
+    invalidCount,
+    duplicateEmails,
+  };
 }

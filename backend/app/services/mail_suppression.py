@@ -19,8 +19,30 @@ REASONS = (
     "disposable",
     "manual_block",
 )
-MANDATORY_SKIP = frozenset({"unsubscribe", "complaint", "invalid", "disposable", "manual_block"})
-BOUNCE_SKIP = frozenset({"hard_bounce", "soft_bounce"})
+MANDATORY_SKIP = frozenset(
+    {"unsubscribe", "complaint", "invalid", "disposable", "manual_block", "hard_bounce"}
+)
+BOUNCE_SKIP = frozenset({"soft_bounce"})
+PERMANENT_SMTP_TOKENS = (
+    "550",
+    "551",
+    "553",
+    "554",
+    "5.1.1",
+    "5.1.2",
+    "5.1.3",
+    "5.4.1",
+    "user unknown",
+    "unknown user",
+    "mailbox unavailable",
+    "mailbox not found",
+    "does not exist",
+    "no such user",
+    "recipient address rejected",
+    "invalid mailbox",
+    "invalid recipient",
+    "undeliverable",
+)
 PROTECTED = frozenset({"unsubscribe", "complaint"})
 _STRENGTH = {
     "complaint": 100,
@@ -57,6 +79,11 @@ def should_skip_send(row: MailSuppression | None, skip_previously_bounced: bool)
     if skip_previously_bounced and reason in BOUNCE_SKIP:
         return True
     return False
+
+
+def is_permanent_smtp_error(text: str) -> bool:
+    err = (text or "").lower()
+    return any(token in err for token in PERMANENT_SMTP_TOKENS)
 
 
 def lookup_suppression(db: Session, email: str) -> MailSuppression | None:
