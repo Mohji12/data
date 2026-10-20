@@ -2,15 +2,16 @@ import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { apiClient, refreshStudentSession } from '@/lib/apiClient';
-import { isExpiredTokenError } from '@/lib/authToken';
+import { getStudentToken, isExpiredTokenError, studentTokenLooksValid } from '@/lib/authToken';
 import { SESSION_INVALIDATED_EVENT, isSessionInvalidError } from '@/lib/sessionEvents';
 import { useAuthStore } from '@/store/authStore';
 
-const SESSION_POLL_MS = 5000;
+/** Was 5s; that hammered MySQL/Redis and logged students out after a short pause. */
+const SESSION_POLL_MS = 45_000;
 
 /**
  * Enforces one active student session per account.
- * When the user logs in elsewhere, this device is signed out within ~5 seconds.
+ * When the user logs in elsewhere, this device is signed out on the next poll.
  */
 export function useSingleDeviceSession() {
   const navigate = useNavigate();
@@ -29,6 +30,7 @@ export function useSingleDeviceSession() {
     };
 
     const checkSession = async () => {
+      if (document.hidden) return;
       try {
         await apiClient('/auth/session/check');
       } catch (error) {
@@ -40,17 +42,14 @@ export function useSingleDeviceSession() {
           );
           return;
         }
-        // Renew quietly — do not kick the student out during a mock exam for TTL expiry.
         if (isExpiredTokenError(error)) {
           const renewed = await refreshStudentSession();
-          if (!renewed) {
+          if (renewed) return;
+          // API may be slow or briefly down — keep the student in the lecture
+          // unless this device no longer has a valid JWT.
+          if (!studentTokenLooksValid(getStudentToken())) {
             await signOutOtherDevice('Your session expired. Please sign in again.');
           }
-          return;
-        }
-        const message = error instanceof Error ? error.message : '';
-        if (/missing authorization token|user session not found|invalid or expired token/i.test(message)) {
-          await signOutOtherDevice('Please sign in again.');
         }
       }
     };
@@ -59,15 +58,21 @@ export function useSingleDeviceSession() {
       void signOutOtherDevice('You signed in on another device. Signing out…');
     };
 
+    const onVisible = () => {
+      if (!document.hidden) void checkSession();
+    };
+
     void checkSession();
     const intervalId = window.setInterval(() => {
       void checkSession();
     }, SESSION_POLL_MS);
     window.addEventListener(SESSION_INVALIDATED_EVENT, onInvalidated);
+    document.addEventListener('visibilitychange', onVisible);
 
     return () => {
       window.clearInterval(intervalId);
       window.removeEventListener(SESSION_INVALIDATED_EVENT, onInvalidated);
+      document.removeEventListener('visibilitychange', onVisible);
       signingOutRef.current = false;
     };
   }, [isAuthenticated, user?.role, logout, navigate]);

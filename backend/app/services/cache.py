@@ -6,7 +6,7 @@ import json
 from typing import Any, Callable, TypeVar
 
 from app.core.config import get_settings
-from app.core.redis_client import get_redis
+from app.core.redis_client import get_redis, mark_redis_failure
 
 T = TypeVar("T")
 
@@ -20,7 +20,8 @@ def cache_get(key: str) -> Any | None:
         if raw is None:
             return None
         return json.loads(raw)
-    except Exception:
+    except Exception as exc:
+        mark_redis_failure(exc)
         return None
 
 
@@ -31,7 +32,8 @@ def cache_set(key: str, value: Any, ttl_sec: int | None = None) -> None:
     ttl = ttl_sec if ttl_sec is not None else get_settings().cache_default_ttl_sec
     try:
         client.setex(key, max(1, int(ttl)), json.dumps(value, default=str))
-    except Exception:
+    except Exception as exc:
+        mark_redis_failure(exc)
         return
 
 
@@ -41,7 +43,8 @@ def cache_delete(key: str) -> None:
         return
     try:
         client.delete(key)
-    except Exception:
+    except Exception as exc:
+        mark_redis_failure(exc)
         return
 
 

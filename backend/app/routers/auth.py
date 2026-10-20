@@ -18,6 +18,7 @@ from app.security import (
     decode_access_token_for_refresh,
     assert_active_user_session,
     get_current_user,
+    get_current_user_session_only,
 )
 from app.services.batch_access import ensure_user_batch_active
 from app.services.password_crypto import password_matches_stored, php_password_for_db
@@ -249,8 +250,8 @@ class SessionRefreshResponse(BaseModel):
 
 
 @router.get("/session/check", response_model=SessionCheckResponse)
-def session_check(_current_user: User = Depends(get_current_user)) -> SessionCheckResponse:
-    """Lightweight poll — get_current_user already validates login_token vs JWT sid."""
+def session_check(_current_user: User = Depends(get_current_user_session_only)) -> SessionCheckResponse:
+    """Lightweight poll — JWT + login_token only (no Redis/batch lookups)."""
     return SessionCheckResponse(valid=True)
 
 

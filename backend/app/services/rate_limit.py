@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import HTTPException, Request, status
 
 from app.core.config import get_settings
-from app.core.redis_client import get_redis
+from app.core.redis_client import get_redis, mark_redis_failure
 
 
 def client_ip(request: Request) -> str:
@@ -28,7 +28,8 @@ def _check_limit(key: str, limit: int, window_sec: int) -> bool:
         if count == 1:
             client.expire(key, window_sec)
         return int(count) <= limit
-    except Exception:
+    except Exception as exc:
+        mark_redis_failure(exc)
         return True
 
 

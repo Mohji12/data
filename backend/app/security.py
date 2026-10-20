@@ -113,9 +113,11 @@ def assert_active_user_session(user: User, payload: dict[str, Any]) -> None:
         )
 
 
-def get_current_user(
-    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
-    db: Session = Depends(get_db),
+def _load_authenticated_user(
+    creds: HTTPAuthorizationCredentials | None,
+    db: Session,
+    *,
+    check_batch: bool,
 ) -> User:
     if not creds:
         raise HTTPException(
@@ -131,5 +133,21 @@ def get_current_user(
             detail="User session not found",
         )
     assert_active_user_session(user, payload)
-    ensure_user_batch_active(db, user)
+    if check_batch:
+        ensure_user_batch_active(db, user)
     return user
+
+
+def get_current_user(
+    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: Session = Depends(get_db),
+) -> User:
+    return _load_authenticated_user(creds, db, check_batch=True)
+
+
+def get_current_user_session_only(
+    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: Session = Depends(get_db),
+) -> User:
+    """JWT + single-device check only (no batch/options Redis) for session polls."""
+    return _load_authenticated_user(creds, db, check_batch=False)

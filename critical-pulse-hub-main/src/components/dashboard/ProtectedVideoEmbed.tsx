@@ -211,6 +211,8 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const isPlayingRef = useRef(false);
   const lastToggleAtRef = useRef(0);
   const pauseRetryRef = useRef(0);
+  const lastPlaybackAckRef = useRef(Date.now());
+  const playRetryTimerRef = useRef<number>(0);
   const userIntentRef = useRef<{ action: 'play' | 'pause'; at: number } | null>(null);
   const viewportExpandedRef = useRef(false);
   const overlayTouchRef = useRef<{ x: number; y: number; t: number } | null>(null);
@@ -415,6 +417,28 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     );
   }, []);
 
+  const rebindVimeo = useCallback(() => {
+    const iframe = iframeRef.current;
+    if (!iframe?.contentWindow) return;
+    [
+      'play',
+      'pause',
+      'timeupdate',
+      'qualitychange',
+      'playbackratechange',
+      'volumechange',
+      'fullscreenchange',
+      'error',
+      'bufferstart',
+      'bufferend',
+    ].forEach((evt) => {
+      iframe.contentWindow?.postMessage(
+        JSON.stringify({ method: 'addEventListener', value: evt }),
+        'https://player.vimeo.com',
+      );
+    });
+  }, []);
+
   const applySpeedToPlayer = useCallback(
     (speed: number) => {
       currentSpeedRef.current = speed;
@@ -513,15 +537,25 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const commandPlayback = useCallback(
     (shouldPlay: boolean) => {
       userIntentRef.current = { action: shouldPlay ? 'play' : 'pause', at: Date.now() };
-      if (!shouldPlay) pauseRetryRef.current = 0;
+      if (!shouldPlay) {
+        pauseRetryRef.current = 0;
+        if (playRetryTimerRef.current) {
+          window.clearTimeout(playRetryTimerRef.current);
+          playRetryTimerRef.current = 0;
+        }
+      }
       isPlayingRef.current = shouldPlay;
       setIsPlaying(shouldPlay);
 
       if (isDirectVideo) {
         const video = videoRef.current;
         if (!video) return;
-        if (shouldPlay) void video.play().catch(() => {});
-        else video.pause();
+        if (shouldPlay) {
+          video.currentTime = currentTimeRef.current || video.currentTime;
+          void video.play().catch(() => {});
+        } else {
+          video.pause();
+        }
         return;
       }
 
@@ -529,8 +563,22 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       if (!iframe?.contentWindow || !detected) return;
 
       if (detected.provider === 'vimeo') {
-        postVimeo({ method: shouldPlay ? 'play' : 'pause' });
-        if (!shouldPlay) {
+        if (shouldPlay) {
+          rebindVimeo();
+          const resumeAt = currentTimeRef.current;
+          if (resumeAt > 1) {
+            postVimeo({ method: 'setCurrentTime', value: resumeAt });
+          }
+          postVimeo({ method: 'play' });
+          const ackBefore = lastPlaybackAckRef.current;
+          playRetryTimerRef.current = window.setTimeout(() => {
+            if (!isPlayingRef.current) return;
+            if (lastPlaybackAckRef.current !== ackBefore) return;
+            rebindVimeo();
+            postVimeo({ method: 'play' });
+          }, 900);
+        } else {
+          postVimeo({ method: 'pause' });
           window.setTimeout(() => postVimeo({ method: 'getPaused' }), 200);
         }
       } else if (detected.provider === 'youtube') {
@@ -541,7 +589,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         });
       }
     },
-    [detected, isDirectVideo, postVimeo, postYouTube],
+    [detected, isDirectVideo, postVimeo, postYouTube, rebindVimeo],
   );
 
   const togglePlayPause = useCallback(() => {
@@ -556,11 +604,17 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     const onVisibility = () => {
       if (document.hidden && isPlayingRef.current) {
         commandPlayback(false);
+        return;
+      }
+      if (!document.hidden && detected?.provider === 'vimeo') {
+        rebindVimeo();
+        postVimeo({ method: 'getPaused' });
+        postVimeo({ method: 'getCurrentTime' });
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [commandPlayback]);
+  }, [commandPlayback, detected, postVimeo, rebindVimeo]);
 
   /* ─── Volume / Mute ─── */
 
@@ -1013,6 +1067,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         }
 
         if (data.event === 'timeupdate') {
+          lastPlaybackAckRef.current = Date.now();
           const td = data.data as Record<string, number> | undefined;
           if (td) {
             if (typeof td.seconds === 'number' && shouldAcceptExternalTime(td.seconds)) {
@@ -1095,6 +1150,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         }
 
         if (data.event === 'play' || data.event === 'pause') {
+          if (data.event === 'play') lastPlaybackAckRef.current = Date.now();
           const wantPlay = data.event === 'play';
           const intent = userIntentRef.current;
           // A second tap used to flip play right after pause. Ignore that echo.

@@ -169,7 +169,7 @@ class Settings:
         self.redis_url: str = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0").strip()
         self.redis_tls: bool = os.getenv("REDIS_TLS", "").lower() in ("1", "true", "yes")
         self.redis_socket_timeout_sec: int = max(
-            2, int(os.getenv("REDIS_SOCKET_TIMEOUT_SEC", "8"))
+            1, int(os.getenv("REDIS_SOCKET_TIMEOUT_SEC", "2"))
         )
         self.cache_default_ttl_sec: int = max(1, int(os.getenv("CACHE_DEFAULT_TTL_SEC", "60")))
         self.rate_limit_login_per_min: int = max(
