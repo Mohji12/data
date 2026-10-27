@@ -617,8 +617,8 @@ function DrHarishWelcomeOverlay() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
-    const fadeTimer = window.setTimeout(() => setLeaving(true), 3000);
-    const removeTimer = window.setTimeout(() => setGone(true), 3700);
+    const fadeTimer = window.setTimeout(() => setLeaving(true), 8000);
+    const removeTimer = window.setTimeout(() => setGone(true), 8700);
     return () => {
       window.clearTimeout(fadeTimer);
       window.clearTimeout(removeTimer);
