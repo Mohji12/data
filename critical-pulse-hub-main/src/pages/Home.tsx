@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { Stethoscope, Activity, BookOpen, GraduationCap, Award, Heart, MonitorCheck, Brain, Video, ClipboardCheck, MessageCircle, BarChart3, Users, Shield, PlayCircle, ArrowUpRight, Quote } from 'lucide-react';
+import { Stethoscope, Activity, BookOpen, GraduationCap, Award, Heart, MonitorCheck, Brain, Video, ClipboardCheck, MessageCircle, BarChart3, Users, Shield, PlayCircle, ArrowUpRight, Quote, Cake } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import DiscountOfferBadge from '@/components/DiscountOfferBadge';
@@ -15,7 +15,7 @@ import {
   filterRegistrationCatalogBatches,
   getPublicBatchDisplayName,
 } from '@/lib/publicBatches';
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 
@@ -597,6 +597,202 @@ function CoursesSection({ batches }: { batches?: any[] }) {
   );
 }
 
+type ConfettiParticle = {
+  x: number;
+  y: number;
+  size: number;
+  speedX: number;
+  speedY: number;
+  gravity: number;
+  rotation: number;
+  rotationSpeed: number;
+  color: string;
+  opacity: number;
+  decay: number;
+};
+
+function DrHarishWelcomeOverlay() {
+  const [leaving, setLeaving] = useState(false);
+  const [gone, setGone] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const fadeTimer = window.setTimeout(() => setLeaving(true), 3000);
+    const removeTimer = window.setTimeout(() => setGone(true), 3700);
+    return () => {
+      window.clearTimeout(fadeTimer);
+      window.clearTimeout(removeTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const resize = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    };
+    resize();
+    window.addEventListener('resize', resize);
+
+    const colors = ['#64ffda', '#38bdf8', '#f59e0b', '#f43f5e', '#a855f7', '#34d399', '#ffffff'];
+    const particles: ConfettiParticle[] = [];
+    const spawn = (x: number, y: number, count: number) => {
+      for (let i = 0; i < count; i++) {
+        particles.push({
+          x,
+          y,
+          size: Math.random() * 9 + 4,
+          speedX: (Math.random() - 0.5) * 14,
+          speedY: (Math.random() - 1) * 16 - 3,
+          gravity: 0.38,
+          rotation: Math.random() * 360,
+          rotationSpeed: (Math.random() - 0.5) * 20,
+          color: colors[(Math.random() * colors.length) | 0],
+          opacity: 1,
+          decay: Math.random() * 0.012 + 0.004,
+        });
+      }
+    };
+
+    const burstTimer = window.setTimeout(() => {
+      const { innerWidth: w, innerHeight: h } = window;
+      spawn(w / 2, h / 2, 130);
+      spawn(w * 0.25, h * 0.4, 65);
+      spawn(w * 0.75, h * 0.4, 65);
+    }, 350);
+
+    let rafId = 0;
+    const tick = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.speedY += p.gravity;
+        p.x += p.speedX;
+        p.y += p.speedY;
+        p.rotation += p.rotationSpeed;
+        p.opacity -= p.decay;
+        if (p.opacity <= 0 || p.y > canvas.height) {
+          particles.splice(i, 1);
+          continue;
+        }
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate((p.rotation * Math.PI) / 180);
+        ctx.globalAlpha = Math.max(0, p.opacity);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.65);
+        ctx.restore();
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.clearTimeout(burstTimer);
+      window.removeEventListener('resize', resize);
+    };
+  }, []);
+
+  if (gone) return null;
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={`fixed inset-0 z-[100] flex items-center justify-center overflow-hidden p-4 sm:p-6 transition-opacity duration-700 ease-out ${leaving ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+      style={{ background: 'radial-gradient(circle at 50% 20%, rgba(10,25,47,0.92) 0%, rgba(2,12,27,0.95) 100%)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' }}
+    >
+      {/* Confetti canvas */}
+      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full pointer-events-none" aria-hidden />
+
+      {/* Glassmorphism birthday card */}
+      <motion.div
+        initial={{ opacity: 0, scale: 0.88, y: 30 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
+        className="relative w-full max-w-4xl rounded-3xl overflow-hidden border border-[#64ffda]/15 shadow-[0_25px_50px_-12px_rgba(2,12,27,0.7)]"
+        style={{ background: 'rgba(17,34,64,0.75)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' }}
+      >
+        {/* Ambient concentric rings */}
+        <div className="absolute -right-40 -top-40 w-96 h-96 sm:w-[550px] sm:h-[550px] rounded-full border border-[#64ffda]/10 pointer-events-none" aria-hidden />
+        <div className="absolute -right-64 -top-64 w-[600px] h-[600px] sm:w-[800px] sm:h-[800px] rounded-full border border-[#64ffda]/5 pointer-events-none" aria-hidden />
+
+        {/* Header bar */}
+        <div className="relative z-10 flex items-center justify-between px-6 pt-5 pb-3 border-b border-[#233554]/60">
+          <div className="flex items-center gap-2 text-xs font-semibold text-[#64ffda] tracking-widest uppercase">
+            <Award size={14} /> Special Birthday Tribute
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 items-center gap-8 lg:gap-10 p-6 sm:p-10">
+          {/* Portrait */}
+          <div className="lg:col-span-5 flex flex-col items-center justify-center">
+            <motion.div
+              initial={{ scale: 0.7, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ delay: 0.15, type: 'spring', stiffness: 140, damping: 15 }}
+              className="relative"
+            >
+              <div className="absolute -inset-3 rounded-full bg-gradient-to-tr from-[#64ffda] via-cyan-400 to-emerald-400 opacity-70 blur-md" aria-hidden />
+              <div className="relative w-44 h-44 sm:w-60 sm:h-60 rounded-full border-4 border-[#64ffda] overflow-hidden shadow-2xl bg-[#0a192f]">
+                <img
+                  src="/WhatsApp%20Image%202026-02-23%20at%2023.27.04.jpeg"
+                  alt="Dr. Harish"
+                  className="w-full h-full object-cover object-top"
+                />
+              </div>
+              <motion.div
+                animate={{ y: [0, -10, 0], rotate: [0, 6, 0] }}
+                transition={{ duration: 3.5, repeat: Infinity, ease: 'easeInOut' }}
+                className="absolute bottom-2 right-2 sm:bottom-3 sm:right-4 w-14 h-14 bg-gradient-to-br from-[#64ffda] to-cyan-600 border-2 border-[#0a192f] rounded-full flex items-center justify-center shadow-2xl text-[#020c1b]"
+              >
+                <Cake size={24} strokeWidth={1.75} />
+              </motion.div>
+            </motion.div>
+
+            <div className="mt-5 flex items-center gap-2 text-xs text-slate-300 bg-[#0a192f]/80 px-3 py-1.5 rounded-full border border-[#233554]">
+              <Stethoscope size={13} className="text-[#64ffda]" /> Critical Care Specialist
+            </div>
+          </div>
+
+          {/* Text */}
+          <div className="lg:col-span-7 text-center lg:text-left space-y-4">
+            <div className="inline-block tracking-[0.3em] text-xs sm:text-sm font-bold text-[#64ffda] uppercase bg-[#64ffda]/10 px-4 py-1.5 rounded-full border border-[#64ffda]/30">
+              ★ Happy Birthday ★
+            </div>
+
+            <h2 className="font-display font-black tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-white via-[#64ffda] to-white drop-shadow-lg" style={{ fontSize: 'clamp(30px, 5vw, 56px)' }}>
+              DR. HARISH
+            </h2>
+
+            <div className="w-24 h-1 bg-gradient-to-r from-[#64ffda] via-cyan-400 to-transparent mx-auto lg:mx-0 rounded-full" />
+
+            <blockquote className="text-sm sm:text-base italic text-slate-200 leading-relaxed pt-1 border-l-2 border-[#64ffda]/40 pl-3.5 my-2">
+              "The best way to find yourself is to lose yourself in the service of others."
+            </blockquote>
+
+            <p className="text-xs sm:text-sm text-slate-300 leading-relaxed pt-1">
+              May your year ahead be filled with boundless health, profound joy, and countless lives touched — with deep appreciation and love from all of us at{' '}
+              <span className="text-[#64ffda] font-semibold">Master Classes in Critical Care</span>.
+            </p>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="relative z-10 px-6 py-3.5 bg-[#0a192f]/90 border-t border-[#233554]/60 text-xs text-slate-400">
+          Master Classes in Critical Care • Annual Celebration
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
 export default function Home() {
   const { data: regBatches } = useQuery<Array<{ slug: string; title: string }>>({
     queryKey: ['regBatches'],
@@ -624,6 +820,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen">
+      <DrHarishWelcomeOverlay />
       <Navbar />
       <HeroSection heroPills={heroPills} primaryBatch={primaryBatch} />
       <TickerSection />
