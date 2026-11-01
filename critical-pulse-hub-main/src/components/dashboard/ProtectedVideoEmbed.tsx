@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react';
-import { Maximize2, Minimize2, Play, Pause, Settings, Volume1, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
+import { Maximize2, Minimize2, Play, Pause, Settings, Volume1, Volume2, VolumeX, ZoomIn, ZoomOut, Captions, CaptionsOff } from 'lucide-react';
 import { resolvePublicUploadUrl } from '@/lib/apiBase';
 import { apiClient } from '@/lib/apiClient';
 import { useAuthStore } from '@/store/authStore';
@@ -205,6 +205,8 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   /** After a committed seek, ignore stale getCurrentTime/timeupdate until the player catches up. */
   const pendingSeekTargetRef = useRef<number | null>(null);
   const pendingSeekUntilRef = useRef(0);
+  /** Quality to restore after a seek finishes buffering (seek uses 'auto' for speed). */
+  const pendingQualityRestoreRef = useRef<string | null>(null);
   const watchAnchorMsRef = useRef<number | null>(null);
   const currentTimeRef = useRef(0);
   const durationRef = useRef(0);
@@ -247,10 +249,10 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const [isMuted, setIsMuted] = useState(false);
   
   const [qualities, setQualities] = useState<{ id: string; label: string }[]>([]);
-  const [currentQuality, setCurrentQuality] = useState<string>('auto');
+  const [currentQuality, setCurrentQuality] = useState<string>('1080p');
   const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [playerError, setPlayerError] = useState<string | null>(null);
-  const currentQualityRef = useRef('auto');
+  const currentQualityRef = useRef('1080p');
   const bufferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
@@ -261,6 +263,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const [controlsActivity, setControlsActivity] = useState(0);
   const [videoZoom, setVideoZoom] = useState(1);
   const [videoPan, setVideoPan] = useState({ x: 0, y: 0 });
+  const [showNotice, setShowNotice] = useState(true);
 
   const isDirectVideo = isDirectVideoFileUrl(videoUrl);
   const detected = isDirectVideo ? null : detectProvider(videoUrl);
@@ -788,6 +791,11 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       pendingSeekUntilRef.current = Date.now() + 2500;
 
       if (detected.provider === 'vimeo') {
+        const q = currentQualityRef.current;
+        if (q && q !== 'auto') {
+          pendingQualityRestoreRef.current = q;
+          postVimeo({ method: 'setQuality', value: 'auto' });
+        }
         postVimeo({ method: 'setCurrentTime', value: clamped });
       } else if (detected.provider === 'youtube') {
         postYouTube({ event: 'command', func: 'seekTo', args: [clamped, true] });
@@ -1013,6 +1021,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         if (data.event === 'bufferstart') {
           if (bufferTimerRef.current) clearTimeout(bufferTimerRef.current);
           bufferTimerRef.current = setTimeout(() => {
+            pendingQualityRestoreRef.current = null;
             const q = (currentQualityRef.current || '').toLowerCase();
             if (q && q !== 'auto' && !['240p', '360p', '540p'].includes(q)) {
               iframe?.contentWindow?.postMessage(
@@ -1031,6 +1040,16 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           }
         }
 
+        // After a seek buffers on 'auto', restore the user's chosen quality.
+        if (data.event === 'bufferend' && pendingQualityRestoreRef.current) {
+          const restoreQ = pendingQualityRestoreRef.current;
+          pendingQualityRestoreRef.current = null;
+          iframe?.contentWindow?.postMessage(
+            JSON.stringify({ method: 'setQuality', value: restoreQ }),
+            'https://player.vimeo.com',
+          );
+        }
+
         // When Vimeo is ready, subscribe to events
         if (data.event === 'ready' && iframe?.contentWindow) {
           playerReadyRef.current = true;
@@ -1042,7 +1061,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             );
           });
           iframe.contentWindow?.postMessage(
-            JSON.stringify({ method: 'setQuality', value: 'auto' }),
+            JSON.stringify({ method: 'setQuality', value: '1080p' }),
             'https://player.vimeo.com',
           );
           // Request duration and qualities
@@ -2143,6 +2162,31 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
               </div>
             )}
 
+            {/* Copyright ticker toggle */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowQualityMenu(false);
+                setShowSpeedMenu(false);
+                setShowNotice((prev) => !prev);
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              className="
+                flex items-center justify-center w-7 h-7
+                text-white/80 hover:text-white
+                transition-colors cursor-pointer
+              "
+              title={showNotice ? 'Hide caption' : 'Show caption'}
+              aria-label={showNotice ? 'Hide caption' : 'Show caption'}
+              aria-pressed={showNotice}
+            >
+              {showNotice ? <Captions size={16} /> : <CaptionsOff size={16} />}
+            </button>
+
             {isExpanded && (
               <div className="flex items-center gap-0.5 shrink-0">
                 <button
@@ -2222,6 +2266,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       </div>
 
       {/* Copyright stays on the bottom edge and does not hide with the controls. */}
+      {showNotice && (
       <div className="pointer-events-none shrink-0 w-full overflow-hidden pb-1" aria-hidden>
         <div className="animate-copyright-line flex">
           {[0, 1].map((copy) => (
@@ -2234,6 +2279,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           ))}
         </div>
       </div>
+      )}
       </div>
     </div>
   );
