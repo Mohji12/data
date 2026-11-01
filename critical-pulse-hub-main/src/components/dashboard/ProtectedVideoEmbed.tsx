@@ -249,10 +249,12 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const [isMuted, setIsMuted] = useState(false);
   
   const [qualities, setQualities] = useState<{ id: string; label: string }[]>([]);
-  const [currentQuality, setCurrentQuality] = useState<string>('1080p');
+  const [currentQuality, setCurrentQuality] = useState<string>('auto');
   const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [playerError, setPlayerError] = useState<string | null>(null);
-  const currentQualityRef = useRef('1080p');
+  const currentQualityRef = useRef('auto');
+  /** Once the user picks a quality from the menu, stop auto-selecting the max. */
+  const userPickedQualityRef = useRef(false);
   const bufferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
@@ -398,6 +400,8 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
   useEffect(() => {
     setPlayerError(null);
+    userPickedQualityRef.current = false;
+    pendingQualityRestoreRef.current = null;
     return () => {
       if (bufferTimerRef.current) {
         clearTimeout(bufferTimerRef.current);
@@ -831,6 +835,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         );
       }
 
+      userPickedQualityRef.current = true;
       setCurrentQuality(qualityId);
       setShowQualityMenu(false);
     },
@@ -1060,11 +1065,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
               'https://player.vimeo.com',
             );
           });
-          iframe.contentWindow?.postMessage(
-            JSON.stringify({ method: 'setQuality', value: '1080p' }),
-            'https://player.vimeo.com',
-          );
-          // Request duration and qualities
+          // Request duration and qualities (max rendition is pinned on getQualities)
           iframe.contentWindow?.postMessage(
             JSON.stringify({ method: 'getDuration' }),
             'https://player.vimeo.com',
@@ -1117,8 +1118,21 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         if (data.method === 'getQualities' && Array.isArray(data.value)) {
           const vimeoQualities = data.value as { id: string; label: string; active?: boolean }[];
           setQualities(vimeoQualities);
-          const active = vimeoQualities.find((q) => q.active);
-          if (active) setCurrentQuality(active.id);
+          // Pin the highest rendition this video actually has (1080p if present,
+          // else 720p/540p/…) — a fixed '1080p' errors on videos without it.
+          const best = vimeoQualities
+            .filter((q) => q.id && q.id !== 'auto')
+            .sort((a, b) => (parseInt(b.id, 10) || 0) - (parseInt(a.id, 10) || 0))[0];
+          if (best && !userPickedQualityRef.current) {
+            iframe?.contentWindow?.postMessage(
+              JSON.stringify({ method: 'setQuality', value: best.id }),
+              'https://player.vimeo.com',
+            );
+            setCurrentQuality(best.id);
+          } else {
+            const active = vimeoQualities.find((q) => q.active);
+            if (active) setCurrentQuality(active.id);
+          }
         }
 
         if (data.event === 'qualitychange') {

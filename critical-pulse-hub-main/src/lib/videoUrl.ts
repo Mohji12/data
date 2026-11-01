@@ -109,8 +109,9 @@ export function buildVimeoPlayerEmbedUrl(
     dnt: '1',
     transcript: '0',
     pip: '0',
-    // Start at 1080p for a sharp picture; the player drops quality if buffering persists.
-    quality: '1080p',
+    // Start adaptive (fast first frame); the player pins the max available
+    // rendition via setQuality once getQualities reports what the video has.
+    quality: 'auto',
     // Keep playback inside the iframe on iPhone/iPad so our pause button can stop it.
     playsinline: '1',
     // speed=1 enables the playback-rate API (required for setPlaybackRate postMessage).
