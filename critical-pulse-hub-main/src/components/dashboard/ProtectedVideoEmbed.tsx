@@ -205,8 +205,8 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   /** After a committed seek, ignore stale getCurrentTime/timeupdate until the player catches up. */
   const pendingSeekTargetRef = useRef<number | null>(null);
   const pendingSeekUntilRef = useRef(0);
-  /** Quality to restore after a seek finishes buffering (seek uses 'auto' for speed). */
-  const pendingQualityRestoreRef = useRef<string | null>(null);
+  /** Real renditions sorted high→low (excludes 'auto'), filled from getQualities. */
+  const availableQualitiesRef = useRef<string[]>([]);
   const watchAnchorMsRef = useRef<number | null>(null);
   const currentTimeRef = useRef(0);
   const durationRef = useRef(0);
@@ -401,7 +401,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   useEffect(() => {
     setPlayerError(null);
     userPickedQualityRef.current = false;
-    pendingQualityRestoreRef.current = null;
+    availableQualitiesRef.current = [];
     return () => {
       if (bufferTimerRef.current) {
         clearTimeout(bufferTimerRef.current);
@@ -795,11 +795,6 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       pendingSeekUntilRef.current = Date.now() + 2500;
 
       if (detected.provider === 'vimeo') {
-        const q = currentQualityRef.current;
-        if (q && q !== 'auto') {
-          pendingQualityRestoreRef.current = q;
-          postVimeo({ method: 'setQuality', value: 'auto' });
-        }
         postVimeo({ method: 'setCurrentTime', value: clamped });
       } else if (detected.provider === 'youtube') {
         postYouTube({ event: 'command', func: 'seekTo', args: [clamped, true] });
@@ -1026,14 +1021,16 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         if (data.event === 'bufferstart') {
           if (bufferTimerRef.current) clearTimeout(bufferTimerRef.current);
           bufferTimerRef.current = setTimeout(() => {
-            pendingQualityRestoreRef.current = null;
-            const q = (currentQualityRef.current || '').toLowerCase();
-            if (q && q !== 'auto' && !['240p', '360p', '540p'].includes(q)) {
+            // Step down to the next-lower real rendition — 'auto' is not offered.
+            const list = availableQualitiesRef.current;
+            const idx = list.indexOf(currentQualityRef.current);
+            const lower = idx >= 0 && idx < list.length - 1 ? list[idx + 1] : list[0];
+            if (lower && lower !== currentQualityRef.current) {
               iframe?.contentWindow?.postMessage(
-                JSON.stringify({ method: 'setQuality', value: 'auto' }),
+                JSON.stringify({ method: 'setQuality', value: lower }),
                 'https://player.vimeo.com',
               );
-              setCurrentQuality('auto');
+              setCurrentQuality(lower);
             }
           }, 3000);
         }
@@ -1043,16 +1040,6 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             clearTimeout(bufferTimerRef.current);
             bufferTimerRef.current = null;
           }
-        }
-
-        // After a seek buffers on 'auto', restore the user's chosen quality.
-        if (data.event === 'bufferend' && pendingQualityRestoreRef.current) {
-          const restoreQ = pendingQualityRestoreRef.current;
-          pendingQualityRestoreRef.current = null;
-          iframe?.contentWindow?.postMessage(
-            JSON.stringify({ method: 'setQuality', value: restoreQ }),
-            'https://player.vimeo.com',
-          );
         }
 
         // When Vimeo is ready, subscribe to events
@@ -1117,12 +1104,17 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
         if (data.method === 'getQualities' && Array.isArray(data.value)) {
           const vimeoQualities = data.value as { id: string; label: string; active?: boolean }[];
-          setQualities(vimeoQualities);
+          // 'auto' is hidden from the menu — playback always pins a real rendition.
+          const realQualities = vimeoQualities.filter((q) => q.id && q.id !== 'auto');
+          setQualities(realQualities);
           // Pin the highest rendition this video actually has (1080p if present,
           // else 720p/540p/…) — a fixed '1080p' errors on videos without it.
-          const best = vimeoQualities
-            .filter((q) => q.id && q.id !== 'auto')
+          const best = realQualities
+            .slice()
             .sort((a, b) => (parseInt(b.id, 10) || 0) - (parseInt(a.id, 10) || 0))[0];
+          availableQualitiesRef.current = realQualities
+            .map((q) => q.id)
+            .sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
           if (best && !userPickedQualityRef.current) {
             iframe?.contentWindow?.postMessage(
               JSON.stringify({ method: 'setQuality', value: best.id }),
@@ -1254,7 +1246,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             }
             if (info.availableQualityLevels && Array.isArray(info.availableQualityLevels)) {
               setQualities(
-                info.availableQualityLevels.map((q: string) => ({ id: q, label: q === 'highres' ? 'High Res' : q === 'hd1080' ? '1080p' : q === 'hd720' ? '720p' : q === 'large' ? '480p' : q === 'medium' ? '360p' : q === 'small' ? '240p' : q === 'tiny' ? '144p' : q === 'auto' ? 'Auto' : q }))
+                info.availableQualityLevels.map((q: string) => ({ id: q, label: q === 'highres' ? 'High Res' : q === 'hd1080' ? '1080p' : q === 'hd720' ? '720p' : q === 'large' ? '480p' : q === 'medium' ? '360p' : q === 'small' ? '240p' : q === 'tiny' ? '144p' : q === 'auto' ? 'Auto' : q })).filter((q: { id: string }) => q.id !== 'auto')
               );
             }
             if (info.playbackQuality) {
