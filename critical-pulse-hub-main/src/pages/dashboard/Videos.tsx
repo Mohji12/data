@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { PlayCircle, FolderOpen, ArrowLeft, ChevronLeft, ChevronRight, Search, X } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
@@ -198,6 +198,10 @@ function PaginationFooter({
 }
 
 export default function Videos() {
+  const [searchParams] = useSearchParams();
+  const isMcqCollection = searchParams.get('collection') === 'mcq';
+  const pageTitle = isMcqCollection ? 'Topic Wise MCQ' : 'Video Library';
+
   const [selectedFolder, setSelectedFolder] = useState<{ id: number; name: string } | null>(null);
   const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
@@ -209,10 +213,14 @@ export default function Videos() {
     setPage(1);
   };
 
-  const { data: folders, isLoading: foldersLoading, error: foldersError } = useQuery({
+  const { data: rawFolders, isLoading: foldersLoading, error: foldersError } = useQuery({
     queryKey: ['videoFolders'],
     queryFn: () => apiClient('/videos/folders'),
   });
+
+  const folders = isMcqCollection
+    ? (rawFolders as { name?: string }[] | undefined)?.filter((f) => /mcq/i.test(f?.name || ''))
+    : rawFolders;
 
   const { data: searchData, isLoading: searchLoading, error: searchError } = useQuery({
     queryKey: ['videosSearch', activeSearch, page],
@@ -319,7 +327,7 @@ export default function Videos() {
           <ArrowLeft size={14} /> Back to Folders
         </button>
 
-        <h1 className="font-display font-bold text-3xl text-slate mb-2">Video Library</h1>
+        <h1 className="font-display font-bold text-3xl text-slate mb-2">{pageTitle}</h1>
         <VideoSearchBar value={searchQuery} onChange={handleSearchChange} />
 
         <p className="font-mono text-[10px] text-ink-faint mb-6 uppercase tracking-wider">
@@ -350,7 +358,7 @@ export default function Videos() {
 
   return (
     <div className="p-6 lg:p-8">
-      <h1 className="font-display font-bold text-3xl text-slate mb-2">Video Library</h1>
+      <h1 className="font-display font-bold text-3xl text-slate mb-2">{pageTitle}</h1>
       <VideoSearchBar value={searchQuery} onChange={handleSearchChange} />
 
       {foldersLoading && <div className="font-mono text-xs text-ink-faint">Loading folders...</div>}

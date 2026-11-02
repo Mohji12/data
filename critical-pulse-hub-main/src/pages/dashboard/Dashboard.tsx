@@ -196,6 +196,9 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {[
             ...(summary?.video?.enabled ? [{ title: 'Watch Videos', sub: 'Access your batch folders', to: '/dashboard/videos' }] : []),
+            ...(summary?.video?.enabled && (user?.course || '').toUpperCase().includes('NEET')
+              ? [{ title: 'Topic Wise MCQ', sub: 'Mock test discussion videos', to: '/dashboard/videos?collection=mcq' }]
+              : []),
             ...(summary?.mock_test?.enabled ? [{ title: 'Mock Tests', sub: 'Practice real exam patterns', to: '/dashboard/quiz' }] : []),
             ...(summary?.extension?.enabled
               ? [{
