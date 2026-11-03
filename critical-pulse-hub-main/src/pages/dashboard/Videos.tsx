@@ -201,7 +201,7 @@ function PaginationFooter({
 export default function Videos() {
   const [searchParams] = useSearchParams();
   const isMcqCollection = searchParams.get('collection') === 'mcq';
-  const pageTitle = isMcqCollection ? "MCQ's" : 'Video Library';
+  const pageTitle = isMcqCollection ? "Topic Wise MCQ's" : 'Video Library';
 
   const [selectedFolder, setSelectedFolder] = useState<{ id: number; name: string } | null>(null);
   const [page, setPage] = useState(1);
