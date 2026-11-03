@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
 import { useOdometer } from '@/hooks/useOdometer';
-import { PlayCircle, ClipboardCheck, BookOpen, ArrowUpRight, Calendar } from 'lucide-react';
+import { PlayCircle, ClipboardCheck, BookOpen, ArrowUpRight, Calendar, FileQuestion } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import AppLoader from '@/components/AppLoader';
@@ -201,7 +201,7 @@ export default function Dashboard() {
           {[
             ...(summary?.video?.enabled ? [{ title: 'Watch Videos', sub: 'Access your batch folders', to: '/dashboard/videos' }] : []),
             ...(summary?.video?.enabled && (user?.course || '').toUpperCase().includes('NEET')
-              ? [{ title: "Topic Wise MCQ's", sub: 'Mock test discussion videos', to: '/dashboard/videos?collection=mcq' }]
+              ? [{ title: "Topic Wise MCQ's", sub: 'Mock test discussion videos', to: '/dashboard/videos?collection=mcq', icon: FileQuestion }]
               : []),
             ...(summary?.mock_test?.enabled ? [{ title: 'Mock Tests', sub: 'Practice real exam patterns', to: '/dashboard/quiz' }] : []),
             ...(summary?.extension?.enabled
@@ -219,7 +219,15 @@ export default function Dashboard() {
             { title: 'Update Profile', sub: 'Manage your professional details', to: '/dashboard/profile' },
           ].map((item) => (
             <Link key={item.title} to={item.to} className="bg-chalk border border-border-soft rounded-sm p-8 hover:border-mint/30 hover:shadow-mint transition-all group cursor-pointer">
-              <div className="font-display font-bold text-xl text-slate">{item.title}</div>
+              <div className="font-display font-bold text-xl text-slate flex items-center gap-2">
+                {'icon' in item && item.icon ? (
+                  (() => {
+                    const Icon = item.icon as typeof FileQuestion;
+                    return <Icon size={18} className="text-mint shrink-0" />;
+                  })()
+                ) : null}
+                {item.title}
+              </div>
               <div className="font-sans text-sm text-ink-muted mt-2">{item.sub}</div>
               <ArrowUpRight size={16} className="text-ink-faint group-hover:text-mint mt-8 transition-colors" />
             </Link>
