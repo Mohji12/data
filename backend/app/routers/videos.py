@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.types import Integer
 
 from app.db import get_db
-from app.models import Audit, FolderMaster, User, Video, VideoQuestion
+from app.models import Audit, FolderMaster, User, UserVideoProgress, Video, VideoQuestion
 from app.schemas import (
     VideoDetail,
     VideoFolderItem,
@@ -24,7 +24,7 @@ from app.security import get_current_user
 from app.services.access import can_access_video_library
 from app.services.batch_match import find_in_set_sql
 from app.services.uploads import public_video_thumbnail_url
-from app.services.module_exam_gate import exam_id_for_folder, folder_video_completion
+from app.services.module_exam_gate import _load_folder_exam_map
 from app.services.video_progress import (
     WATCHED_THRESHOLD_SECONDS,
     is_video_watched,
@@ -91,18 +91,54 @@ def list_video_folders(
         .order_by(FolderMaster.display_order.asc(), FolderMaster.id.asc())
         .all()
     )
+    if not folders:
+        return []
+
+    # Bulk-load everything once — per-folder queries made this endpoint very slow.
+    video_rows = (
+        db.query(Video.id, Video.folder)
+        .filter(Video.status == "1", find_in_set_sql(Video.batch, subscription))
+        .all()
+    )
+    folder_video_ids: dict[int, list[int]] = {}
+    all_video_ids: set[int] = set()
+    for vid, folder_csv in video_rows:
+        all_video_ids.add(int(vid))
+        for part in (folder_csv or "").split(","):
+            p = part.strip()
+            if p.isdigit():
+                folder_video_ids.setdefault(int(p), []).append(int(vid))
+
+    watched_by_id: dict[int, int] = {}
+    if all_video_ids:
+        progress_rows = (
+            db.query(UserVideoProgress.video_id, UserVideoProgress.watched_seconds)
+            .filter(
+                UserVideoProgress.user_id == current_user.id,
+                UserVideoProgress.video_id.in_(all_video_ids),
+            )
+            .all()
+        )
+        watched_by_id = {int(v): int(s or 0) for v, s in progress_rows}
+
+    exam_map = _load_folder_exam_map(db)
+
     items: list[VideoFolderItem] = []
     for f in folders:
-        stats = folder_video_completion(db, current_user.id, f.id, subscription=subscription)
-        mapped_exam = exam_id_for_folder(db, f.id)
+        video_ids = folder_video_ids.get(f.id, [])
+        total = len(video_ids)
+        watched = sum(
+            1 for vid in video_ids if watched_by_id.get(vid, 0) >= WATCHED_THRESHOLD_SECONDS
+        )
+        mapped_exam = exam_map.get(f.id)
         items.append(
             VideoFolderItem(
                 id=f.id,
                 name=f.name,
                 display_order=f.display_order or 0,
-                videos_total=stats["videos_total"],
-                videos_watched=stats["videos_watched"],
-                module_test_unlocked=stats["complete"] if mapped_exam else None,
+                videos_total=total,
+                videos_watched=watched,
+                module_test_unlocked=(total > 0 and watched >= total) if mapped_exam else None,
             )
         )
     return items

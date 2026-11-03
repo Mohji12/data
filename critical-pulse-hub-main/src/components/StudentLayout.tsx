@@ -26,6 +26,15 @@ export default function StudentLayout() {
     enabled: !!user?.id,
   });
   const isActive = (to: string) => location.pathname === to || (to !== '/dashboard' && location.pathname.startsWith(to));
+  const isMcqPage = location.pathname === '/dashboard/videos' && location.search.includes('collection=mcq');
+  const isActiveItem = (to: string) => {
+    if (to.includes('collection=mcq')) return isMcqPage;
+    if (to === '/dashboard/videos') {
+      return (location.pathname === '/dashboard/videos' && !isMcqPage) || location.pathname.startsWith('/dashboard/videos/');
+    }
+    return isActive(to);
+  };
+  const isNeet = (user?.course || '').toUpperCase().includes('NEET');
   const canExtend = !!summary?.extension?.enabled;
   const canCertificate = !!summary?.certificate?.enabled;
   const certificateOnly = !!summary?.certificate_only;
@@ -49,6 +58,7 @@ export default function StudentLayout() {
         { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
         { label: 'Video Library', to: '/dashboard/videos', icon: PlayCircle },
         { label: 'Mock Tests', to: '/dashboard/quiz', icon: ClipboardCheck },
+        ...(isNeet ? [{ label: 'Topic Wise MCQ', to: '/dashboard/videos?collection=mcq', icon: FileQuestion }] : []),
         ...(canExtend ? [{ label: 'Extend Subscription', to: '/dashboard/extend-subscription', icon: BookOpen }] : []),
         ...(canCertificate ? [{ label: 'Certificate', to: '/dashboard/certificate', icon: Award }] : []),
       ];
@@ -61,6 +71,7 @@ export default function StudentLayout() {
         { label: 'Home', to: '/dashboard', icon: Home },
         { label: 'Videos', to: '/dashboard/videos', icon: PlayCircle },
         { label: 'Tests', to: '/dashboard/quiz', icon: FileQuestion },
+        ...(isNeet ? [{ label: 'MCQ', to: '/dashboard/videos?collection=mcq', icon: ClipboardCheck }] : []),
         ...(canExtend ? [{ label: 'Extend', to: '/dashboard/extend-subscription', icon: BookOpen }] : []),
         ...(canCertificate ? [{ label: 'Cert', to: '/dashboard/certificate', icon: Award }] : []),
         { label: 'Profile', to: '/dashboard/profile', icon: User },
@@ -99,7 +110,7 @@ export default function StudentLayout() {
               </div>
               {(section.label === 'LEARN' ? learnItems : section.items).map((item) => {
                 const Icon = item.icon;
-                const active = isActive(item.to);
+                const active = isActiveItem(item.to);
                 return (
                   <Link
                     key={item.to}
@@ -147,7 +158,7 @@ export default function StudentLayout() {
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-30 bg-chalk-cool border-t border-border flex justify-around py-2">
         {mobileNav.map((item) => {
           const Icon = item.icon;
-          const active = isActive(item.to);
+          const active = isActiveItem(item.to);
           return (
             <Link
               key={item.to}

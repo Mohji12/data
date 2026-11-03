@@ -4,6 +4,7 @@ import { PlayCircle, FolderOpen, ArrowLeft, ChevronLeft, ChevronRight, Search, X
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import { resolveVideoThumbnailUrl } from '@/lib/apiBase';
+import AppLoader from '@/components/AppLoader';
 
 const PAGE_SIZE = 12;
 const MIN_SEARCH_CHARS = 3;
@@ -216,6 +217,7 @@ export default function Videos() {
   const { data: rawFolders, isLoading: foldersLoading, error: foldersError } = useQuery({
     queryKey: ['videoFolders'],
     queryFn: () => apiClient('/videos/folders'),
+    staleTime: 60_000,
   });
 
   const folders = isMcqCollection
@@ -361,7 +363,7 @@ export default function Videos() {
       <h1 className="font-display font-bold text-3xl text-slate mb-2">{pageTitle}</h1>
       <VideoSearchBar value={searchQuery} onChange={handleSearchChange} />
 
-      {foldersLoading && <div className="font-mono text-xs text-ink-faint">Loading folders...</div>}
+      {foldersLoading && <AppLoader label="Loading folders" />}
       {foldersError && (
         <div className="text-red-500 font-sans text-sm">Error loading folders. Please check your connection.</div>
       )}

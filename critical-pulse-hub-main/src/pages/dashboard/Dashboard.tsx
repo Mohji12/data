@@ -5,6 +5,7 @@ import { useOdometer } from '@/hooks/useOdometer';
 import { PlayCircle, ClipboardCheck, BookOpen, ArrowUpRight, Calendar } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
+import AppLoader from '@/components/AppLoader';
 
 type VideoFolder = { id: number; name: string; display_order?: number };
 
@@ -40,6 +41,7 @@ export default function Dashboard() {
     queryKey: ['dashboardSummary'],
     queryFn: () => apiClient('/dashboard/summary'),
     enabled: !!user?.id,
+    staleTime: 60_000,
   });
 
   const videoEnabled = !!summary?.video?.enabled;
@@ -48,6 +50,7 @@ export default function Dashboard() {
     queryKey: ['videoFolders', user?.id],
     queryFn: () => apiClient('/videos/folders') as Promise<VideoFolder[]>,
     enabled: !!user?.id && videoEnabled,
+    staleTime: 60_000,
   });
 
   const { data: stats } = useQuery({
@@ -57,6 +60,7 @@ export default function Dashboard() {
       return apiClient(`/dashboard/stats${q}`) as Promise<DashboardStats>;
     },
     enabled: !!user?.id,
+    staleTime: 30_000,
   });
 
   const folderSelected = folderId != null;
@@ -68,7 +72,7 @@ export default function Dashboard() {
   const hoursSpent = useOdometer(Number(stats?.hours_spent ?? 0), 1);
   const testsCompleted = useOdometer(Number(stats?.tests_done ?? 0));
 
-  if (isLoading) return <div className="p-8 font-mono text-sm text-ink-faint">Loading real-time dashboard...</div>;
+  if (isLoading) return <AppLoader label="Loading dashboard" />;
   if (error) return <div className="p-8 font-mono text-sm text-red-500">Failed to connect to real-time data API.</div>;
 
   const batchAccess = summary?.batch_access;
