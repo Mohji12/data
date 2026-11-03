@@ -201,7 +201,7 @@ export default function Dashboard() {
           {[
             ...(summary?.video?.enabled ? [{ title: 'Watch Videos', sub: 'Access your batch folders', to: '/dashboard/videos' }] : []),
             ...(summary?.video?.enabled && (user?.course || '').toUpperCase().includes('NEET')
-              ? [{ title: 'Topic Wise MCQ', sub: 'Mock test discussion videos', to: '/dashboard/videos?collection=mcq' }]
+              ? [{ title: "Topic Wise MCQ's", sub: 'Mock test discussion videos', to: '/dashboard/videos?collection=mcq' }]
               : []),
             ...(summary?.mock_test?.enabled ? [{ title: 'Mock Tests', sub: 'Practice real exam patterns', to: '/dashboard/quiz' }] : []),
             ...(summary?.extension?.enabled

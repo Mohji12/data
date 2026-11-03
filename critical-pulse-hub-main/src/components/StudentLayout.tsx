@@ -58,7 +58,7 @@ export default function StudentLayout() {
         { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
         { label: 'Video Library', to: '/dashboard/videos', icon: PlayCircle },
         { label: 'Mock Tests', to: '/dashboard/quiz', icon: ClipboardCheck },
-        ...(isNeet ? [{ label: 'Topic Wise MCQ', to: '/dashboard/videos?collection=mcq', icon: FileQuestion }] : []),
+        ...(isNeet ? [{ label: "Topic Wise MCQ's", to: '/dashboard/videos?collection=mcq', icon: FileQuestion }] : []),
         ...(canExtend ? [{ label: 'Extend Subscription', to: '/dashboard/extend-subscription', icon: BookOpen }] : []),
         ...(canCertificate ? [{ label: 'Certificate', to: '/dashboard/certificate', icon: Award }] : []),
       ];
@@ -71,7 +71,7 @@ export default function StudentLayout() {
         { label: 'Home', to: '/dashboard', icon: Home },
         { label: 'Videos', to: '/dashboard/videos', icon: PlayCircle },
         { label: 'Tests', to: '/dashboard/quiz', icon: FileQuestion },
-        ...(isNeet ? [{ label: 'MCQ', to: '/dashboard/videos?collection=mcq', icon: ClipboardCheck }] : []),
+        ...(isNeet ? [{ label: "MCQ's", to: '/dashboard/videos?collection=mcq', icon: ClipboardCheck }] : []),
         ...(canExtend ? [{ label: 'Extend', to: '/dashboard/extend-subscription', icon: BookOpen }] : []),
         ...(canCertificate ? [{ label: 'Cert', to: '/dashboard/certificate', icon: Award }] : []),
         { label: 'Profile', to: '/dashboard/profile', icon: User },
