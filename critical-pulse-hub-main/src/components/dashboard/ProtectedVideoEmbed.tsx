@@ -207,6 +207,10 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const pendingSeekUntilRef = useRef(0);
   /** Real renditions sorted high→low (excludes 'auto'), filled from getQualities. */
   const availableQualitiesRef = useRef<string[]>([]);
+  /** Last time the player reported buffering (for quality step-up decisions). */
+  const lastBufferAtRef = useRef(0);
+  /** Last time we stepped quality back up (rate-limit upgrades). */
+  const lastStepUpAtRef = useRef(0);
   const watchAnchorMsRef = useRef<number | null>(null);
   const currentTimeRef = useRef(0);
   const durationRef = useRef(0);
@@ -578,11 +582,20 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           }
           postVimeo({ method: 'play' });
           const ackBefore = lastPlaybackAckRef.current;
+          // Retry play at 900ms and again at 2.5s — a single retry often loses
+          // while Vimeo is still refilling its buffer after a long pause.
           playRetryTimerRef.current = window.setTimeout(() => {
             if (!isPlayingRef.current) return;
             if (lastPlaybackAckRef.current !== ackBefore) return;
             rebindVimeo();
             postVimeo({ method: 'play' });
+            playRetryTimerRef.current = window.setTimeout(() => {
+              if (!isPlayingRef.current) return;
+              if (lastPlaybackAckRef.current !== ackBefore) return;
+              rebindVimeo();
+              postVimeo({ method: 'getPaused' });
+              postVimeo({ method: 'play' });
+            }, 1600);
           }, 900);
         } else {
           postVimeo({ method: 'pause' });
@@ -1019,6 +1032,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         }
 
         if (data.event === 'bufferstart') {
+          lastBufferAtRef.current = Date.now();
           if (bufferTimerRef.current) clearTimeout(bufferTimerRef.current);
           bufferTimerRef.current = setTimeout(() => {
             // Step down to the next-lower real rendition — 'auto' is not offered.
@@ -1075,6 +1089,24 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
         if (data.event === 'timeupdate') {
           lastPlaybackAckRef.current = Date.now();
+          // Adaptive step-up: after 20s of clean playback, try the next-higher
+          // rendition (only when the user didn't pick a quality manually).
+          const now = Date.now();
+          if (
+            !userPickedQualityRef.current &&
+            now - lastBufferAtRef.current > 20_000 &&
+            now - lastStepUpAtRef.current > 30_000
+          ) {
+            const list = availableQualitiesRef.current;
+            const idx = list.indexOf(currentQualityRef.current);
+            if (idx > 0) {
+              lastStepUpAtRef.current = now;
+              iframe?.contentWindow?.postMessage(
+                JSON.stringify({ method: 'setQuality', value: list[idx - 1] }),
+                'https://player.vimeo.com',
+              );
+            }
+          }
           const td = data.data as Record<string, number> | undefined;
           if (td) {
             if (typeof td.seconds === 'number' && shouldAcceptExternalTime(td.seconds)) {
