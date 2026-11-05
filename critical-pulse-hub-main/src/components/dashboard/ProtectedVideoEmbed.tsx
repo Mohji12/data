@@ -211,6 +211,17 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const lastBufferAtRef = useRef(0);
   /** Last time we stepped quality back up (rate-limit upgrades). */
   const lastStepUpAtRef = useRef(0);
+  /** The rendition we want pinned (highest available). Re-applied if Vimeo reports 'auto'. */
+  const pinnedQualityRef = useRef<string | null>(null);
+  /** Cap re-pin attempts so a stubborn player can't loop setQuality forever. */
+  const autoPinRetriesRef = useRef(0);
+  const qualityRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** True once the max-quality pin has been applied (or given up on). Until
+   *  then the first play is deferred so the video starts at max resolution. */
+  const pinAppliedRef = useRef(false);
+  /** Play requested while the pin was still pending. */
+  const pendingPlayRef = useRef(false);
+  const pendingPlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const watchAnchorMsRef = useRef<number | null>(null);
   const currentTimeRef = useRef(0);
   const durationRef = useRef(0);
@@ -406,10 +417,20 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     setPlayerError(null);
     userPickedQualityRef.current = false;
     availableQualitiesRef.current = [];
+    pinnedQualityRef.current = null;
+    autoPinRetriesRef.current = 0;
+    pinAppliedRef.current = false;
+    pendingPlayRef.current = false;
+    lastBufferAtRef.current = 0;
+    lastStepUpAtRef.current = 0;
     return () => {
       if (bufferTimerRef.current) {
         clearTimeout(bufferTimerRef.current);
         bufferTimerRef.current = null;
+      }
+      if (qualityRetryTimerRef.current) {
+        clearTimeout(qualityRetryTimerRef.current);
+        qualityRetryTimerRef.current = null;
       }
     };
   }, [videoUrl]);
@@ -580,23 +601,38 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           if (resumeAt > 1) {
             postVimeo({ method: 'setCurrentTime', value: resumeAt });
           }
-          postVimeo({ method: 'play' });
-          const ackBefore = lastPlaybackAckRef.current;
-          // Retry play at 900ms and again at 2.5s — a single retry often loses
-          // while Vimeo is still refilling its buffer after a long pause.
-          playRetryTimerRef.current = window.setTimeout(() => {
-            if (!isPlayingRef.current) return;
-            if (lastPlaybackAckRef.current !== ackBefore) return;
-            rebindVimeo();
+          const fireVimeoPlay = () => {
             postVimeo({ method: 'play' });
+            const ackBefore = lastPlaybackAckRef.current;
+            // Retry play at 900ms and again at 2.5s — a single retry often loses
+            // while Vimeo is still refilling its buffer after a long pause.
             playRetryTimerRef.current = window.setTimeout(() => {
               if (!isPlayingRef.current) return;
               if (lastPlaybackAckRef.current !== ackBefore) return;
               rebindVimeo();
-              postVimeo({ method: 'getPaused' });
               postVimeo({ method: 'play' });
-            }, 1600);
-          }, 900);
+              playRetryTimerRef.current = window.setTimeout(() => {
+                if (!isPlayingRef.current) return;
+                if (lastPlaybackAckRef.current !== ackBefore) return;
+                rebindVimeo();
+                postVimeo({ method: 'getPaused' });
+                postVimeo({ method: 'play' });
+              }, 1600);
+            }, 900);
+          };
+          if (pinAppliedRef.current || userPickedQualityRef.current) {
+            fireVimeoPlay();
+          } else {
+            // Hold the first play until getQualities pins the max rendition —
+            // video must start at max resolution, not 'auto'. If the quality
+            // list doesn't arrive within 1.2s, play anyway rather than hang.
+            pendingPlayRef.current = true;
+            pendingPlayTimerRef.current = setTimeout(() => {
+              pendingPlayRef.current = false;
+              pinAppliedRef.current = true;
+              if (isPlayingRef.current) fireVimeoPlay();
+            }, 1200);
+          }
         } else {
           postVimeo({ method: 'pause' });
           window.setTimeout(() => postVimeo({ method: 'getPaused' }), 200);
@@ -1148,20 +1184,62 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             .map((q) => q.id)
             .sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
           if (best && !userPickedQualityRef.current) {
+            pinnedQualityRef.current = best.id;
+            autoPinRetriesRef.current = 0;
             iframe?.contentWindow?.postMessage(
               JSON.stringify({ method: 'setQuality', value: best.id }),
               'https://player.vimeo.com',
             );
             setCurrentQuality(best.id);
+            pinAppliedRef.current = true;
+            // First play was deferred until the pin landed — fire it now so
+            // playback starts at max resolution.
+            if (pendingPlayRef.current) {
+              pendingPlayRef.current = false;
+              if (pendingPlayTimerRef.current) {
+                clearTimeout(pendingPlayTimerRef.current);
+                pendingPlayTimerRef.current = null;
+              }
+              iframe?.contentWindow?.postMessage(
+                JSON.stringify({ method: 'play' }),
+                'https://player.vimeo.com',
+              );
+            }
           } else {
             const active = vimeoQualities.find((q) => q.active);
             if (active) setCurrentQuality(active.id);
+          }
+          // If Vimeo only reported 'auto' (rendition list not ready yet),
+          // ask again shortly — otherwise the pin never lands.
+          if (realQualities.length === 0 && !userPickedQualityRef.current) {
+            if (qualityRetryTimerRef.current) clearTimeout(qualityRetryTimerRef.current);
+            qualityRetryTimerRef.current = setTimeout(() => {
+              iframe?.contentWindow?.postMessage(
+                JSON.stringify({ method: 'getQualities' }),
+                'https://player.vimeo.com',
+              );
+            }, 1500);
           }
         }
 
         if (data.event === 'qualitychange') {
           const qd = data.data as { quality?: string } | undefined;
           if (qd?.quality) setCurrentQuality(qd.quality);
+          // If the player reverts to 'auto' (dropped setQuality, re-buffered,
+          // privacy-restricted rendition), re-apply the pinned max — a few
+          // retries only, so a truly unsupported quality can't loop forever.
+          if (
+            qd?.quality === 'auto' &&
+            pinnedQualityRef.current &&
+            !userPickedQualityRef.current &&
+            autoPinRetriesRef.current < 8
+          ) {
+            autoPinRetriesRef.current += 1;
+            iframe?.contentWindow?.postMessage(
+              JSON.stringify({ method: 'setQuality', value: pinnedQualityRef.current }),
+              'https://player.vimeo.com',
+            );
+          }
         }
 
         if (data.event === 'playbackratechange') {
