@@ -281,6 +281,11 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const [videoZoom, setVideoZoom] = useState(1);
   const [videoPan, setVideoPan] = useState({ x: 0, y: 0 });
   const [showNotice, setShowNotice] = useState(true);
+  /** Real subtitle/caption tracks reported by the provider (Vimeo getTextTracks). */
+  const [subtitleTracks, setSubtitleTracks] = useState<
+    { language?: string; kind?: string; label?: string; mode?: string }[]
+  >([]);
+  const [subtitlesOn, setSubtitlesOn] = useState(false);
 
   const isDirectVideo = isDirectVideoFileUrl(videoUrl);
   const detected = isDirectVideo ? null : detectProvider(videoUrl);
@@ -421,6 +426,8 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     autoPinRetriesRef.current = 0;
     pinAppliedRef.current = false;
     pendingPlayRef.current = false;
+    setSubtitleTracks([]);
+    setSubtitlesOn(false);
     lastBufferAtRef.current = 0;
     lastStepUpAtRef.current = 0;
     return () => {
@@ -463,6 +470,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
       'error',
       'bufferstart',
       'bufferend',
+      'texttrackchange',
     ].forEach((evt) => {
       iframe.contentWindow?.postMessage(
         JSON.stringify({ method: 'addEventListener', value: evt }),
@@ -1096,7 +1104,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         if (data.event === 'ready' && iframe?.contentWindow) {
           playerReadyRef.current = true;
           setPlayerError(null);
-          ['play', 'pause', 'timeupdate', 'qualitychange', 'playbackratechange', 'volumechange', 'fullscreenchange', 'error', 'bufferstart', 'bufferend'].forEach((evt) => {
+          ['play', 'pause', 'timeupdate', 'qualitychange', 'playbackratechange', 'volumechange', 'fullscreenchange', 'error', 'bufferstart', 'bufferend', 'texttrackchange'].forEach((evt) => {
             iframe.contentWindow?.postMessage(
               JSON.stringify({ method: 'addEventListener', value: evt }),
               'https://player.vimeo.com',
@@ -1113,6 +1121,10 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           );
           iframe.contentWindow?.postMessage(
             JSON.stringify({ method: 'getQualities' }),
+            'https://player.vimeo.com',
+          );
+          iframe.contentWindow?.postMessage(
+            JSON.stringify({ method: 'getTextTracks' }),
             'https://player.vimeo.com',
           );
           if (currentSpeedRef.current !== 1) {
@@ -1220,6 +1232,17 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
               );
             }, 1500);
           }
+        }
+
+        if (data.method === 'getTextTracks' && Array.isArray(data.value)) {
+          setSubtitleTracks(
+            data.value as { language?: string; kind?: string; label?: string; mode?: string }[],
+          );
+        }
+
+        if (data.event === 'texttrackchange') {
+          const td = data.data as { mode?: string } | undefined;
+          if (td?.mode) setSubtitlesOn(td.mode === 'showing');
         }
 
         if (data.event === 'qualitychange') {
@@ -2285,7 +2308,38 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
                 e.stopPropagation();
                 setShowQualityMenu(false);
                 setShowSpeedMenu(false);
-                setShowNotice((prev) => !prev);
+                if (detected?.provider === 'vimeo' && subtitleTracks.length > 0) {
+                  // Real subtitles: toggle the first available text track.
+                  if (subtitlesOn) {
+                    postVimeo({ method: 'disableTextTrack' });
+                    setSubtitlesOn(false);
+                  } else {
+                    const t = subtitleTracks[0];
+                    postVimeo({
+                      method: 'enableTextTrack',
+                      value: { language: t.language, kind: t.kind || 'captions' },
+                    });
+                    setSubtitlesOn(true);
+                  }
+                } else if (detected?.provider === 'youtube') {
+                  // YouTube: load/unload the captions module.
+                  postYouTube({
+                    event: 'command',
+                    func: subtitlesOn ? 'unloadModule' : 'loadModule',
+                    args: ['captions'],
+                  });
+                  if (!subtitlesOn) {
+                    postYouTube({
+                      event: 'command',
+                      func: 'setOption',
+                      args: ['captions', 'track', {}],
+                    });
+                  }
+                  setSubtitlesOn(!subtitlesOn);
+                } else {
+                  // No real subtitles on this video — toggle the notice ticker.
+                  setShowNotice((prev) => !prev);
+                }
               }}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -2296,11 +2350,39 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
                 text-white/80 hover:text-white
                 transition-colors cursor-pointer
               "
-              title={showNotice ? 'Hide caption' : 'Show caption'}
-              aria-label={showNotice ? 'Hide caption' : 'Show caption'}
-              aria-pressed={showNotice}
+              title={
+                subtitleTracks.length > 0 || detected?.provider === 'youtube'
+                  ? subtitlesOn
+                    ? 'Subtitles off'
+                    : 'Subtitles on'
+                  : showNotice
+                    ? 'Hide caption'
+                    : 'Show caption'
+              }
+              aria-label={
+                subtitleTracks.length > 0 || detected?.provider === 'youtube'
+                  ? subtitlesOn
+                    ? 'Subtitles off'
+                    : 'Subtitles on'
+                  : showNotice
+                    ? 'Hide caption'
+                    : 'Show caption'
+              }
+              aria-pressed={
+                subtitleTracks.length > 0 || detected?.provider === 'youtube'
+                  ? subtitlesOn
+                  : showNotice
+              }
             >
-              {showNotice ? <Captions size={16} /> : <CaptionsOff size={16} />}
+              {(
+                subtitleTracks.length > 0 || detected?.provider === 'youtube'
+                  ? subtitlesOn
+                  : showNotice
+              ) ? (
+                <Captions size={16} />
+              ) : (
+                <CaptionsOff size={16} />
+              )}
             </button>
 
             {isExpanded && (

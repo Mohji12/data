@@ -167,6 +167,7 @@ export function buildYouTubeEmbedUrl(videoId: string, origin: string): string {
     modestbranding: '1',
     controls: '0',      // custom overlay controls; we poll getCurrentTime via JS API
     disablekb: '1',     // keyboard handled by overlay
+    cc_load_policy: '1',// captions can be toggled via the captions module
   });
   return `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
 }
