@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import cast, func
+from sqlalchemy import cast, func, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.types import Integer
 
@@ -21,7 +21,7 @@ from app.schemas import (
     VideoQuestionCreateResponse,
 )
 from app.security import get_current_user
-from app.services.access import can_access_video_library
+from app.services.access import can_access_video_library, video_access_scope
 from app.services.batch_match import find_in_set_sql
 from app.services.uploads import public_video_thumbnail_url
 from app.services.module_exam_gate import _load_folder_exam_map
@@ -72,12 +72,56 @@ def _ensure_video_access(db: Session, user: User) -> None:
         )
 
 
+def _video_scope(db: Session, user: User) -> str:
+    """'full' | 'mcq' — 'mcq' users may only see folders whose name contains 'mcq'
+    (same test the dashboard uses for the ?collection=mcq view)."""
+    _ensure_video_access(db, user)
+    return video_access_scope(db, user) or "full"
+
+
+def _folder_name_is_mcq(name: Optional[str]) -> bool:
+    return "mcq" in (name or "").lower()
+
+
+def _mcq_folder_ids(db: Session, subscription: str) -> set[int]:
+    rows = (
+        db.query(FolderMaster.id, FolderMaster.name)
+        .filter(
+            FolderMaster.status == "1",
+            find_in_set_sql(FolderMaster.batch, subscription),
+        )
+        .all()
+    )
+    return {int(fid) for fid, name in rows if _folder_name_is_mcq(name)}
+
+
+def _video_folder_ids(video: Video) -> set[int]:
+    ids: set[int] = set()
+    for part in (video.folder or "").split(","):
+        p = part.strip()
+        if p.isdigit():
+            ids.add(int(p))
+    return ids
+
+
+def _ensure_video_in_scope(db: Session, user: User, video: Video, scope: str) -> None:
+    """403 when an MCQ-only user requests a video outside the MCQ folders."""
+    if scope != "mcq":
+        return
+    allowed_ids = _mcq_folder_ids(db, (user.subscription or "").strip())
+    if not (_video_folder_ids(video) & allowed_ids):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your access is limited to Topic Wise MCQ content.",
+        )
+
+
 @router.get("/folders", response_model=list[VideoFolderItem])
 def list_video_folders(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[VideoFolderItem]:
-    _ensure_video_access(db, current_user)
+    scope = _video_scope(db, current_user)
     subscription = (current_user.subscription or "").strip()
     if not subscription:
         return []
@@ -91,6 +135,8 @@ def list_video_folders(
         .order_by(FolderMaster.display_order.asc(), FolderMaster.id.asc())
         .all()
     )
+    if scope == "mcq":
+        folders = [f for f in folders if _folder_name_is_mcq(f.name)]
     if not folders:
         return []
 
@@ -153,10 +199,21 @@ def list_videos(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> VideoListPage:
-    _ensure_video_access(db, current_user)
+    scope = _video_scope(db, current_user)
     subscription = (current_user.subscription or "").strip()
     if not subscription:
         return VideoListPage(items=[], total=0, page=page, page_size=page_size, has_more=False)
+
+    mcq_ids: set[int] = set()
+    if scope == "mcq":
+        mcq_ids = _mcq_folder_ids(db, subscription)
+        if folder_id is not None and folder_id not in mcq_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your access is limited to Topic Wise MCQ content.",
+            )
+        if not mcq_ids:
+            return VideoListPage(items=[], total=0, page=page, page_size=page_size, has_more=False)
 
     # PHP: FIND_IN_SET(subscription, videos.batch); folder: FIND_IN_SET(folder_id, videos.folder)
     filters = [
@@ -165,6 +222,10 @@ def list_videos(
     ]
     if folder_id is not None:
         filters.append(find_in_set_sql(Video.folder, str(folder_id)))
+    elif scope == "mcq":
+        filters.append(
+            or_(*[find_in_set_sql(Video.folder, str(fid)) for fid in mcq_ids])
+        )
     if title:
         filters.append(func.lower(func.coalesce(Video.title, "")).contains(title.lower()))
 
@@ -232,10 +293,11 @@ def audit_video_play(
     db: Session = Depends(get_db),
 ) -> dict:
     """PHP `show.php` play tracking: used by admin video-activity CSV."""
-    _ensure_video_access(db, current_user)
+    scope = _video_scope(db, current_user)
     video = db.query(Video).filter(Video.id == video_id, Video.status == "1").first()
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
+    _ensure_video_in_scope(db, current_user, video, scope)
     if not _subscription_in_csv(current_user.subscription, video.batch):
         raise HTTPException(status_code=403, detail="Video not available for your subscription.")
     db.add(
@@ -260,10 +322,11 @@ def record_video_progress(
     db: Session = Depends(get_db),
 ) -> VideoProgressResponse:
     """Accumulate played seconds for dashboard KPIs (heartbeat from the player)."""
-    _ensure_video_access(db, current_user)
+    scope = _video_scope(db, current_user)
     video = db.query(Video).filter(Video.id == video_id, Video.status == "1").first()
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
+    _ensure_video_in_scope(db, current_user, video, scope)
     if not _subscription_in_csv(current_user.subscription, video.batch):
         raise HTTPException(status_code=403, detail="Video not available for your subscription.")
 
@@ -288,11 +351,12 @@ def get_video_detail(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> VideoDetail:
-    _ensure_video_access(db, current_user)
+    scope = _video_scope(db, current_user)
 
     video = db.query(Video).filter(Video.id == video_id, Video.status == "1").first()
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
+    _ensure_video_in_scope(db, current_user, video, scope)
 
     folder_key, folder_name = _folder_label_from_video_csv(db, video)
     if not _subscription_in_csv(current_user.subscription, video.batch):
@@ -343,15 +407,16 @@ def submit_video_question(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> VideoQuestionCreateResponse:
-    _ensure_video_access(db, current_user)
+    scope = _video_scope(db, current_user)
 
     question_text = payload.question.strip()
     if not question_text:
         raise HTTPException(status_code=400, detail="Question is required.")
 
-    exists = db.query(Video.id).filter(Video.id == video_id, Video.status == "1").first()
-    if not exists:
+    video = db.query(Video).filter(Video.id == video_id, Video.status == "1").first()
+    if not video:
         raise HTTPException(status_code=404, detail="Video not found")
+    _ensure_video_in_scope(db, current_user, video, scope)
 
     db.add(
         VideoQuestion(

@@ -251,6 +251,34 @@ def campaign_image_public_url(filename: str) -> str:
     return f"/upload/campaigns/{fn}"
 
 
+def testimonial_image_upload_dir() -> Path:
+    return Path(__file__).resolve().parent.parent.parent / "uploads" / "testimonials"
+
+
+def testimonial_image_public_url(filename: str) -> str:
+    """Public URL for a file under uploads/testimonials served at /upload/testimonials/."""
+    settings = get_settings()
+    base = (settings.api_public_base_url or "").strip().rstrip("/")
+    fn = Path((filename or "").strip()).name
+    if not fn:
+        return ""
+    if base:
+        return f"{base}/upload/testimonials/{fn}"
+    return f"/upload/testimonials/{fn}"
+
+
+def remove_testimonial_image_file(filename: Optional[str]) -> None:
+    fn = Path((filename or "").strip()).name
+    if not fn:
+        return
+    p = testimonial_image_upload_dir() / fn
+    if p.is_file():
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
 def save_admin_image(file: UploadFile, kind: str) -> str:
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:

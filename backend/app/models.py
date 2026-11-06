@@ -354,6 +354,35 @@ class Testimonial(Base):
     status = Column(String(1), default="1")
 
 
+class UserAccessGrant(Base):
+    """Manual, per-feature access granted by an admin until a chosen date.
+    Independent of the subscription window — used to extend a user's access
+    to specific content (video library, mock tests, Topic Wise MCQ)."""
+
+    __tablename__ = "user_access_grant"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    feature = Column(String(20), nullable=False)  # video | mock | mcq | all
+    end_at = Column(DateTime, nullable=False)
+    note = Column(String(255))
+    created_by_admin_id = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TestimonialImage(Base):
+    """Admin-uploaded testimonial images — shown in the homepage marquee
+    alongside text quotes, ordered by display_order."""
+
+    __tablename__ = "testimonial_image"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    filename = Column(String(255), nullable=False)
+    display_order = Column(Integer, default=0)
+    status = Column(String(1), default="1")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class LoginActivity(Base):
     __tablename__ = "login_activity"
 

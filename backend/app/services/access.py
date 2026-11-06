@@ -8,7 +8,15 @@ from typing import Any
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from app.models import Country, Option, Package, User, UserPackagePayment, UserSubscription
+from app.models import (
+    Country,
+    Option,
+    Package,
+    User,
+    UserAccessGrant,
+    UserPackagePayment,
+    UserSubscription,
+)
 from app.services.registration import (
     BATCH_COURSE_MONTHS_DEFAULT,
     _add_months,
@@ -374,6 +382,20 @@ def _format_extension_headline(
     return f"Extend your access by {months} months. {price}.".strip()
 
 
+def user_feature_grants(db: Session, user: User) -> set[str]:
+    """Active manual admin grants: feature values like 'video', 'mock', 'mcq', 'all'."""
+    now = datetime.utcnow()
+    rows = (
+        db.query(UserAccessGrant.feature)
+        .filter(
+            UserAccessGrant.user_id == user.id,
+            UserAccessGrant.end_at >= now,
+        )
+        .all()
+    )
+    return {(f or "").strip().lower() for (f,) in rows if f}
+
+
 def has_active_subscription(db: Session, user: User, batch_name: str | None = None) -> bool:
     if not user:
         return False
@@ -536,11 +558,14 @@ def can_access_video_library(db: Session, user: User) -> tuple[bool, str | None]
     ):
         return False, "Your subscription does not include video library."
 
+    # Manual admin grants bypass the subscription window (not the base gates above).
+    has_video_grant = bool(user_feature_grants(db, user) & {"video", "mcq", "all"})
+
     ent_ok, ent_reason = ensure_subscription_entitlement(db, user)
-    if not ent_ok:
+    if not ent_ok and not has_video_grant:
         return False, ent_reason
     batch_ok, batch_reason = ensure_one_time_batch_access(db, user)
-    if not batch_ok:
+    if not batch_ok and not has_video_grant:
         return False, batch_reason
 
     return True, None
@@ -556,13 +581,31 @@ def can_access_mock_test(db: Session, user: User) -> tuple[bool, str | None]:
     allowed_subscriptions = get_option_value(db, "access_quiz_link")
     if allowed_subscriptions and not subscription_allowed(allowed_subscriptions, user.subscription):
         return False, "Your subscription does not include mock tests."
+    has_mock_grant = bool(user_feature_grants(db, user) & {"mock", "all"})
     ent_ok, ent_reason = ensure_subscription_entitlement(db, user)
-    if not ent_ok:
+    if not ent_ok and not has_mock_grant:
         return False, ent_reason
     batch_ok, batch_reason = ensure_one_time_batch_access(db, user)
-    if not batch_ok:
+    if not batch_ok and not has_mock_grant:
         return False, batch_reason
     return True, None
+
+
+def video_access_scope(db: Session, user: User) -> str | None:
+    """'full' | 'mcq' | None — 'mcq' when the user's only video path is an
+    MCQ-only grant (restrict to MCQ-named folders); None = no video access."""
+    allowed, _ = can_access_video_library(db, user)
+    if not allowed:
+        return None
+    grants = user_feature_grants(db, user)
+    if grants & {"video", "all"}:
+        return "full"
+    if "mcq" in grants:
+        ent_ok, _ = ensure_subscription_entitlement(db, user)
+        batch_ok, _ = ensure_one_time_batch_access(db, user)
+        if not (ent_ok and batch_ok):
+            return "mcq"
+    return "full"
 
 
 def get_subscription_period_for_profile(db: Session, user: User) -> dict | None:

@@ -10,7 +10,7 @@ from sqlalchemy import Date, and_, cast, func, or_
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Country, Package, RegistrationPaymentTxn, User, Testimonial
+from app.models import Country, Package, RegistrationPaymentTxn, User, Testimonial, TestimonialImage
 from app.security import get_current_user
 from app.schemas import (
     BatchDefinition,
@@ -61,7 +61,7 @@ from app.services.registration import (
     _registration_category_for_packages,
     _resolve_package_line_amounts,
 )
-from app.services.uploads import save_registration_document
+from app.services.uploads import save_registration_document, testimonial_image_public_url
 from app.services.promo_badge import get_promo_badge_config
 from app.services.cache import cached_json
 
@@ -474,7 +474,7 @@ def list_public_testimonials(db: Session = Depends(get_db)) -> list[dict]:
         .order_by(Testimonial.display_order.asc(), Testimonial.id.desc())
         .all()
     )
-    return [
+    text_items = [
         {
             "id": t.id,
             "text": t.text or "",
@@ -482,6 +482,26 @@ def list_public_testimonials(db: Session = Depends(get_db)) -> list[dict]:
         }
         for t in rows
     ]
+    image_rows = (
+        db.query(TestimonialImage)
+        .filter(TestimonialImage.status == "1")
+        .order_by(TestimonialImage.display_order.asc(), TestimonialImage.id.desc())
+        .all()
+    )
+    image_items = [
+        {
+            "id": f"img-{t.id}",
+            "text": "",
+            "image": testimonial_image_public_url(t.filename or ""),
+            "display_order": t.display_order if t.display_order is not None else 0,
+        }
+        for t in image_rows
+    ]
+    if not image_items:
+        return text_items
+    merged = text_items + image_items
+    merged.sort(key=lambda r: (r["display_order"], str(r["id"])))
+    return merged
 
 
 @router.post("/upload-document")

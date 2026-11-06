@@ -1,13 +1,21 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import { useIsTechAdmin } from '@/store/authStore';
 import { toast } from 'sonner';
-import { Quote, Trash2, Loader2 } from 'lucide-react';
+import { Quote, Trash2, Loader2, ImagePlus } from 'lucide-react';
 
 type TestimonialRow = {
   id: number;
   text: string;
+  display_order: number;
+  status?: string | null;
+};
+
+type TestimonialImageRow = {
+  id: number;
+  filename: string;
+  image: string;
   display_order: number;
   status?: string | null;
 };
@@ -17,10 +25,44 @@ export default function AdminTestimonials() {
   const isTech = useIsTechAdmin();
   const [text, setText] = useState('');
   const [displayOrder, setDisplayOrder] = useState('0');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [imgDisplayOrder, setImgDisplayOrder] = useState('0');
 
   const { data: rows, isLoading, isError, error } = useQuery({
     queryKey: ['adminTestimonials'],
     queryFn: () => apiClient('/admin/misc/testimonials') as Promise<TestimonialRow[]>,
+  });
+
+  const { data: imgRows } = useQuery({
+    queryKey: ['adminTestimonialImages'],
+    queryFn: () => apiClient('/admin/misc/testimonial-images') as Promise<TestimonialImageRow[]>,
+  });
+
+  const uploadImgMut = useMutation({
+    mutationFn: () => {
+      const fd = new FormData();
+      selectedFiles.forEach((f) => fd.append('files', f));
+      fd.append('display_order', String(Math.max(0, Number(imgDisplayOrder) || 0)));
+      return apiClient('/admin/misc/testimonial-images', { method: 'POST', body: fd });
+    },
+    onSuccess: () => {
+      toast.success('Image testimonial(s) uploaded');
+      qc.invalidateQueries({ queryKey: ['adminTestimonialImages'] });
+      setSelectedFiles([]);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const delImgMut = useMutation({
+    mutationFn: (id: number) =>
+      apiClient(`/admin/misc/testimonial-images/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast.success('Image removed');
+      void qc.invalidateQueries({ queryKey: ['adminTestimonialImages'] });
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   const createMut = useMutation({
@@ -134,6 +176,101 @@ export default function AdminTestimonials() {
               </div>
             </div>
           </div>
+        </section>
+      )}
+
+      {isTech && (
+        <section className="mb-10 rounded-sm border border-border-soft bg-chalk shadow-sm overflow-hidden">
+          <div className="border-b border-border-soft bg-chalk-cool/60 px-5 py-3 flex items-center gap-2">
+            <div className="w-8 h-8 rounded-sm bg-mint/15 flex items-center justify-center shrink-0">
+              <ImagePlus className="w-4 h-4 text-mint" aria-hidden />
+            </div>
+            <div>
+              <h2 className="font-display font-bold text-lg text-slate leading-tight">Upload image testimonials</h2>
+              <p className="font-mono text-[10px] text-slate/50 uppercase tracking-wider mt-0.5">Screenshots scroll in the same marquee as quotes</p>
+            </div>
+          </div>
+          <div className="p-5 sm:p-6 space-y-5">
+            <label className="block">
+              <span className="font-mono text-[10px] text-slate/65 uppercase tracking-wider block mb-2">Images (select one or more)</span>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                onChange={(e) => setSelectedFiles(Array.from(e.target.files || []))}
+                className="block w-full text-sm font-sans text-slate/70 file:mr-4 file:rounded-sm file:border file:border-border-soft file:bg-chalk-warm file:px-4 file:py-2 file:font-sans file:text-sm file:text-slate hover:file:border-mint/40"
+              />
+              <p className="text-[10px] text-slate/45 mt-1.5 font-sans">JPG, PNG or WEBP · max 5MB each</p>
+            </label>
+            <div className="flex flex-col sm:flex-row sm:items-end gap-4 sm:gap-8">
+              <label className="block sm:w-44 shrink-0">
+                <span className="font-mono text-[10px] text-slate/65 uppercase tracking-wider block mb-2">Display order</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={imgDisplayOrder}
+                  onChange={(e) => setImgDisplayOrder(e.target.value)}
+                  className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2.5 px-3 font-mono text-sm text-slate tabular-nums focus:outline-none focus:ring-2 focus:ring-mint/25 focus:border-mint/40"
+                />
+              </label>
+              <div className="flex-1 sm:pb-0.5">
+                <button
+                  type="button"
+                  disabled={selectedFiles.length === 0 || uploadImgMut.isPending}
+                  onClick={() => uploadImgMut.mutate()}
+                  className="magnetic w-full sm:w-auto min-w-[140px] bg-slate text-chalk rounded-sm px-6 py-2.5 font-sans text-sm font-semibold hover:bg-slate-light disabled:opacity-45 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2 transition-colors"
+                >
+                  {uploadImgMut.isPending ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Uploading…
+                    </>
+                  ) : (
+                    `Upload ${selectedFiles.length > 0 ? `${selectedFiles.length} ` : ''}image${selectedFiles.length === 1 ? '' : 's'}`
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {(imgRows?.length ?? 0) > 0 && (
+        <section className="mb-10">
+          <h2 className="font-mono text-[10px] text-slate/45 uppercase tracking-[0.12em] mb-4">Published images</h2>
+          <ul className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+            {imgRows!.map((img) => (
+              <li
+                key={img.id}
+                className="group relative rounded-sm border border-border-soft bg-white hover:border-mint/25 hover:shadow-md transition-all duration-200 overflow-hidden"
+              >
+                <img
+                  src={img.image}
+                  alt={`Testimonial ${img.id}`}
+                  className="w-full h-40 object-contain bg-chalk-warm"
+                  loading="lazy"
+                />
+                <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-border-soft">
+                  <span className="font-mono text-[10px] text-slate/50">Order {img.display_order ?? 0}</span>
+                  {isTech && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!window.confirm('Delete this image?')) return;
+                        delImgMut.mutate(img.id);
+                      }}
+                      disabled={delImgMut.isPending}
+                      className="inline-flex items-center gap-1 rounded-sm border border-blush/35 px-2 py-1 font-sans text-[10px] font-semibold text-blush hover:bg-blush/10 disabled:opacity-50 transition-colors"
+                    >
+                      <Trash2 className="w-3 h-3" aria-hidden />
+                      Delete
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
 

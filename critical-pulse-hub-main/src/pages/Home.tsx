@@ -18,6 +18,7 @@ import {
 import { useEffect, useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
+import { getApiBaseUrl } from '@/lib/apiBase';
 
 /** Filenames in `public/hero/`. Spaces/special chars are URL-encoded for the browser. */
 const HERO_FILES = [
@@ -273,7 +274,7 @@ function MonitorGridSection() {
   return (
     <section ref={ref} className="bg-monitor-bg scanline py-24 lg:py-36 px-6 lg:px-12 relative">
       <div className="max-w-[1400px] mx-auto">
-        <div className="font-mono text-[11px] text-mint tracking-[0.16em] uppercase mb-12">01 / PROGRAMME OVERVIEW</div>
+        <div className="font-mono text-[11px] text-mint tracking-[0.16em] uppercase mb-12">02 / PROGRAMME OVERVIEW</div>
 
         <motion.div
           variants={stagger(0.1)}
@@ -403,7 +404,7 @@ function FeaturesSection() {
   return (
     <section ref={ref} className="bg-chalk py-24 lg:py-36 px-6 lg:px-12">
       <div className="max-w-[1400px] mx-auto">
-        <div className="font-mono text-[11px] text-mint uppercase tracking-[0.16em] mb-5">02 / WHY THIS WORKS</div>
+        <div className="font-mono text-[11px] text-mint uppercase tracking-[0.16em] mb-5">03 / WHY THIS WORKS</div>
         <div className="flex flex-col lg:flex-row justify-between lg:items-end mb-16 gap-8">
           <h2 className="font-display font-extrabold text-slate leading-[0.95]" style={{ fontSize: 'clamp(44px, 6vw, 76px)' }}>
             BUILT FROM<br />16 YEARS AT<br />THE BEDSIDE.
@@ -460,9 +461,18 @@ function TestimonialCard({ t }: { t: any }) {
         ))}
       </div>
       <div className="flex-1 overflow-visible">
-        <p className="font-display font-medium italic text-base sm:text-lg text-ink-secondary leading-[1.7] whitespace-pre-wrap group-hover:text-slate transition-colors">
-          "{t.quote}"
-        </p>
+        {t.image ? (
+          <img
+            src={t.image}
+            alt="Student feedback"
+            loading="lazy"
+            className="w-full max-h-[280px] object-contain rounded-sm bg-white border border-border-soft"
+          />
+        ) : (
+          <p className="font-display font-medium italic text-base sm:text-lg text-ink-secondary leading-[1.7] whitespace-pre-wrap group-hover:text-slate transition-colors">
+            "{t.quote}"
+          </p>
+        )}
       </div>
     </div>
   );
@@ -472,12 +482,21 @@ function TestimonialsSection({ data }: { data?: any[] }) {
   // Use DB data if available, otherwise fallback to mock
   const list = data && data.length > 0 ? data : testimonials;
 
-  const items = list.map(t => ({
-    quote: (t.text || t.quote || "").trim(),
-    name: t.name || 'Verified Student',
-    role: t.role || 'Critical Care Professional',
-    institution: t.institution || ''
-  })).filter(t => t.quote.length > 0);
+  const apiBase = getApiBaseUrl();
+  const items = list.map(t => {
+    const rawImage = (t.image || '').trim();
+    return {
+      quote: (t.text || t.quote || "").trim(),
+      image: rawImage
+        ? rawImage.startsWith('/')
+          ? `${apiBase}${rawImage}`
+          : rawImage
+        : '',
+      name: t.name || 'Verified Student',
+      role: t.role || 'Critical Care Professional',
+      institution: t.institution || ''
+    };
+  }).filter(t => t.image.length > 0 || t.quote.length > 0);
 
   // Triple the items for a seamless loop if the list is short
   const displayItems = [...items, ...items, ...items];
@@ -492,7 +511,7 @@ function TestimonialsSection({ data }: { data?: any[] }) {
       </div>
 
       <div className="max-w-[1400px] mx-auto px-6 lg:px-12 mb-16">
-        <div className="font-mono text-[11px] text-mint mb-5 tracking-[0.16em] uppercase">03 / VOICES FROM THE BEDSIDE</div>
+        <div className="font-mono text-[11px] text-mint mb-5 tracking-[0.16em] uppercase">01 / VOICES FROM THE BEDSIDE</div>
         <h2 className="font-display font-extrabold text-slate leading-[0.92]" style={{ fontSize: 'clamp(44px, 6vw, 76px)' }}>
           WHAT<br />DOCTORS SAY.
         </h2>
@@ -628,10 +647,10 @@ export default function Home() {
       <Navbar />
       <HeroSection heroPills={heroPills} primaryBatch={primaryBatch} />
       <TickerSection />
+      <TestimonialsSection data={dbTestimonials} />
       <MonitorGridSection />
       <WhoSection />
       <FeaturesSection />
-      <TestimonialsSection data={dbTestimonials} />
       <CoursesSection batches={catalog} />
       <Footer />
     </div>

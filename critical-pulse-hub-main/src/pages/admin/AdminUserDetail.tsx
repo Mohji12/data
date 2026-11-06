@@ -72,6 +72,22 @@ type ExamAttemptsResponse = {
   attempts: ExamAttemptItem[];
 };
 
+type AccessGrant = {
+  id: number;
+  feature: string;
+  end_at: string | null;
+  note: string | null;
+  active: boolean;
+  created_at: string | null;
+};
+
+const GRANT_FEATURE_LABELS: Record<string, string> = {
+  video: 'Video Library',
+  mock: 'Mock Tests',
+  mcq: "Topic Wise MCQ's",
+  all: 'Full access',
+};
+
 type UserUsageResponse = {
   user_id: number;
   videos_watched: number;
@@ -115,10 +131,19 @@ export default function AdminUserDetail() {
   const [offlineNote, setOfflineNote] = useState('');
   const [videoFilter, setVideoFilter] = useState<'all' | 'watched'>('all');
   const [examFilter, setExamFilter] = useState<'all' | 'completed'>('all');
+  const [grantFeatures, setGrantFeatures] = useState<string[]>([]);
+  const [grantEnd, setGrantEnd] = useState('');
+  const [grantNote, setGrantNote] = useState('');
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['adminUser', userId],
     queryFn: () => apiClient(`/admin/users/${userId}`) as Promise<UserDetailResponse>,
+    enabled: Number.isFinite(userId) && userId > 0,
+  });
+
+  const { data: grants } = useQuery({
+    queryKey: ['adminUserAccessGrants', userId],
+    queryFn: () => apiClient(`/admin/users/${userId}/access-grants`) as Promise<AccessGrant[]>,
     enabled: Number.isFinite(userId) && userId > 0,
   });
 
@@ -212,6 +237,39 @@ export default function AdminUserDetail() {
       if (res?.smtp_configured === false) toast.warning(msg);
       else toast.success(msg);
       invalidate();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const grantMut = useMutation({
+    mutationFn: async () => {
+      for (const feature of grantFeatures) {
+        await apiClient(`/admin/users/${userId}/access-grants`, {
+          method: 'POST',
+          body: JSON.stringify({
+            feature,
+            end_at: grantEnd,
+            note: grantNote.trim() || undefined,
+          }),
+        });
+      }
+    },
+    onSuccess: () => {
+      toast.success('Access grant added');
+      setGrantFeatures([]);
+      setGrantEnd('');
+      setGrantNote('');
+      void qc.invalidateQueries({ queryKey: ['adminUserAccessGrants', userId] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const revokeGrantMut = useMutation({
+    mutationFn: (grantId: number) =>
+      apiClient(`/admin/users/${userId}/access-grants/${grantId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast.success('Grant revoked');
+      void qc.invalidateQueries({ queryKey: ['adminUserAccessGrants', userId] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -435,6 +493,114 @@ export default function AdminUserDetail() {
               <span className="text-ink text-right break-all">{value}</span>
             </div>
           ))}
+        </section>
+
+        <section className="bg-chalk border border-border-soft rounded-sm p-6 space-y-4 lg:col-span-2">
+          <h2 className="font-display font-bold text-lg text-slate">Manual access grant</h2>
+          <p className="font-mono text-[10px] text-ink-faint uppercase tracking-wider">
+            Extend specific content until a chosen date — works even after subscription expiry
+          </p>
+
+          <div className="flex flex-col sm:flex-row sm:items-end gap-4">
+            <div className="flex-1">
+              <span className="font-mono text-[10px] text-ink-faint uppercase block mb-2">Content</span>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { id: 'video', label: 'Video Library' },
+                  { id: 'mock', label: 'Mock Tests' },
+                  ...(/neet/i.test(str('subscription')) ? [{ id: 'mcq', label: "Topic Wise MCQ's" }] : []),
+                ].map((opt) => {
+                  const on = grantFeatures.includes(opt.id);
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() =>
+                        setGrantFeatures((prev) =>
+                          prev.includes(opt.id) ? prev.filter((f) => f !== opt.id) : [...prev, opt.id],
+                        )
+                      }
+                      className={`rounded-sm px-3 py-2 font-sans text-xs border ${
+                        on
+                          ? 'bg-slate text-chalk border-slate'
+                          : 'bg-chalk border-border-soft text-ink-secondary hover:bg-chalk-warm'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <label className="block sm:w-56 shrink-0">
+              <span className="font-mono text-[10px] text-ink-faint uppercase block mb-2">Access until</span>
+              <input
+                type="datetime-local"
+                value={grantEnd}
+                onChange={(e) => setGrantEnd(e.target.value)}
+                className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2.5 px-3 font-mono text-sm text-slate focus:outline-none focus:ring-2 focus:ring-mint/25 focus:border-mint/40"
+              />
+            </label>
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-end gap-4">
+            <label className="block flex-1">
+              <span className="font-mono text-[10px] text-ink-faint uppercase block mb-2">Note (optional)</span>
+              <input
+                type="text"
+                value={grantNote}
+                onChange={(e) => setGrantNote(e.target.value)}
+                placeholder="e.g. Exam-time extension approved by Dr. Harish"
+                className="w-full bg-chalk-warm border border-border-soft rounded-sm py-2.5 px-3 font-sans text-sm text-slate placeholder:text-slate/35 focus:outline-none focus:ring-2 focus:ring-mint/25 focus:border-mint/40"
+              />
+            </label>
+            <button
+              type="button"
+              disabled={grantFeatures.length === 0 || !grantEnd || grantMut.isPending}
+              onClick={() => grantMut.mutate()}
+              className="shrink-0 bg-slate text-chalk rounded-sm px-6 py-2.5 font-sans text-sm font-semibold hover:bg-slate-light disabled:opacity-45 disabled:cursor-not-allowed"
+            >
+              {grantMut.isPending ? 'Granting…' : 'Grant access'}
+            </button>
+          </div>
+
+          {(grants?.length ?? 0) > 0 && (
+            <ul className="divide-y divide-border-soft border-t border-border-soft mt-2">
+              {grants!.map((g) => (
+                <li key={g.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                  <div className="flex flex-wrap items-center gap-2 min-w-0">
+                    <span className="font-sans text-sm text-slate font-medium">
+                      {GRANT_FEATURE_LABELS[g.feature] || g.feature}
+                    </span>
+                    <span className="font-mono text-[10px] text-slate/50 border border-border-soft rounded-sm px-2 py-0.5">
+                      until {g.end_at ? new Date(g.end_at).toLocaleString() : '—'}
+                    </span>
+                    <span
+                      className={`font-mono text-[10px] rounded-full px-2.5 py-0.5 border ${
+                        g.active
+                          ? 'border-mint/30 bg-mint-pale text-mint'
+                          : 'border-slate-200 bg-slate-50 text-slate/70'
+                      }`}
+                    >
+                      {g.active ? 'Active' : 'Expired'}
+                    </span>
+                    {g.note && <span className="font-sans text-xs text-slate/60 truncate">{g.note}</span>}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!window.confirm('Revoke this access grant?')) return;
+                      revokeGrantMut.mutate(g.id);
+                    }}
+                    disabled={revokeGrantMut.isPending}
+                    className="inline-flex items-center gap-1 rounded-sm border border-blush/35 px-2.5 py-1 font-sans text-[11px] font-semibold text-blush hover:bg-blush/10 disabled:opacity-50"
+                  >
+                    Revoke
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <section

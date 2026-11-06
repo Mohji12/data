@@ -4,19 +4,25 @@ import io
 from datetime import date as date_type, datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, inspect, or_
 from sqlalchemy.orm import Session, load_only
 
 from app.admin_security import get_current_admin, require_admin_type
 from app.db import get_db
-from app.models import Admin, BatchMaster, EmailTemplateMaster, LoginActivity, Option, Testimonial, User, Video, VideoQuestion
+from app.models import Admin, BatchMaster, EmailTemplateMaster, LoginActivity, Option, Testimonial, TestimonialImage, User, Video, VideoQuestion
 from app.schemas import AssistantMessageRequest, AssistantMessageResponse
 from app.services.admin_assistant import answer_admin
 from app.services.batch_rename import rename_batch_references
 from app.services.registration import build_registration_catalog
-from app.services.uploads import save_batch_brochure, save_batch_video
+from app.services.uploads import (
+    remove_testimonial_image_file,
+    save_admin_image,
+    save_batch_brochure,
+    save_batch_video,
+    testimonial_image_public_url,
+)
 
 router = APIRouter(prefix="/admin/misc", tags=["admin-misc"], dependencies=[Depends(get_current_admin)])
 
@@ -288,6 +294,58 @@ def delete_testimonial(testimonial_id: int, db: Session = Depends(get_db)) -> di
         raise HTTPException(status_code=404, detail="Testimonial not found")
     db.delete(t)
     db.commit()
+    return {"status": "ok"}
+
+
+def _testimonial_image_dict(t: TestimonialImage) -> dict:
+    return {
+        "id": t.id,
+        "filename": t.filename,
+        "image": testimonial_image_public_url(t.filename or ""),
+        "display_order": t.display_order if t.display_order is not None else 0,
+        "status": t.status,
+    }
+
+
+@router.get("/testimonial-images")
+def list_testimonial_images(db: Session = Depends(get_db)) -> list[dict]:
+    rows = (
+        db.query(TestimonialImage)
+        .order_by(TestimonialImage.display_order.asc(), TestimonialImage.id.desc())
+        .all()
+    )
+    return [_testimonial_image_dict(t) for t in rows]
+
+
+@router.post("/testimonial-images", dependencies=[Depends(require_admin_type("techadmin"))])
+def upload_testimonial_images(
+    files: list[UploadFile] = File(...),
+    display_order: int = Form(0),
+    db: Session = Depends(get_db),
+) -> dict:
+    if not files:
+        raise HTTPException(status_code=422, detail="Select at least one image.")
+    order = max(0, int(display_order or 0))
+    created = []
+    for f in files:
+        filename = save_admin_image(f, "testimonials")
+        row = TestimonialImage(filename=filename, display_order=order, status="1")
+        db.add(row)
+        db.flush()
+        created.append(_testimonial_image_dict(row))
+    db.commit()
+    return {"created": created}
+
+
+@router.delete("/testimonial-images/{image_id}", dependencies=[Depends(require_admin_type("techadmin"))])
+def delete_testimonial_image(image_id: int, db: Session = Depends(get_db)) -> dict:
+    t = db.query(TestimonialImage).filter(TestimonialImage.id == image_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Image not found")
+    filename = t.filename
+    db.delete(t)
+    db.commit()
+    remove_testimonial_image_file(filename)
     return {"status": "ok"}
 
 

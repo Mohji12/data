@@ -26,6 +26,8 @@ from app.models import (
     MailProviderEvent,
     MailSuppression,
     RegistrationPaymentTxn,
+    TestimonialImage,
+    UserAccessGrant,
     WhatsAppWebhookEvent,
 )
 from app.routers.dashboard import router as dashboard_router
@@ -146,6 +148,8 @@ async def lifespan(app: FastAPI):
     MailClickEvent.__table__.create(bind=engine, checkfirst=True)
     MailSuppression.__table__.create(bind=engine, checkfirst=True)
     MailProviderEvent.__table__.create(bind=engine, checkfirst=True)
+    TestimonialImage.__table__.create(bind=engine, checkfirst=True)
+    UserAccessGrant.__table__.create(bind=engine, checkfirst=True)
     _ensure_mail_campaign_throttle_columns()
     try:
         from app.core.job_queue import enqueue_mail_poll
@@ -266,6 +270,14 @@ app.mount(
     "/upload/campaigns",
     StaticFiles(directory=str(campaign_uploads)),
     name="campaign_images",
+)
+
+testimonial_uploads = Path(__file__).resolve().parent.parent / "uploads" / "testimonials"
+testimonial_uploads.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/upload/testimonials",
+    StaticFiles(directory=str(testimonial_uploads)),
+    name="testimonial_images",
 )
 
 

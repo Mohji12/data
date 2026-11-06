@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, load_only
 from app.admin_security import get_current_admin
 from app.core.config import get_settings
 from app.db import SessionLocal, get_db
-from app.models import Country, CouponMaster, Package, User, UserPackagePayment
+from app.models import Admin, Country, CouponMaster, Package, User, UserAccessGrant, UserPackagePayment
 from app.schemas import (
     AdminUserExamAttemptsResponse,
     AdminUserUsageResponse,
@@ -938,3 +938,95 @@ def update_user_mock_test_attempts(
     info = result.get("user") or describe_attempt_limits_for_user(db, user)
     return UserMockTestAttemptsResponse(**info)
 
+
+# ─── Manual per-feature access grants ────────────────────────────────────────
+
+class AccessGrantPayload(BaseModel):
+    feature: str
+    end_at: str
+    note: Optional[str] = None
+
+
+_ALLOWED_GRANT_FEATURES = {"video", "mock", "mcq", "all"}
+
+
+def _parse_grant_end(value: str) -> datetime:
+    raw = (value or "").strip()
+    if not raw:
+        raise HTTPException(status_code=422, detail="End date is required.")
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid end date format.")
+    if len(raw) <= 10:
+        dt = dt.replace(hour=23, minute=59, second=59)
+    if dt <= datetime.utcnow():
+        raise HTTPException(status_code=422, detail="End date must be in the future.")
+    return dt
+
+
+def _grant_dict(g: UserAccessGrant) -> dict:
+    return {
+        "id": g.id,
+        "feature": g.feature,
+        "end_at": g.end_at.isoformat() if g.end_at else None,
+        "note": g.note,
+        "active": bool(g.end_at and g.end_at >= datetime.utcnow()),
+        "created_by_admin_id": g.created_by_admin_id,
+        "created_at": g.created_at.isoformat() if g.created_at else None,
+    }
+
+
+@router.get("/{user_id}/access-grants")
+def list_access_grants(user_id: int, db: Session = Depends(get_db)) -> list[dict]:
+    user = db.query(User.id).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    rows = (
+        db.query(UserAccessGrant)
+        .filter(UserAccessGrant.user_id == user_id)
+        .order_by(UserAccessGrant.end_at.desc())
+        .all()
+    )
+    return [_grant_dict(g) for g in rows]
+
+
+@router.post("/{user_id}/access-grants")
+def create_access_grant(
+    user_id: int,
+    payload: AccessGrantPayload,
+    db: Session = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+) -> dict:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    feature = (payload.feature or "").strip().lower()
+    if feature not in _ALLOWED_GRANT_FEATURES:
+        raise HTTPException(status_code=422, detail="Invalid feature.")
+    end_at = _parse_grant_end(payload.end_at)
+    grant = UserAccessGrant(
+        user_id=user_id,
+        feature=feature,
+        end_at=end_at,
+        note=(payload.note or "").strip() or None,
+        created_by_admin_id=admin.id,
+    )
+    db.add(grant)
+    db.commit()
+    db.refresh(grant)
+    return _grant_dict(grant)
+
+
+@router.delete("/{user_id}/access-grants/{grant_id}")
+def delete_access_grant(grant_id: int, user_id: int, db: Session = Depends(get_db)) -> dict:
+    grant = (
+        db.query(UserAccessGrant)
+        .filter(UserAccessGrant.id == grant_id, UserAccessGrant.user_id == user_id)
+        .first()
+    )
+    if not grant:
+        raise HTTPException(status_code=404, detail="Grant not found")
+    db.delete(grant)
+    db.commit()
+    return {"status": "ok"}
