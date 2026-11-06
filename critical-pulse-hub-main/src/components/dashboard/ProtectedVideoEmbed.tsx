@@ -255,6 +255,16 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
   const VOLUME_STEP = 0.1;
 
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setWmPos({
+        x: 10 + Math.random() * 65,
+        y: 15 + Math.random() * 60,
+      });
+    }, 9000);
+    return () => window.clearInterval(id);
+  }, []);
+
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -281,6 +291,8 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const [videoZoom, setVideoZoom] = useState(1);
   const [videoPan, setVideoPan] = useState({ x: 0, y: 0 });
   const [showNotice, setShowNotice] = useState(true);
+  /** Roaming watermark position (percent) — updates so it can't be cropped out. */
+  const [wmPos, setWmPos] = useState({ x: 25, y: 30 });
   /** Real subtitle/caption tracks reported by the provider (Vimeo getTextTracks). */
   const [subtitleTracks, setSubtitleTracks] = useState<
     { language?: string; kind?: string; label?: string; mode?: string }[]
@@ -1955,6 +1967,20 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           )}
         </div>
       </div>
+
+      {/* Forensic watermark — screenshots can't be blocked, but every capture
+          carries the viewer's identity so leaks are traceable. */}
+      {(viewer?.email || viewer?.name) && (
+        <div
+          className="absolute z-30 pointer-events-none select-none transition-all duration-1000 ease-in-out"
+          style={{ left: `${wmPos.x}%`, top: `${wmPos.y}%` }}
+          aria-hidden="true"
+        >
+          <span className="font-mono text-[11px] sm:text-xs text-white/30 whitespace-nowrap -rotate-12 inline-block">
+            {viewer?.name} · {viewer?.email}
+          </span>
+        </div>
+      )}
 
       {playerError && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/85 p-6 text-center pointer-events-none">

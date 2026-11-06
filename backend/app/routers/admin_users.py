@@ -16,14 +16,14 @@ from sqlalchemy.orm import Session, load_only
 from app.admin_security import get_current_admin
 from app.core.config import get_settings
 from app.db import SessionLocal, get_db
-from app.models import Admin, Country, CouponMaster, Package, User, UserAccessGrant, UserPackagePayment
+from app.models import Admin, Country, CouponMaster, Package, User, UserAccessGrant, UserPackagePayment, UserSubscription
 from app.schemas import (
     AdminUserExamAttemptsResponse,
     AdminUserUsageResponse,
     AdminUserVideoProgressResponse,
 )
-from app.services.registration import apply_batch_subscription_filter_to_users
-from app.services.access import admin_subscription_summary, batch_admin_subscription_summaries
+from app.services.registration import apply_batch_subscription_filter_to_users, extend_active_subscription
+from app.services.access import admin_subscription_summary, batch_admin_subscription_summaries, batch_slug, subscription_batch_keys
 from app.services.mailer import send_html_email
 from app.services.payments import apply_offline_registration_credit, sync_registration_payment_from_razorpay, try_send_registration_thank_you_email, _package_for_thank_you_email
 from app.services.s3_storage import (
@@ -1013,6 +1013,19 @@ def create_access_grant(
         created_by_admin_id=admin.id,
     )
     db.add(grant)
+    if feature == "all":
+        # A full-access grant is a real subscription extension: move the user's
+        # user_subscriptions window to the chosen date — this also revives an
+        # already-expired row (status stays 'active', end_at moves forward).
+        extend_active_subscription(
+            db,
+            user_id=user_id,
+            batch_slug=batch_slug(user.subscription),
+            extend_months=0,
+            activated_at=datetime.utcnow(),
+            extension_end_at=end_at,
+            package_id=user.package_id,
+        )
     db.commit()
     db.refresh(grant)
     return _grant_dict(grant)
@@ -1027,6 +1040,33 @@ def delete_access_grant(grant_id: int, user_id: int, db: Session = Depends(get_d
     )
     if not grant:
         raise HTTPException(status_code=404, detail="Grant not found")
+    was_all = (grant.feature or "") == "all"
+    grant_end = grant.end_at
     db.delete(grant)
+    if was_all and grant_end:
+        # If no other active 'all' grant remains, roll the subscription window
+        # back to now — revoking kills the access the extension created.
+        now = datetime.utcnow()
+        other_all = (
+            db.query(UserAccessGrant)
+            .filter(
+                UserAccessGrant.user_id == user_id,
+                UserAccessGrant.feature == "all",
+                UserAccessGrant.end_at >= now,
+                UserAccessGrant.id != grant_id,
+            )
+            .first()
+        )
+        if not other_all:
+            keys = subscription_batch_keys(user.subscription if (user := db.query(User).filter(User.id == user_id).first()) else "")
+            subs = (
+                db.query(UserSubscription)
+                .filter(UserSubscription.user_id == user_id, UserSubscription.status == "active")
+                .all()
+            )
+            for sub in subs:
+                if (sub.batch_slug or "").strip().lower() in keys and sub.end_at and sub.end_at >= now:
+                    sub.end_at = now
+                    db.add(sub)
     db.commit()
     return {"status": "ok"}

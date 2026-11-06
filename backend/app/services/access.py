@@ -491,6 +491,9 @@ def is_certificate_only_user(db: Session, user: User) -> bool:
     # Extension users keep full course access until their extended window ends.
     if _has_active_extension_access(db, user):
         return False
+    # Manual admin grants unlock content — the account is no longer cert-only.
+    if user_feature_grants(db, user) & {"video", "mock", "mcq", "all"}:
+        return False
     if subscription_allowed(
         get_option_value(db, "certificate_only_access"),
         user.subscription,
@@ -540,7 +543,12 @@ def can_access_certificate(db: Session, user: User) -> tuple[bool, str | None]:
 
 
 def can_access_video_library(db: Session, user: User) -> tuple[bool, str | None]:
-    if is_certificate_only_user(db, user):
+    # Manual admin grants override the per-batch option list, subscription
+    # window, batch closure, and certificate-only mode — payment and approval
+    # are still required.
+    has_video_grant = bool(user_feature_grants(db, user) & {"video", "mcq", "all"})
+
+    if is_certificate_only_user(db, user) and not has_video_grant:
         return False, "Your account is limited to certificate download only."
     if (user.payment_status or "").strip().lower() != "credit":
         return False, "Payment not completed."
@@ -553,13 +561,12 @@ def can_access_video_library(db: Session, user: User) -> tuple[bool, str | None]
         return False, "Video library disabled by admin option."
 
     allowed_subscriptions = get_option_value(db, "access_video_library_link")
-    if allowed_subscriptions and not subscription_allowed(
-        allowed_subscriptions, user.subscription
+    if (
+        allowed_subscriptions
+        and not subscription_allowed(allowed_subscriptions, user.subscription)
+        and not has_video_grant
     ):
         return False, "Your subscription does not include video library."
-
-    # Manual admin grants bypass the subscription window (not the base gates above).
-    has_video_grant = bool(user_feature_grants(db, user) & {"video", "mcq", "all"})
 
     ent_ok, ent_reason = ensure_subscription_entitlement(db, user)
     if not ent_ok and not has_video_grant:
@@ -572,16 +579,20 @@ def can_access_video_library(db: Session, user: User) -> tuple[bool, str | None]
 
 
 def can_access_mock_test(db: Session, user: User) -> tuple[bool, str | None]:
-    if is_certificate_only_user(db, user):
+    has_mock_grant = bool(user_feature_grants(db, user) & {"mock", "all"})
+    if is_certificate_only_user(db, user) and not has_mock_grant:
         return False, "Your account is limited to certificate download only."
     if (user.payment_status or "").strip().lower() != "credit":
         return False, "Payment not completed."
     if (user.approve or "").strip() != "1":
         return False, "Account not approved."
     allowed_subscriptions = get_option_value(db, "access_quiz_link")
-    if allowed_subscriptions and not subscription_allowed(allowed_subscriptions, user.subscription):
+    if (
+        allowed_subscriptions
+        and not subscription_allowed(allowed_subscriptions, user.subscription)
+        and not has_mock_grant
+    ):
         return False, "Your subscription does not include mock tests."
-    has_mock_grant = bool(user_feature_grants(db, user) & {"mock", "all"})
     ent_ok, ent_reason = ensure_subscription_entitlement(db, user)
     if not ent_ok and not has_mock_grant:
         return False, ent_reason

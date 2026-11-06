@@ -506,6 +506,7 @@ export default function AdminUserDetail() {
               <span className="font-mono text-[10px] text-ink-faint uppercase block mb-2">Content</span>
               <div className="flex flex-wrap gap-2">
                 {[
+                  { id: 'all', label: 'Full subscription' },
                   { id: 'video', label: 'Video Library' },
                   { id: 'mock', label: 'Mock Tests' },
                   ...(/neet/i.test(str('subscription')) ? [{ id: 'mcq', label: "Topic Wise MCQ's" }] : []),
