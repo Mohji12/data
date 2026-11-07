@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import { isAdminRoute, isEditableElement } from '@/lib/contentProtection';
+import { useAuthStore } from '@/store/authStore';
 
 const SCREENSHOT_MSG = 'Screenshots are disabled on this website';
 
@@ -15,6 +16,8 @@ export default function ContentProtection() {
   const enabled = !isAdminRoute(pathname);
   const [hidden, setHidden] = useState(false);
   const lastScreenshotToastAt = useRef(0);
+  const flashTimerRef = useRef<number>(0);
+  const viewer = useAuthStore((s) => s.user);
 
   useEffect(() => {
     document.body.classList.toggle('no-user-copy', enabled);
@@ -51,7 +54,16 @@ export default function ContentProtection() {
       }
     };
 
+    // Cover the page with the brand screen for a few seconds — any capture
+    // taken right after PrintScreen grabs the logo, not the content.
+    const flashCover = () => {
+      setHidden(true);
+      if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = window.setTimeout(() => setHidden(false), 4000);
+    };
+
     const warnScreenshot = () => {
+      flashCover();
       // keydown and keyup can both fire for PrintScreen — show one toast.
       const now = Date.now();
       if (now - lastScreenshotToastAt.current > 1500) {
@@ -113,6 +125,7 @@ export default function ContentProtection() {
       window.removeEventListener('blur', hide);
       window.removeEventListener('focus', show);
       document.removeEventListener('visibilitychange', onVisibility);
+      if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current);
       setHidden(false);
     };
   }, [enabled]);
@@ -121,13 +134,24 @@ export default function ContentProtection() {
 
   return (
     <div
-      className="fixed inset-0 bg-black flex items-center justify-center"
+      className="fixed inset-0 bg-chalk flex flex-col items-center justify-center gap-6"
       style={{ zIndex: 2147483647 }}
       aria-hidden="true"
     >
-      <p className="text-white/80 text-sm font-sans px-6 text-center">
+      <img
+        src="/hero/logo.png"
+        alt="Critical Care Classes"
+        className="max-w-[70vw] max-h-[30vh] object-contain opacity-90 select-none pointer-events-none"
+        draggable={false}
+      />
+      <p className="text-slate/70 text-sm font-sans px-6 text-center">
         {SCREENSHOT_MSG}
       </p>
+      {viewer?.email && (
+        <p className="text-slate/40 font-mono text-xs px-6 text-center">
+          {viewer.name} · {viewer.email}
+        </p>
+      )}
     </div>
   );
 }
