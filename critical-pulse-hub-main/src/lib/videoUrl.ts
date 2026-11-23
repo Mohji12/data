@@ -109,8 +109,8 @@ export function buildVimeoPlayerEmbedUrl(
     dnt: '1',
     transcript: '0',
     pip: '0',
-    // Start adaptive (fast first frame); the player pins the max available
-    // rendition via setQuality once getQualities reports what the video has.
+    // Start adaptive; the player applies a low fast-start rendition via
+    // setQuality, then steps up toward the max during clean playback.
     quality: 'auto',
     // Keep playback inside the iframe on iPhone/iPad so our pause button can stop it.
     playsinline: '1',

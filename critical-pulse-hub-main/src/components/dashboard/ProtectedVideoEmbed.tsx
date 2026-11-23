@@ -211,17 +211,12 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const lastBufferAtRef = useRef(0);
   /** Last time we stepped quality back up (rate-limit upgrades). */
   const lastStepUpAtRef = useRef(0);
-  /** The rendition we want pinned (highest available). Re-applied if Vimeo reports 'auto'. */
+  /** Highest real rendition this video has — the ceiling the quality ladder
+   *  steps up toward. Not applied upfront (that caused buffering). */
   const pinnedQualityRef = useRef<string | null>(null);
-  /** Cap re-pin attempts so a stubborn player can't loop setQuality forever. */
-  const autoPinRetriesRef = useRef(0);
+  /** True once the fast-start (low) rendition has been applied for this video. */
+  const startQualityAppliedRef = useRef(false);
   const qualityRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** True once the max-quality pin has been applied (or given up on). Until
-   *  then the first play is deferred so the video starts at max resolution. */
-  const pinAppliedRef = useRef(false);
-  /** Play requested while the pin was still pending. */
-  const pendingPlayRef = useRef(false);
-  const pendingPlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const watchAnchorMsRef = useRef<number | null>(null);
   const currentTimeRef = useRef(0);
   const durationRef = useRef(0);
@@ -435,9 +430,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     userPickedQualityRef.current = false;
     availableQualitiesRef.current = [];
     pinnedQualityRef.current = null;
-    autoPinRetriesRef.current = 0;
-    pinAppliedRef.current = false;
-    pendingPlayRef.current = false;
+    startQualityAppliedRef.current = false;
     setSubtitleTracks([]);
     setSubtitlesOn(false);
     lastBufferAtRef.current = 0;
@@ -640,19 +633,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
               }, 1600);
             }, 900);
           };
-          if (pinAppliedRef.current || userPickedQualityRef.current) {
-            fireVimeoPlay();
-          } else {
-            // Hold the first play until getQualities pins the max rendition —
-            // video must start at max resolution, not 'auto'. If the quality
-            // list doesn't arrive within 1.2s, play anyway rather than hang.
-            pendingPlayRef.current = true;
-            pendingPlayTimerRef.current = setTimeout(() => {
-              pendingPlayRef.current = false;
-              pinAppliedRef.current = true;
-              if (isPlayingRef.current) fireVimeoPlay();
-            }, 1200);
-          }
+          // Play right away on the fast-start rendition — the quality ladder
+          // steps up toward the max after clean playback, no upfront pin.
+          fireVimeoPlay();
         } else {
           postVimeo({ method: 'pause' });
           window.setTimeout(() => postVimeo({ method: 'getPaused' }), 200);
@@ -1091,10 +1074,18 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           lastBufferAtRef.current = Date.now();
           if (bufferTimerRef.current) clearTimeout(bufferTimerRef.current);
           bufferTimerRef.current = setTimeout(() => {
-            // Step down to the next-lower real rendition — 'auto' is not offered.
+            // Step down to the next-lower real rendition ('auto' is not offered).
             const list = availableQualitiesRef.current;
             const idx = list.indexOf(currentQualityRef.current);
-            const lower = idx >= 0 && idx < list.length - 1 ? list[idx + 1] : list[0];
+            // idx === -1 ('auto'/unknown) → drop straight to the lowest so a
+            // stalling stream recovers fast; the ladder steps back up later.
+            // idx === last → already lowest, nothing lower to try.
+            const lower =
+              idx === -1
+                ? list[list.length - 1]
+                : idx < list.length - 1
+                  ? list[idx + 1]
+                  : undefined;
             if (lower && lower !== currentQualityRef.current) {
               iframe?.contentWindow?.postMessage(
                 JSON.stringify({ method: 'setQuality', value: lower }),
@@ -1102,7 +1093,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
               );
               setCurrentQuality(lower);
             }
-          }, 3000);
+          }, 1500);
         }
 
         if (data.event === 'bufferend' || data.event === 'play') {
@@ -1149,13 +1140,13 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
         if (data.event === 'timeupdate') {
           lastPlaybackAckRef.current = Date.now();
-          // Adaptive step-up: after 20s of clean playback, try the next-higher
-          // rendition (only when the user didn't pick a quality manually).
+          // Adaptive step-up: after ~12s of clean playback, try the next-higher
+          // rendition until the max (only when the user didn't pick manually).
           const now = Date.now();
           if (
             !userPickedQualityRef.current &&
-            now - lastBufferAtRef.current > 20_000 &&
-            now - lastStepUpAtRef.current > 30_000
+            now - lastBufferAtRef.current > 12_000 &&
+            now - lastStepUpAtRef.current > 20_000
           ) {
             const list = availableQualitiesRef.current;
             const idx = list.indexOf(currentQualityRef.current);
@@ -1196,11 +1187,11 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
         if (data.method === 'getQualities' && Array.isArray(data.value)) {
           const vimeoQualities = data.value as { id: string; label: string; active?: boolean }[];
-          // 'auto' is hidden from the menu — playback always pins a real rendition.
+          // 'auto' is hidden from the menu — the ladder only steps through real renditions.
           const realQualities = vimeoQualities.filter((q) => q.id && q.id !== 'auto');
           setQualities(realQualities);
-          // Pin the highest rendition this video actually has (1080p if present,
-          // else 720p/540p/…) — a fixed '1080p' errors on videos without it.
+          // Highest rendition this video actually has — the ceiling the
+          // quality ladder steps up toward (a fixed '1080p' errors when absent).
           const best = realQualities
             .slice()
             .sort((a, b) => (parseInt(b.id, 10) || 0) - (parseInt(a.id, 10) || 0))[0];
@@ -1209,32 +1200,34 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             .sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
           if (best && !userPickedQualityRef.current) {
             pinnedQualityRef.current = best.id;
-            autoPinRetriesRef.current = 0;
-            iframe?.contentWindow?.postMessage(
-              JSON.stringify({ method: 'setQuality', value: best.id }),
-              'https://player.vimeo.com',
-            );
-            setCurrentQuality(best.id);
-            pinAppliedRef.current = true;
-            // First play was deferred until the pin landed — fire it now so
-            // playback starts at max resolution.
-            if (pendingPlayRef.current) {
-              pendingPlayRef.current = false;
-              if (pendingPlayTimerRef.current) {
-                clearTimeout(pendingPlayTimerRef.current);
-                pendingPlayTimerRef.current = null;
+            // Fast start: begin on a low rendition (~540p, else the lowest) so
+            // the first frame arrives quickly; the timeupdate step-up ladder
+            // climbs toward pinnedQualityRef during clean playback.
+            if (!startQualityAppliedRef.current) {
+              startQualityAppliedRef.current = true;
+              const ids = availableQualitiesRef.current;
+              const start =
+                ids
+                  .slice()
+                  .sort(
+                    (a, b) =>
+                      Math.abs((parseInt(a, 10) || 0) - 540) -
+                      Math.abs((parseInt(b, 10) || 0) - 540),
+                  )[0] ?? ids[ids.length - 1];
+              if (start) {
+                iframe?.contentWindow?.postMessage(
+                  JSON.stringify({ method: 'setQuality', value: start }),
+                  'https://player.vimeo.com',
+                );
+                setCurrentQuality(start);
               }
-              iframe?.contentWindow?.postMessage(
-                JSON.stringify({ method: 'play' }),
-                'https://player.vimeo.com',
-              );
             }
           } else {
             const active = vimeoQualities.find((q) => q.active);
             if (active) setCurrentQuality(active.id);
           }
           // If Vimeo only reported 'auto' (rendition list not ready yet),
-          // ask again shortly — otherwise the pin never lands.
+          // ask again shortly — otherwise the start quality never lands.
           if (realQualities.length === 0 && !userPickedQualityRef.current) {
             if (qualityRetryTimerRef.current) clearTimeout(qualityRetryTimerRef.current);
             qualityRetryTimerRef.current = setTimeout(() => {
@@ -1260,21 +1253,6 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         if (data.event === 'qualitychange') {
           const qd = data.data as { quality?: string } | undefined;
           if (qd?.quality) setCurrentQuality(qd.quality);
-          // If the player reverts to 'auto' (dropped setQuality, re-buffered,
-          // privacy-restricted rendition), re-apply the pinned max — a few
-          // retries only, so a truly unsupported quality can't loop forever.
-          if (
-            qd?.quality === 'auto' &&
-            pinnedQualityRef.current &&
-            !userPickedQualityRef.current &&
-            autoPinRetriesRef.current < 8
-          ) {
-            autoPinRetriesRef.current += 1;
-            iframe?.contentWindow?.postMessage(
-              JSON.stringify({ method: 'setQuality', value: pinnedQualityRef.current }),
-              'https://player.vimeo.com',
-            );
-          }
         }
 
         if (data.event === 'playbackratechange') {
