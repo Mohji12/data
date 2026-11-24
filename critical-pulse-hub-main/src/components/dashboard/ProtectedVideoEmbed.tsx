@@ -211,10 +211,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
   const lastBufferAtRef = useRef(0);
   /** Last time we stepped quality back up (rate-limit upgrades). */
   const lastStepUpAtRef = useRef(0);
-  /** Highest real rendition this video has — the ceiling the quality ladder
-   *  steps up toward. Not applied upfront (that caused buffering). */
+  /** Highest real rendition this video has — pinned at start; ladder recovers after stalls. */
   const pinnedQualityRef = useRef<string | null>(null);
-  /** True once the fast-start (low) rendition has been applied for this video. */
+  /** True once the max available rendition has been applied for this video. */
   const startQualityAppliedRef = useRef(false);
   const qualityRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const watchAnchorMsRef = useRef<number | null>(null);
@@ -597,7 +596,15 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         if (!video) return;
         if (shouldPlay) {
           video.currentTime = currentTimeRef.current || video.currentTime;
-          void video.play().catch(() => {});
+          void video.play().catch((err: unknown) => {
+            const msg = String((err as { name?: string; message?: string })?.name || '')
+              .concat(' ', String((err as { message?: string })?.message || ''))
+              .toLowerCase();
+            if (msg.includes('notallowed') || msg.includes('not allowed') || msg.includes('permission')) {
+              return;
+            }
+            setPlayerError('Tap play again to start this video.');
+          });
         } else {
           video.pause();
         }
@@ -617,24 +624,18 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           const fireVimeoPlay = () => {
             postVimeo({ method: 'play' });
             const ackBefore = lastPlaybackAckRef.current;
-            // Retry play at 900ms and again at 2.5s — a single retry often loses
-            // while Vimeo is still refilling its buffer after a long pause.
+            // One short retry still inside the user-gesture window. Later
+            // retries outside that window trigger NotAllowedError overlays
+            // (audio can continue while the picture is covered).
             playRetryTimerRef.current = window.setTimeout(() => {
               if (!isPlayingRef.current) return;
               if (lastPlaybackAckRef.current !== ackBefore) return;
               rebindVimeo();
+              postVimeo({ method: 'getPaused' });
               postVimeo({ method: 'play' });
-              playRetryTimerRef.current = window.setTimeout(() => {
-                if (!isPlayingRef.current) return;
-                if (lastPlaybackAckRef.current !== ackBefore) return;
-                rebindVimeo();
-                postVimeo({ method: 'getPaused' });
-                postVimeo({ method: 'play' });
-              }, 1600);
-            }, 900);
+            }, 280);
           };
-          // Play right away on the fast-start rendition — the quality ladder
-          // steps up toward the max after clean playback, no upfront pin.
+          // Play immediately; getQualities pins the highest available rendition.
           fireVimeoPlay();
         } else {
           postVimeo({ method: 'pause' });
@@ -1050,12 +1051,19 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
           const ed = data.data as { message?: string; name?: string } | undefined;
           const name = (ed?.name || '').toLowerCase();
           const message = (ed?.message || '').trim();
-          const lower = message.toLowerCase();
-          // Transient: play/fullscreen without user activation — do not blank the player.
+          const lower = `${name} ${message}`.toLowerCase();
+          // Transient: play/volume/fullscreen without user activation, or browser
+          // NotAllowedError — audio can keep running; do not blank the picture.
           if (
             lower.includes('user-initiated') ||
             lower.includes('user gesture') ||
-            lower.includes('not called from a user')
+            lower.includes('not called from a user') ||
+            lower.includes('notallowed') ||
+            lower.includes('not allowed by the user agent') ||
+            lower.includes('user denied permission') ||
+            lower.includes('play() request was interrupted') ||
+            lower.includes('the play method is not allowed') ||
+            (lower.includes('permission') && !lower.includes('privacy'))
           ) {
             return;
           }
@@ -1065,6 +1073,9 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             );
           } else if (lower.includes('not found') || name.includes('notfound')) {
             setPlayerError('This Vimeo video was not found or has been removed. Ask admin to update the video link.');
+          } else if (isPlayingRef.current || Date.now() - lastPlaybackAckRef.current < 4000) {
+            // Playback already progressing — keep the picture, ignore stale errors.
+            return;
           } else {
             setPlayerError(message || 'This video could not be played.');
           }
@@ -1073,6 +1084,7 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
         if (data.event === 'bufferstart') {
           lastBufferAtRef.current = Date.now();
           if (bufferTimerRef.current) clearTimeout(bufferTimerRef.current);
+          // Wait longer before dropping quality — short stalls are normal on mobile.
           bufferTimerRef.current = setTimeout(() => {
             // Step down to the next-lower real rendition ('auto' is not offered).
             const list = availableQualitiesRef.current;
@@ -1093,13 +1105,16 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
               );
               setCurrentQuality(lower);
             }
-          }, 1500);
+          }, 3500);
         }
 
         if (data.event === 'bufferend' || data.event === 'play') {
           if (bufferTimerRef.current) {
             clearTimeout(bufferTimerRef.current);
             bufferTimerRef.current = null;
+          }
+          if (data.event === 'play') {
+            setPlayerError(null);
           }
         }
 
@@ -1140,13 +1155,14 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
 
         if (data.event === 'timeupdate') {
           lastPlaybackAckRef.current = Date.now();
-          // Adaptive step-up: after ~12s of clean playback, try the next-higher
+          setPlayerError((prev) => (prev ? null : prev));
+          // Adaptive step-up: after ~5s of clean playback, try the next-higher
           // rendition until the max (only when the user didn't pick manually).
           const now = Date.now();
           if (
             !userPickedQualityRef.current &&
-            now - lastBufferAtRef.current > 12_000 &&
-            now - lastStepUpAtRef.current > 20_000
+            now - lastBufferAtRef.current > 5_000 &&
+            now - lastStepUpAtRef.current > 8_000
           ) {
             const list = availableQualitiesRef.current;
             const idx = list.indexOf(currentQualityRef.current);
@@ -1200,27 +1216,14 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
             .sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
           if (best && !userPickedQualityRef.current) {
             pinnedQualityRef.current = best.id;
-            // Fast start: begin on a low rendition (~540p, else the lowest) so
-            // the first frame arrives quickly; the timeupdate step-up ladder
-            // climbs toward pinnedQualityRef during clean playback.
+            // Always open at the highest rendition this video actually has.
             if (!startQualityAppliedRef.current) {
               startQualityAppliedRef.current = true;
-              const ids = availableQualitiesRef.current;
-              const start =
-                ids
-                  .slice()
-                  .sort(
-                    (a, b) =>
-                      Math.abs((parseInt(a, 10) || 0) - 540) -
-                      Math.abs((parseInt(b, 10) || 0) - 540),
-                  )[0] ?? ids[ids.length - 1];
-              if (start) {
-                iframe?.contentWindow?.postMessage(
-                  JSON.stringify({ method: 'setQuality', value: start }),
-                  'https://player.vimeo.com',
-                );
-                setCurrentQuality(start);
-              }
+              iframe?.contentWindow?.postMessage(
+                JSON.stringify({ method: 'setQuality', value: best.id }),
+                'https://player.vimeo.com',
+              );
+              setCurrentQuality(best.id);
             }
           } else {
             const active = vimeoQualities.find((q) => q.active);
@@ -1426,7 +1429,8 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
     };
 
     poll();
-    const id = window.setInterval(poll, isPlaying ? 400 : 1500);
+    // Prefer Vimeo timeupdate; poll lightly so the iframe is not flooded.
+    const id = window.setInterval(poll, isPlaying ? 1000 : 2000);
     return () => window.clearInterval(id);
   }, [detected, isDirectVideo, isPlaying, embedSrc, postVimeo, postYouTube]);
 
@@ -1914,9 +1918,10 @@ export default function ProtectedVideoEmbed({ videoUrl, title, videoId }: Protec
               title={title}
               className="absolute inset-0 h-full w-full border-0 object-contain bg-black pointer-events-none"
               playsInline
-              preload="metadata"
+              preload="auto"
               controlsList="nodownload noplaybackrate"
               disablePictureInPicture
+              onPlaying={() => setPlayerError(null)}
               onError={() => {
                 setPlayerError(
                   'This video file could not be loaded. The file may be missing or the link may be incorrect.',
